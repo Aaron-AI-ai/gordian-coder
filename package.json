@@ -1,0 +1,37 @@
+{
+  "name": "gordian-coder",
+  "version": "0.1.0",
+  "description": "OpenCode plugin for Gordian Coder",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target bun --format esm && tsc --emitDeclarationOnly",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "bun run clean && bun run build",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "gordian-coder"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.1.1"
+  },
+  "devDependencies": {
+    "bun-types": "latest",
+    "typescript": "^5.7.3"
+  }
+}
