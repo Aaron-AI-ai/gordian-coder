@@ -23,6 +23,24 @@ const GordianCoderPlugin: Plugin = async (ctx) => {
     "tool.execute.after": async (input, output) => {
       // Handle tool execution results
     },
+
+    // Hook: chat message interceptor
+    "chat.message": async (input, output) => {
+      const parts = (output as { parts?: Array<{ type: string; text?: string }> }).parts;
+      const messageText =
+        parts
+          ?.filter((p) => p.type === "text" && p.text)
+          .map((p) => p.text)
+          .join("\n")
+          .trim() || "";
+
+      console.log("[gordian-coder] Chat message received:", {
+        sessionID: input.sessionID,
+        message: messageText,
+      });
+
+      // Add your custom logic here
+    },
   };
 };
 
