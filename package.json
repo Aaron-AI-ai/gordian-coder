@@ -1,10 +1,14 @@
 {
   "name": "gordian-coder",
   "version": "0.1.0",
-  "description": "OpenCode plugin for Gordian Coder",
+  "description": "Multi-platform AI coding assistant plugin for OpenCode, Claude Code, and Cline",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
+  "bin": {
+    "gordian-coder-mcp": "./dist/adapters/mcp/server.js",
+    "gordian-coder-cli": "./dist/adapters/cli/cli.js"
+  },
   "files": [
     "dist"
   ],
@@ -12,23 +16,47 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./opencode": {
+      "types": "./dist/adapters/opencode/index.d.ts",
+      "import": "./dist/adapters/opencode/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/adapters/mcp/index.d.ts",
+      "import": "./dist/adapters/mcp/index.js"
+    },
+    "./cli": {
+      "types": "./dist/adapters/cli/index.d.ts",
+      "import": "./dist/adapters/cli/index.js"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js"
     }
   },
   "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target bun --format esm && tsc --emitDeclarationOnly",
+    "build": "bun build src/index.ts src/adapters/mcp/server.ts src/adapters/cli/cli.ts --outdir dist --target bun --format esm && tsc --emitDeclarationOnly",
+    "start:cli": "bun run src/adapters/cli/cli.ts",
     "clean": "rm -rf dist",
     "prepublishOnly": "bun run clean && bun run build",
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "start:mcp": "bun run src/adapters/mcp/server.ts"
   },
   "keywords": [
     "opencode",
+    "claude-code",
+    "cline",
+    "mcp",
     "plugin",
+    "ai-coding",
     "gordian-coder"
   ],
   "license": "MIT",
   "dependencies": {
-    "@opencode-ai/plugin": "^1.1.1"
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@opencode-ai/plugin": "^1.1.1",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "bun-types": "latest",
