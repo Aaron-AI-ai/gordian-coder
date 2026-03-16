@@ -14,6 +14,7 @@ export * from "./core";
 export { default as OpenCodePlugin } from "./adapters/opencode";
 export { createMcpServer, startMcpServer } from "./adapters/mcp";
 export { startCliServer } from "./adapters/cli";
+export { handleClineHook } from "./adapters/cline";
 
 // Default export: OpenCode plugin (for backward compatibility)
 export { default } from "./adapters/opencode";
