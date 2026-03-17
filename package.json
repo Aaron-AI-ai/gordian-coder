@@ -8,7 +8,7 @@
   "bin": {
     "gordian-coder-mcp": "./dist/adapters/mcp/server.js",
     "gordian-coder-cli": "./dist/adapters/cli/cli.js",
-    "gordian-coder-cline": "./dist/adapters/cline/cli.js"
+    "gdc": "./dist/adapters/cline/cli.js"
   },
   "files": [
     "dist"

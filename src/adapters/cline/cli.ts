@@ -10,12 +10,44 @@
  * Logging goes to stderr so that stdout stays clean for the JSON protocol.
  *
  * Usage (configured in .cline/hooks.json):
- *   "command": "gordian-coder-cline"
+ *   "command": "gdc"
  */
 
 import { handleClineHook } from "./handlers";
 import { registerHook } from "../../core/hooks";
 import type { HookName } from "../../core/hooks";
+import { initClineHooks, deinitClineHooks } from "./init";
+import * as tty from "node:tty";
+
+const VERSION = "0.1.0";
+
+function printHelp(): void {
+  const help = `
+gdc - Gordian Coder Cline Hooks Adapter v${VERSION}
+
+Usage:
+  gdc                        Cline hook 이벤트 처리 (stdin으로 JSON 수신)
+  gdc --init [options]       Hook 스크립트 설치
+  gdc --deinit [options]     Hook 스크립트 제거
+  gdc --help, -h             도움말 표시
+  gdc --version, -v          버전 표시
+
+Options:
+  --global                   글로벌 hooks 디렉토리 사용 (~/Documents/Cline/Hooks/)
+  --force                    기존 hook 스크립트 덮어쓰기
+
+Examples:
+  gdc --init                 프로젝트 로컬 hooks 설치 (.clinerules/hooks/)
+  gdc --init --global        글로벌 hooks 설치
+  gdc --init --force         기존 hooks 덮어쓰기
+  gdc --deinit               프로젝트 로컬 hooks 제거
+  gdc --deinit --global      글로벌 hooks 제거
+
+Documentation:
+  https://github.com/gordian-coder/gordian-coder
+`.trimStart();
+  process.stderr.write(help);
+}
 
 // ── Default handlers ─────────────────────────────────────────────
 // Register a log-only handler for every hook type so that Cline always
@@ -68,6 +100,60 @@ async function readStdin(): Promise<string> {
 // ── Main ─────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+  // ── Arg parsing ────────────────────────────────────────────────
+  const args = process.argv.slice(2);
+  const hasInit = args.includes("--init");
+  const hasDeinit = args.includes("--deinit");
+  const isGlobal = args.includes("--global");
+  const isForce = args.includes("--force");
+
+  const hasHelp = args.includes("--help") || args.includes("-h");
+  const hasVersion = args.includes("--version") || args.includes("-v");
+
+  if (hasHelp) {
+    printHelp();
+    process.exit(0);
+  }
+
+  if (hasVersion) {
+    process.stderr.write(`gdc v${VERSION}\n`);
+    process.exit(0);
+  }
+
+  if (hasInit && hasDeinit) {
+    process.stderr.write(
+      "[gordian-coder:cline] Error: cannot use --init and --deinit together.\n"
+    );
+    process.exit(1);
+  }
+
+  if (hasInit) {
+    const result = await initClineHooks({ global: isGlobal, force: isForce });
+    process.stderr.write(
+      `[gordian-coder:cline] Hooks initialized in ${result.hooksDir}\n`
+    );
+    for (const f of result.created) process.stderr.write(`  + ${f}\n`);
+    for (const f of result.skipped)
+      process.stderr.write(`  ~ ${f} (skipped, use --force to overwrite)\n`);
+    process.exit(0);
+  }
+
+  if (hasDeinit) {
+    const result = await deinitClineHooks({ global: isGlobal, force: false });
+    process.stderr.write(
+      `[gordian-coder:cline] Hooks removed from ${result.hooksDir}\n`
+    );
+    for (const f of result.removed) process.stderr.write(`  - ${f}\n`);
+    process.exit(0);
+  }
+
+  // ── Interactive mode: no args + TTY stdin → show help ──────────
+  if (args.length === 0 && tty.isatty(0)) {
+    printHelp();
+    process.exit(0);
+  }
+
+  // ── Existing stdin / stdout flow (unchanged) ───────────────────
   const input = await readStdin();
   const output = await handleClineHook(input);
   process.stdout.write(output);
