@@ -47,7 +47,9 @@
     "prepublishOnly": "bun run clean && bun run build",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "start:mcp": "bun run src/adapters/mcp/server.ts"
+    "start:mcp": "bun run src/adapters/mcp/server.ts",
+    "init:cline": "bun run src/adapters/cline/cli.ts --init",
+    "deinit:cline": "bun run src/adapters/cline/cli.ts --deinit"
   },
   "keywords": [
     "opencode",
