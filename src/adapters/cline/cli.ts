@@ -71,6 +71,16 @@ for (const name of hookNames) {
     process.stderr.write(
       `[gordian-coder:cline] ${event.hookName} | task=${event.taskId} | data=${JSON.stringify(hookData ?? {})}\n`
     );
+
+    // UserPromptSubmit: echo the user's prompt back as contextModification
+    if (event.hookName === "UserPromptSubmit" && event.userPromptSubmit) {
+      return {
+        cancel: false,
+        contextModification: event.userPromptSubmit.prompt,
+        errorMessage: "",
+      };
+    }
+
     return { cancel: false, contextModification: "", errorMessage: "" };
   });
 }
