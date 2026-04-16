@@ -23,6 +23,3 @@ export {
   beforeToolExecute,
   afterToolExecute,
 } from "./handlers";
-
-// Hook system
-export * from "./hooks";

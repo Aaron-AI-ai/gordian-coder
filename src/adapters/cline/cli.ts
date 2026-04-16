@@ -14,8 +14,8 @@
  */
 
 import { handleClineHook } from "./handlers";
-import { registerHook } from "../../core/hooks";
-import type { HookName } from "../../core/hooks";
+import { registerHook } from "./hooks";
+import type { HookName } from "./hooks";
 import { initClineHooks, deinitClineHooks } from "./init";
 import * as tty from "node:tty";
 

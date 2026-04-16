@@ -13,9 +13,9 @@
 
 import { ClineHookInputSchema } from "./types";
 import type { ClineHookInput, ClineHookOutput } from "./types";
-import { HookName } from "../../core/hooks";
-import type { HookEvent, HookResult } from "../../core/hooks";
-import { HookRegistry, defaultRegistry } from "../../core/hooks";
+import { HookName } from "./hooks";
+import type { HookEvent, HookResult } from "./hooks";
+import { HookRegistry, defaultRegistry } from "./hooks";
 
 // ── Transformation helpers ───────────────────────────────────────
 

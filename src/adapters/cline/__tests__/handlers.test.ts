@@ -6,8 +6,8 @@
 import { describe, it, expect, mock } from "bun:test";
 import { toCoreEvent, toClineOutput, handleClineHook } from "../handlers";
 import type { ClineHookInput, ClineHookOutput } from "../types";
-import { HookRegistry } from "../../../core/hooks";
-import type { HookEvent, HookResult } from "../../../core/hooks";
+import { HookRegistry } from "../hooks";
+import type { HookEvent, HookResult } from "../hooks";
 
 // ── toCoreEvent ─────────────────────────────────────────────────
 

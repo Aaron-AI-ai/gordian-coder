@@ -238,7 +238,9 @@ describe("deinitClineHooks", () => {
     const hooksDir = resolveHooksDir(options);
     fs.mkdirSync(hooksDir, { recursive: true });
 
-    const customHookPath = path.join(hooksDir, "TaskStart");
+    // Use platform-appropriate extension
+    const ext = process.platform === "win32" ? ".ps1" : "";
+    const customHookPath = path.join(hooksDir, `TaskStart${ext}`);
     fs.writeFileSync(customHookPath, "#!/usr/bin/env bash\n# Custom hook without marker\necho hello\n");
 
     const deinitResult = await deinitClineHooks(options);
@@ -270,17 +272,21 @@ describe("deinitClineHooks", () => {
     const hooksDir = resolveHooksDir(options);
     fs.mkdirSync(hooksDir, { recursive: true });
 
+    // Use platform-appropriate extension and script generation
+    const ext = process.platform === "win32" ? ".ps1" : "";
+    const platform = process.platform === "win32" ? "win32" : "linux";
+
     // Create 4 files with marker, 4 without
     const withMarker = CLINE_HOOK_NAMES.slice(0, 4);
     const withoutMarker = CLINE_HOOK_NAMES.slice(4);
 
     for (const hookName of withMarker) {
-      const content = generateHookScript(hookName, "gdc", "linux");
-      fs.writeFileSync(path.join(hooksDir, hookName), content);
+      const content = generateHookScript(hookName, "gdc", platform);
+      fs.writeFileSync(path.join(hooksDir, `${hookName}${ext}`), content);
     }
 
     for (const hookName of withoutMarker) {
-      fs.writeFileSync(path.join(hooksDir, hookName), "#!/usr/bin/env bash\n# custom\necho hi\n");
+      fs.writeFileSync(path.join(hooksDir, `${hookName}${ext}`), "#!/usr/bin/env bash\n# custom\necho hi\n");
     }
 
     const result = await deinitClineHooks(options);
