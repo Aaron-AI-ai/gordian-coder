@@ -94,8 +94,10 @@ export function generateHookScript(
     return [
       `${MARKER} — do not edit`,
       `# Hook: ${hookName}`,
-      `$input = [Console]::In.ReadToEnd()`,
-      `$input | ${command}`,
+      `$InputData = @()`,
+      `while ($line = [Console]::In.ReadLine()) { $InputData += $line }`,
+      `$JsonInput = $InputData -join ""`,
+      `if ($JsonInput) { $JsonInput | & "${command}" } else { & "${command}" }`,
       "",
     ].join("\n");
   }
