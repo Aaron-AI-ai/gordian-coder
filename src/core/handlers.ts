@@ -13,12 +13,6 @@ export async function processMessage(
   message: Message,
   context: GordianContext
 ): Promise<void> {
-  console.log(`[gordian-coder] Processing message:`, {
-    role: message.role,
-    contentLength: message.content.length,
-    sessionId: context.sessionId,
-  });
-
   // Add your custom message processing logic here
 }
 
@@ -29,12 +23,6 @@ export async function handleEvent(
   event: GordianEvent,
   context: GordianContext
 ): Promise<void> {
-  console.log(`[gordian-coder] Event received:`, {
-    type: event.type,
-    timestamp: event.timestamp,
-    sessionId: context.sessionId,
-  });
-
   switch (event.type) {
     case "session.created":
       await onSessionCreated(context);
@@ -54,15 +42,15 @@ export async function handleEvent(
 /**
  * Called when a new session is created
  */
-async function onSessionCreated(context: GordianContext): Promise<void> {
-  console.log(`[gordian-coder] Session created: ${context.sessionId}`);
+async function onSessionCreated(_context: GordianContext): Promise<void> {
+  // Hook point for session-created handling.
 }
 
 /**
  * Called when a session ends
  */
-async function onSessionEnded(context: GordianContext): Promise<void> {
-  console.log(`[gordian-coder] Session ended: ${context.sessionId}`);
+async function onSessionEnded(_context: GordianContext): Promise<void> {
+  // Hook point for session-ended handling.
 }
 
 /**
@@ -74,7 +62,6 @@ export async function beforeToolExecute(
   params: Record<string, unknown>,
   context: GordianContext
 ): Promise<Record<string, unknown>> {
-  console.log(`[gordian-coder] Before tool execute: ${toolName}`);
   // Return potentially modified params
   return params;
 }
@@ -88,7 +75,6 @@ export async function afterToolExecute(
   result: unknown,
   context: GordianContext
 ): Promise<unknown> {
-  console.log(`[gordian-coder] After tool execute: ${toolName}`);
   // Return potentially modified result
   return result;
 }

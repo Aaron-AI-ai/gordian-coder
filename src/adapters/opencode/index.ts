@@ -5,6 +5,7 @@
 
 import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
+import { createReviewModule } from "./review";
 import {
   getAllTools,
   processMessage,
@@ -85,9 +86,14 @@ const OpenCodeAdapter: Plugin = async (input) => {
     config: {},
   };
 
+  const review = createReviewModule(input);
+
   return {
-    // Register tools from core
-    tool: createOpenCodeTools(),
+    // Register tools from core + k-codereview tools
+    tool: { ...createOpenCodeTools(), ...review.tools },
+
+    // k-codereview: inject the per-file review template into the system prompt
+    "experimental.chat.system.transform": review.systemTransform,
 
     // Event handler
     event: async ({ event }) => {
@@ -142,3 +148,7 @@ const OpenCodeAdapter: Plugin = async (input) => {
 };
 
 export default OpenCodeAdapter;
+
+// Named export so OpenCode's plugin loader discovers it by name when this file
+// is referenced directly from `opencode.json`'s `plugin` array.
+export const GordianCodereview = OpenCodeAdapter;

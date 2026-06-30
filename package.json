@@ -40,7 +40,7 @@
     }
   },
   "scripts": {
-    "build": "bun build src/index.ts src/adapters/mcp/server.ts src/adapters/cli/cli.ts src/adapters/cline/cli.ts --outdir dist --target bun --format esm && tsc --emitDeclarationOnly",
+    "build": "bun build src/index.ts src/adapters/mcp/server.ts src/adapters/cli/cli.ts src/adapters/cline/cli.ts src/adapters/opencode/index.ts --outdir dist --target bun --format esm && tsc --emitDeclarationOnly",
     "start:cline": "bun run src/adapters/cline/cli.ts",
     "start:cli": "bun run src/adapters/cli/cli.ts",
     "clean": "rm -rf dist",

@@ -89,12 +89,12 @@ describe("generateHookScript (win32)", () => {
 
   it("includes PowerShell stdin read syntax", () => {
     const script = generateHookScript("TaskStart", "gdc", "win32");
-    expect(script).toContain("[Console]::In.ReadToEnd()");
+    expect(script).toContain("[Console]::In.ReadLine()");
   });
 
   it("pipes input to command", () => {
     const script = generateHookScript("TaskStart", "gdc", "win32");
-    expect(script).toContain("$input | gdc");
+    expect(script).toContain('$JsonInput | & "gdc"');
   });
 
   it("does not include bash shebang on win32", () => {
