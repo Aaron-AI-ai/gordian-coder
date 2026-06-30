@@ -97,6 +97,14 @@ describe("renderReport", () => {
     const md = renderReport({ "a.ts": [finding({ message: "a | b" })] });
     expect(md).toContain("a \\| b");
   });
+
+  it("renders Korean labels when language is ko", () => {
+    const md = renderReport({ "a.ts": [finding()], "clean.ts": [] }, "L", "ko");
+    expect(md).toContain("# 코드 리뷰 리포트");
+    expect(md).toContain("1건 발견");
+    expect(md).toContain("_이슈 없음._");
+    expect(md).toContain("| 심각도 | 분류 | 라인 | 규칙 | 내용 |");
+  });
 });
 
 describe("renderManifest", () => {

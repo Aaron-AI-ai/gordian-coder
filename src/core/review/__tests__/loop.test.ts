@@ -21,10 +21,12 @@ function baseState(over: Partial<ReviewState> = {}): ReviewState {
     ref: null,
     diffMap: {},
     systemRule: "",
+    frameworkRules: "",
     requirementBackground: "",
     planGuidance: "",
     findings: {},
     label: "L",
+    language: "ko",
     iterations: 0,
     ...over,
   };

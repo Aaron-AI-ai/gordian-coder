@@ -27,6 +27,7 @@ import {
   buildDiffMap,
   resolveDiffRange,
   buildRubric,
+  loadFrameworkGuide,
   buildReviewPrompt,
   resolveOutputPath,
   writeReport,
@@ -52,6 +53,11 @@ const z = tool.schema;
 
 const NO_ACTIVE = "No active review. Call k_review_context first.";
 
+const LANG_NAMES: Record<string, string> = { ko: "Korean", en: "English", ja: "Japanese" };
+function languageName(code: string): string {
+  return LANG_NAMES[code] ?? code;
+}
+
 function shortSha(cwd: string): string | undefined {
   const p = Bun.spawnSync(["git", "rev-parse", "--short", "HEAD"], { cwd });
   return p.exitCode === 0 ? p.stdout.toString().trim() || undefined : undefined;
@@ -76,6 +82,7 @@ export function createReviewModule(input: PluginInput): {
       output: z.string().optional().describe("Report output file or directory"),
       requirementBackground: z.string().optional(),
       planGuidance: z.string().optional(),
+      language: z.string().optional().describe('Findings/report language (default "ko")'),
     },
     async execute(args, ctx) {
       let commit: CommitSpec | undefined;
@@ -106,11 +113,13 @@ export function createReviewModule(input: PluginInput): {
         ref: afterRef(range),
         diffMap: buildDiffMap(range, targets, cwd),
         systemRule: buildRubric(cwd),
+        frameworkRules: loadFrameworkGuide(cwd),
         requirementBackground: args.requirementBackground ?? "",
         planGuidance: args.planGuidance ?? "",
         findings: {},
         output: args.output,
         label: shortSha(cwd) ?? defaultLabel(),
+        language: args.language ?? loadConfig(cwd).language ?? "ko",
         iterations: 0,
       };
       setState(ctx.sessionID, state);
@@ -275,7 +284,7 @@ export function createReviewModule(input: PluginInput): {
 
       st.active = false;
       const path = resolveOutputPath(st.output, st.label, st.cwd);
-      await writeReport(path, st.findings, st.label, st.cwd);
+      await writeReport(path, st.findings, st.label, st.cwd, st.language);
       clearState(ctx.sessionID);
       const total = Object.values(st.findings).reduce((n, f) => n + f.length, 0);
       return `✅ Review complete — ${st.targets.length} file(s), ${total} issue(s). Report: ${path}`;
@@ -298,8 +307,13 @@ export function createReviewModule(input: PluginInput): {
         current_system_date_time: new Date().toISOString(),
         requirement_background: st.requirementBackground,
         system_rule: st.systemRule,
+        framework_rules: st.frameworkRules,
         plan_guidance: st.planGuidance,
       })
+    );
+    output.system.push(
+      `Write every finding's \`message\` and \`rule\` text in ${languageName(st.language)}. ` +
+        `Keep enum values (category, severity) and code identifiers as-is.`
     );
   };
 

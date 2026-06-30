@@ -36,24 +36,48 @@ function counts(all: Finding[]): string {
   return `blocker ${by("blocker")}, major ${by("major")}, minor ${by("minor")}, nit ${by("nit")}`;
 }
 
+interface ReportLabels {
+  title: string;
+  findings: (n: number) => string;
+  noIssues: string;
+  header: string;
+}
+
+const LABELS: Record<string, ReportLabels> = {
+  ko: {
+    title: "# 코드 리뷰 리포트",
+    findings: (n) => `**${n}건 발견**`,
+    noIssues: "_이슈 없음._",
+    header: "| 심각도 | 분류 | 라인 | 규칙 | 내용 |",
+  },
+  en: {
+    title: "# Code Review Report",
+    findings: (n) => `**${n} finding(s)**`,
+    noIssues: "_No issues._",
+    header: "| severity | category | line | rule | message |",
+  },
+};
+
 export function renderReport(
   findings: Record<string, Finding[]>,
-  label: string = ""
+  label: string = "",
+  language: string = "en"
 ): string {
+  const L = LABELS[language] ?? LABELS.en;
   const files = Object.keys(findings).sort();
   const all = files.flatMap((f) => findings[f]);
-  const lines: string[] = ["# Code Review Report", ""];
+  const lines: string[] = [L.title, ""];
   if (label) lines.push(`> ${label}`, "");
-  lines.push(`**${all.length} finding(s)** — ${counts(all)}`, "");
+  lines.push(`${L.findings(all.length)} — ${counts(all)}`, "");
 
   for (const file of files) {
     lines.push(`## ${file}`, "");
     const fs = findings[file];
     if (!fs.length) {
-      lines.push("_No issues._", "");
+      lines.push(L.noIssues, "");
       continue;
     }
-    lines.push("| severity | category | line | rule | message |");
+    lines.push(L.header);
     lines.push("| --- | --- | --- | --- | --- |");
     for (const x of fs) {
       lines.push(
@@ -70,9 +94,13 @@ export async function writeReport(
   path: string,
   findings: Record<string, Finding[]>,
   label: string = "",
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
+  language: string = "en"
 ): Promise<string> {
-  await Bun.write(isAbsolute(path) ? path : join(cwd, path), renderReport(findings, label));
+  await Bun.write(
+    isAbsolute(path) ? path : join(cwd, path),
+    renderReport(findings, label, language)
+  );
   return path;
 }
 

@@ -28,12 +28,15 @@ export const ReviewInputSchema = z.object({
   output: z.string().optional(),
   requirementBackground: z.string().optional(),
   planGuidance: z.string().optional(),
+  language: z.string().optional(),
 });
 export type ReviewInput = z.infer<typeof ReviewInputSchema>;
 
 export interface ReviewConfig {
   exclude?: string[];
   output?: string;
+  language?: string; // report/findings language, e.g. "ko" (default), "en"
+  frameworkGuide?: string; // path to a framework conventions md (overrides bundled default)
 }
 
 /** Read project-root `.k-codereview.json`; missing/invalid → {}. */

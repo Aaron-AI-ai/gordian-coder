@@ -22,7 +22,7 @@ describe("coverage", () => {
   });
 
   it("returns the missing categories", () => {
-    expect(coverage(["security", "nfr"])).toEqual(["correctness", "tests"]);
+    expect(coverage(["security", "nfr"])).toEqual(["correctness", "tests", "framework"]);
   });
 
   it("treats an assessed-but-clean category as covered (no findings needed)", () => {
@@ -31,7 +31,9 @@ describe("coverage", () => {
   });
 
   it("ignores duplicate assessments", () => {
-    expect(coverage(["security", "security", "nfr", "correctness", "tests"])).toEqual([]);
+    expect(coverage(["security", "security", "nfr", "correctness", "tests", "framework"])).toEqual(
+      []
+    );
   });
 
   it("honors a custom required set", () => {

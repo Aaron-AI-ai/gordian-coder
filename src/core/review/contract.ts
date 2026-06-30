@@ -15,6 +15,7 @@ export const REQUIRED_CATEGORIES = [
   "nfr",
   "correctness",
   "tests",
+  "framework", // framework-convention compliance — always enforced
 ] as const;
 
 export type Category = (typeof REQUIRED_CATEGORIES)[number];

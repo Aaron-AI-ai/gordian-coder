@@ -28,6 +28,13 @@ Current time in the real world: {{current_system_date_time}}
 ### Review Checklist
 {{system_rule}}
 
+### Framework Rules (AUTHORITATIVE — override general best practices)
+{{framework_rules}}
+
+When a general convention conflicts with a Framework Rule above, the Framework
+Rule wins; never suggest a change that violates it. Always assess the
+"framework" category and report any framework-convention violation.
+
 ### Review Plan (Optional)
 {{plan_guidance}}
 
@@ -44,6 +51,7 @@ export type TemplateVars = {
   current_system_date_time: string;
   requirement_background?: string;
   system_rule: string;
+  framework_rules: string;
   plan_guidance?: string;
 };
 

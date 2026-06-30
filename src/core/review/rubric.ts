@@ -8,12 +8,16 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, isAbsolute } from "node:path";
 import { REQUIRED_CATEGORIES, type Category } from "./contract";
+import { loadConfig } from "./context";
+import FRAMEWORK_DEFAULT from "./knowledge/framework.md" with { type: "text" };
 
 const MAX_BULLETS_PER_CATEGORY = 12;
 
-const SOURCES: Record<Category, { file: string; label: string; defaults: string[] }> = {
+// `framework` is intentionally absent — it is injected from the framework
+// guide (loadFrameworkGuide), not from .aidlc-rule-details.
+const SOURCES: Partial<Record<Category, { file: string; label: string; defaults: string[] }>> = {
   security: {
     file: "extensions/security/baseline/security-baseline.md",
     label: "security-baseline.md",
@@ -75,8 +79,10 @@ export function extractChecklist(md: string): string[] {
   return bullets;
 }
 
-function checklistFor(cat: Category, baseDir: string): string[] {
-  const src = SOURCES[cat];
+function checklistFor(
+  src: { file: string; label: string; defaults: string[] },
+  baseDir: string
+): string[] {
   const path = join(baseDir, src.file);
   if (existsSync(path)) {
     const extracted = extractChecklist(readFileSync(path, "utf8"));
@@ -95,9 +101,25 @@ export function buildRubric(
 ): string {
   const baseDir = join(cwd, ".aidlc-rule-details");
   return required
-    .map((cat) => {
-      const items = checklistFor(cat, baseDir).map((b) => `  - ${b}`);
-      return `**${cat}** (${SOURCES[cat].label})\n${items.join("\n")}`;
+    .map((cat) => ({ cat, src: SOURCES[cat] }))
+    .filter((x): x is { cat: Category; src: NonNullable<typeof x.src> } => !!x.src)
+    .map(({ cat, src }) => {
+      const items = checklistFor(src, baseDir).map((b) => `  - ${b}`);
+      return `**${cat}** (${src.label})\n${items.join("\n")}`;
     })
     .join("\n\n");
+}
+
+/**
+ * Load the framework conventions guide: a project override
+ * (`.k-codereview.json` "frameworkGuide") if present, else the bundled default.
+ * These rules are AUTHORITATIVE and override general best practices.
+ */
+export function loadFrameworkGuide(cwd: string = process.cwd()): string {
+  const p = loadConfig(cwd).frameworkGuide;
+  if (p) {
+    const abs = isAbsolute(p) ? p : join(cwd, p);
+    if (existsSync(abs)) return readFileSync(abs, "utf8");
+  }
+  return FRAMEWORK_DEFAULT;
 }

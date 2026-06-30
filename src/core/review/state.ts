@@ -20,11 +20,13 @@ export interface ReviewState {
   ref: string | null; // afterRef(diffRange): the version code-search/read operate on
   diffMap: Record<string, string>; // per-file diff snapshot for file_read_diff
   systemRule: string;
+  frameworkRules: string; // authoritative framework conventions (always injected)
   requirementBackground: string;
   planGuidance: string;
   findings: Record<string, Finding[]>;
   output?: string;
   label: string;
+  language: string; // findings/report language, e.g. "ko"
   iterations: number;
 }
 
