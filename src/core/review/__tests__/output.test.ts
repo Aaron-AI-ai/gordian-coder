@@ -98,6 +98,19 @@ describe("renderReport", () => {
     expect(md).toContain("a \\| b");
   });
 
+  it("escapes newlines in cells so the table survives multi-line messages", () => {
+    const md = renderReport({ "a.ts": [finding({ message: "line1\nline2" })] });
+    expect(md).toContain("line1<br>line2");
+  });
+
+  it("renders the suggestion column ('-' when absent)", () => {
+    const md = renderReport({
+      "a.ts": [finding({ suggestion: "use env var\nnot a literal" }), finding()],
+    });
+    expect(md).toContain("| use env var<br>not a literal |");
+    expect(md).toMatch(/hardcoded token \| - \|/);
+  });
+
   it("renders a FAIL verdict when findings reach the failOn threshold", () => {
     const md = renderReport({ "a.ts": [finding({ severity: "major" })] }, "", "en", "major");
     expect(md).toContain("**Verdict: FAIL**");

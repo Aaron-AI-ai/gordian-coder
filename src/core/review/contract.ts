@@ -31,6 +31,7 @@ export const FindingSchema = z.object({
   line: z.number().int().positive().optional(),
   rule: z.string(), // which rule/checklist item this violates
   message: z.string(),
+  suggestion: z.string().optional(), // concrete fix (code or steps), when the reviewer can offer one
 });
 
 export type Finding = z.infer<typeof FindingSchema>;

@@ -263,6 +263,10 @@ export function createReviewModule(input: PluginInput): {
             line: z.number().int().positive().optional(),
             rule: z.string(),
             message: z.string(),
+            suggestion: z
+              .string()
+              .optional()
+              .describe("Concrete fix (code or steps), when you can offer one"),
           })
         )
         .describe("Issues found (may be empty)"),

@@ -38,6 +38,9 @@ Rule wins; never suggest a change that violates it. Always assess the
 ### Review Plan (Optional)
 {{plan_guidance}}
 
+For each finding, include a concrete \`suggestion\` — the fixed code or the
+exact steps to fix — whenever you can offer one.
+
 Now please review the code changes in <current_file_diff>.
 When you need more context, use file_read (wider context), code_search (symbols/usages),
 file_find (locate files), or file_read_diff (other changed files).

@@ -48,15 +48,20 @@ const LABELS: Record<string, ReportLabels> = {
     title: "# 코드 리뷰 리포트",
     findings: (n) => `**${n}건 발견**`,
     noIssues: "_이슈 없음._",
-    header: "| 심각도 | 분류 | 라인 | 규칙 | 내용 |",
+    header: "| 심각도 | 분류 | 라인 | 규칙 | 내용 | 제안 |",
   },
   en: {
     title: "# Code Review Report",
     findings: (n) => `**${n} finding(s)**`,
     noIssues: "_No issues._",
-    header: "| severity | category | line | rule | message |",
+    header: "| severity | category | line | rule | message | suggestion |",
   },
 };
+
+/** Escape a value for a markdown table cell: pipes and newlines. */
+function cell(s: string): string {
+  return s.replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
+}
 
 export function renderReport(
   findings: Record<string, Finding[]>,
@@ -88,10 +93,10 @@ export function renderReport(
       continue;
     }
     lines.push(L.header);
-    lines.push("| --- | --- | --- | --- | --- |");
+    lines.push("| --- | --- | --- | --- | --- | --- |");
     for (const x of fs) {
       lines.push(
-        `| ${x.severity} | ${x.category} | ${x.line ?? "-"} | ${x.rule} | ${x.message.replace(/\|/g, "\\|")} |`
+        `| ${x.severity} | ${x.category} | ${x.line ?? "-"} | ${cell(x.rule)} | ${cell(x.message)} | ${x.suggestion ? cell(x.suggestion) : "-"} |`
       );
     }
     lines.push("");
