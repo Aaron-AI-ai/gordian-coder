@@ -157,8 +157,22 @@ export function createReviewModule(input: PluginInput): {
       const preview = targets.slice(0, PREVIEW).map((t) => `  - ${t}`);
       if (targets.length > PREVIEW) preview.push(`  … and ${targets.length - PREVIEW} more`);
 
+      // The loop is sequential in ONE session: every file's exploration stays in
+      // context, so very large target sets degrade review quality near the end.
+      const LARGE_REVIEW_WARN_AT = 30;
+      const sizeWarning =
+        targets.length > LARGE_REVIEW_WARN_AT
+          ? [
+              "",
+              `⚠️ ${targets.length} files is a lot for one review session — context will fill up`,
+              `and late files get a degraded review. Consider splitting the range (narrower`,
+              `commit range, per-package runs, or exclude globs) and reviewing in batches.`,
+            ]
+          : [];
+
       return [
         `Queued ${targets.length} file(s) for review — mode: ${mode}.`,
+        ...sizeWarning,
         ...preview,
         "",
         `Full target list written to: ${manifestPath}`,
