@@ -9,10 +9,10 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import {
   getAllTools,
-  getTool,
   type ToolDefinition,
   type ParameterDefinition,
 } from "../../core";
+import { createReviewTools } from "./review";
 
 /**
  * Convert core parameter type to Zod schema
@@ -80,29 +80,25 @@ export function createMcpServer(): McpServer {
     version: "0.1.0",
   });
 
-  // Register all core tools as MCP tools
-  for (const coreTool of getAllTools()) {
+  // Register all core tools + the review tools as MCP tools
+  for (const coreTool of [...getAllTools(), ...createReviewTools()]) {
     const shape = toolToMcpShape(coreTool);
     const toolName = coreTool.name;
 
     const handler: ToolHandler = async (params) => {
-      const foundTool = getTool(toolName);
-      if (!foundTool) {
-        return {
-          content: [{ type: "text" as const, text: `Tool not found: ${toolName}` }],
-          isError: true,
-        };
-      }
-
       try {
-        const result = await foundTool.execute(params);
+        const result = await coreTool.execute(params);
 
         if (result.success) {
           return {
             content: [
               {
                 type: "text" as const,
-                text: JSON.stringify(result.data, null, 2),
+                // Plain-text results (review tools) pass through unescaped.
+                text:
+                  typeof result.data === "string"
+                    ? result.data
+                    : JSON.stringify(result.data, null, 2),
               },
             ],
           };
