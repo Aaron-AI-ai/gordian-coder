@@ -22,6 +22,7 @@ import {
   SEVERITIES,
   SubmitSchema,
   coverage,
+  verdict,
   collectTargets,
   loadConfig,
   buildDiffMap,
@@ -47,6 +48,7 @@ import {
   MAX_ITER,
   type CommitSpec,
   type ReviewState,
+  type Severity,
 } from "../../../core/review";
 
 const z = tool.schema;
@@ -80,6 +82,10 @@ export function createReviewModule(input: PluginInput): {
       package: z.string().optional().describe("Directory/package path to scan"),
       exclude: z.array(z.string()).optional().describe("Glob patterns to exclude"),
       output: z.string().optional().describe("Report output file or directory"),
+      failOn: z
+        .enum(SEVERITIES)
+        .optional()
+        .describe("CI gate: verdict is FAIL when any finding is at/above this severity"),
       requirementBackground: z.string().optional(),
       planGuidance: z.string().optional(),
       language: z.string().optional().describe('Findings/report language (default "ko")'),
@@ -118,6 +124,11 @@ export function createReviewModule(input: PluginInput): {
         planGuidance: args.planGuidance ?? "",
         findings: {},
         output: args.output,
+        failOn:
+          args.failOn ??
+          (SEVERITIES.includes(loadConfig(cwd).failOn as Severity)
+            ? (loadConfig(cwd).failOn as Severity)
+            : undefined),
         label: shortSha(cwd) ?? defaultLabel(),
         language: args.language ?? loadConfig(cwd).language ?? "ko",
         iterations: 0,
@@ -284,10 +295,17 @@ export function createReviewModule(input: PluginInput): {
 
       st.active = false;
       const path = resolveOutputPath(st.output, st.label, st.cwd);
-      await writeReport(path, st.findings, st.label, st.cwd, st.language);
+      await writeReport(path, st.findings, st.label, st.cwd, st.language, st.failOn);
       clearState(ctx.sessionID);
-      const total = Object.values(st.findings).reduce((n, f) => n + f.length, 0);
-      return `✅ Review complete — ${st.targets.length} file(s), ${total} issue(s). Report: ${path}`;
+      const all = Object.values(st.findings).flat();
+      let gate = "";
+      if (st.failOn) {
+        const v = verdict(all, st.failOn);
+        gate = v.pass
+          ? ` Verdict: PASS (failOn: ${st.failOn}).`
+          : ` Verdict: FAIL — ${v.failing} finding(s) at/above ${st.failOn}.`;
+      }
+      return `✅ Review complete — ${st.targets.length} file(s), ${all.length} issue(s).${gate} Report: ${path}`;
     },
   });
 

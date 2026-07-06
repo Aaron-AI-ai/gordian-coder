@@ -4,6 +4,8 @@ import {
   FindingSchema,
   SubmitSchema,
   coverage,
+  atLeast,
+  verdict,
   type Finding,
 } from "../contract";
 
@@ -57,6 +59,37 @@ describe("FindingSchema", () => {
   it("allows line to be omitted", () => {
     const { line, ...rest } = finding();
     expect(FindingSchema.safeParse(rest).success).toBe(true);
+  });
+});
+
+describe("atLeast", () => {
+  it("orders severities most-severe-first", () => {
+    expect(atLeast("blocker", "major")).toBe(true);
+    expect(atLeast("major", "major")).toBe(true);
+    expect(atLeast("minor", "major")).toBe(false);
+    expect(atLeast("nit", "blocker")).toBe(false);
+  });
+});
+
+describe("verdict", () => {
+  it("passes when no finding reaches the threshold", () => {
+    expect(verdict([finding({ severity: "minor" })], "major")).toEqual({
+      pass: true,
+      failing: 0,
+    });
+  });
+
+  it("fails and counts findings at or above the threshold", () => {
+    const fs = [
+      finding({ severity: "blocker" }),
+      finding({ severity: "major" }),
+      finding({ severity: "nit" }),
+    ];
+    expect(verdict(fs, "major")).toEqual({ pass: false, failing: 2 });
+  });
+
+  it("passes on an empty finding list", () => {
+    expect(verdict([], "nit")).toEqual({ pass: true, failing: 0 });
   });
 });
 

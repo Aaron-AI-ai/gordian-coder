@@ -22,6 +22,8 @@ export type Category = (typeof REQUIRED_CATEGORIES)[number];
 
 export const SEVERITIES = ["blocker", "major", "minor", "nit"] as const;
 
+export type Severity = (typeof SEVERITIES)[number];
+
 export const FindingSchema = z.object({
   category: z.enum(REQUIRED_CATEGORIES),
   severity: z.enum(SEVERITIES),
@@ -41,6 +43,20 @@ export const SubmitSchema = z.object({
 });
 
 export type SubmitPayload = z.infer<typeof SubmitSchema>;
+
+/** True when `sev` is at least as severe as `threshold` (SEVERITIES is ordered most→least severe). */
+export function atLeast(sev: Severity, threshold: Severity): boolean {
+  return SEVERITIES.indexOf(sev) <= SEVERITIES.indexOf(threshold);
+}
+
+/** CI gate verdict: FAIL when any finding is at or above the `failOn` threshold. */
+export function verdict(
+  findings: readonly Finding[],
+  failOn: Severity
+): { pass: boolean; failing: number } {
+  const failing = findings.filter((f) => atLeast(f.severity, failOn)).length;
+  return { pass: failing === 0, failing };
+}
 
 /**
  * Return the required categories that were NOT assessed.

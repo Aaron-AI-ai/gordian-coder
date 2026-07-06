@@ -37,6 +37,7 @@ export interface ReviewConfig {
   output?: string;
   language?: string; // report/findings language, e.g. "ko" (default), "en"
   frameworkGuide?: string; // path to a framework conventions md (overrides bundled default)
+  failOn?: string; // CI gate: FAIL when any finding is at/above this severity ("blocker"|"major"|"minor"|"nit")
 }
 
 /** Read project-root `.k-codereview.json`; missing/invalid → {}. */

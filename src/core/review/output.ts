@@ -9,7 +9,7 @@
 import { existsSync, statSync } from "node:fs";
 import { join, isAbsolute } from "node:path";
 import { loadConfig } from "./context";
-import type { Finding } from "./contract";
+import { verdict, type Finding, type Severity } from "./contract";
 
 function isDirSync(p: string): boolean {
   return existsSync(p) && statSync(p).isDirectory();
@@ -61,7 +61,8 @@ const LABELS: Record<string, ReportLabels> = {
 export function renderReport(
   findings: Record<string, Finding[]>,
   label: string = "",
-  language: string = "en"
+  language: string = "en",
+  failOn?: Severity
 ): string {
   const L = LABELS[language] ?? LABELS.en;
   const files = Object.keys(findings).sort();
@@ -69,6 +70,15 @@ export function renderReport(
   const lines: string[] = [L.title, ""];
   if (label) lines.push(`> ${label}`, "");
   lines.push(`${L.findings(all.length)} — ${counts(all)}`, "");
+  if (failOn) {
+    const v = verdict(all, failOn);
+    lines.push(
+      v.pass
+        ? `**Verdict: PASS** — no findings at or above \`${failOn}\``
+        : `**Verdict: FAIL** — ${v.failing} finding(s) at or above \`${failOn}\``,
+      ""
+    );
+  }
 
   for (const file of files) {
     lines.push(`## ${file}`, "");
@@ -95,11 +105,12 @@ export async function writeReport(
   findings: Record<string, Finding[]>,
   label: string = "",
   cwd: string = process.cwd(),
-  language: string = "en"
+  language: string = "en",
+  failOn?: Severity
 ): Promise<string> {
   await Bun.write(
     isAbsolute(path) ? path : join(cwd, path),
-    renderReport(findings, label, language)
+    renderReport(findings, label, language, failOn)
   );
   return path;
 }

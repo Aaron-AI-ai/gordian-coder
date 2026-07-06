@@ -8,7 +8,7 @@
  * ponytail: in-memory Map — review sessions are short-lived and single-process.
  */
 
-import type { Category, Finding } from "./contract";
+import type { Category, Finding, Severity } from "./contract";
 
 export interface ReviewState {
   active: boolean;
@@ -25,6 +25,7 @@ export interface ReviewState {
   planGuidance: string;
   findings: Record<string, Finding[]>;
   output?: string;
+  failOn?: Severity; // CI gate threshold; unset = no gate
   label: string;
   language: string; // findings/report language, e.g. "ko"
   iterations: number;

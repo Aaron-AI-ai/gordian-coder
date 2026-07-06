@@ -98,6 +98,22 @@ describe("renderReport", () => {
     expect(md).toContain("a \\| b");
   });
 
+  it("renders a FAIL verdict when findings reach the failOn threshold", () => {
+    const md = renderReport({ "a.ts": [finding({ severity: "major" })] }, "", "en", "major");
+    expect(md).toContain("**Verdict: FAIL**");
+    expect(md).toContain("1 finding(s) at or above `major`");
+  });
+
+  it("renders a PASS verdict when no finding reaches the threshold", () => {
+    const md = renderReport({ "a.ts": [finding({ severity: "minor" })] }, "", "en", "blocker");
+    expect(md).toContain("**Verdict: PASS**");
+  });
+
+  it("omits the verdict line when failOn is not set", () => {
+    const md = renderReport({ "a.ts": [finding()] });
+    expect(md).not.toContain("Verdict:");
+  });
+
   it("renders Korean labels when language is ko", () => {
     const md = renderReport({ "a.ts": [finding()], "clean.ts": [] }, "L", "ko");
     expect(md).toContain("# 코드 리뷰 리포트");
