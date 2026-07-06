@@ -45,6 +45,7 @@ import {
   fileReadDiff,
   fileFind,
   codeSearch,
+  sanitizeFindingLines,
   defaultLabel,
   MAX_ITER,
   type CommitSpec,
@@ -289,6 +290,8 @@ export function createReviewModule(input: PluginInput): {
 
       const file = currentFile(st);
       if (!file) return "No current file under review.";
+      // Drop line numbers that point past the end of their file (hallucinated anchors).
+      sanitizeFindingLines(parsed.data.findings, st.cwd, st.ref);
       st.findings[file] = parsed.data.findings;
       st.currentIndex++;
       st.iterations = 0; // reset the exploration budget for the next file

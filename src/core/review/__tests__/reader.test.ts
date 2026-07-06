@@ -9,7 +9,10 @@ import {
   fileFind,
   codeSearch,
   FILE_READ_MAX_LINES,
+  fileLineCount,
+  sanitizeFindingLines,
 } from "../reader";
+import type { Finding } from "../contract";
 
 const tmps: string[] = [];
 function tmp(): string {
@@ -19,6 +22,39 @@ function tmp(): string {
 }
 afterEach(() => {
   while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
+});
+
+describe("sanitizeFindingLines", () => {
+  const finding = (over: Partial<Finding>): Finding => ({
+    category: "correctness",
+    severity: "minor",
+    file: "a.ts",
+    rule: "r",
+    message: "m",
+    ...over,
+  });
+
+  it("drops a line past EOF but keeps the finding; valid lines untouched", () => {
+    const d = tmp();
+    writeFileSync(join(d, "a.ts"), "l1\nl2\nl3\n"); // 3 lines
+    const fs = [finding({ line: 2 }), finding({ line: 99 })];
+    expect(sanitizeFindingLines(fs, d, null)).toBe(1);
+    expect(fs[0].line).toBe(2);
+    expect(fs[1].line).toBeUndefined();
+    expect(fs).toHaveLength(2);
+  });
+
+  it("leaves findings on unreadable files untouched", () => {
+    const fs = [finding({ file: "missing.ts", line: 7 })];
+    expect(sanitizeFindingLines(fs, tmp(), null)).toBe(0);
+    expect(fs[0].line).toBe(7);
+  });
+
+  it("fileLineCount ignores a trailing newline", () => {
+    const d = tmp();
+    writeFileSync(join(d, "a.ts"), "l1\nl2\n");
+    expect(fileLineCount(d, null, "a.ts")).toBe(2);
+  });
 });
 
 describe("afterRef", () => {

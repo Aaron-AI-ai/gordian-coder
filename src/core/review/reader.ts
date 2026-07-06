@@ -12,6 +12,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, basename } from "node:path";
+import type { Finding } from "./contract";
 
 export const FILE_READ_MAX_LINES = 500;
 export const GREP_MAX_COUNT = 100;
@@ -76,6 +77,38 @@ export function readFileAt(cwd: string, ref: string | null, path: string): strin
   const abs = join(cwd, path);
   if (!existsSync(abs) || !statSync(abs).isFile()) return null;
   return readFileSync(abs, "utf8");
+}
+
+/** Total line count of a file's after-version, or null when unreadable. */
+export function fileLineCount(cwd: string, ref: string | null, path: string): number | null {
+  const content = readFileAt(cwd, ref, path);
+  if (content === null) return null;
+  return content.replace(/\n$/, "").split("\n").length;
+}
+
+/**
+ * Drop hallucinated line numbers: a finding whose `line` exceeds the file's
+ * actual length loses the line (the finding itself is kept — the issue may be
+ * real, only its anchor is wrong). Unreadable files are left untouched.
+ * Returns how many line numbers were dropped.
+ */
+export function sanitizeFindingLines(
+  findings: Finding[],
+  cwd: string,
+  ref: string | null
+): number {
+  const totals = new Map<string, number | null>();
+  let dropped = 0;
+  for (const f of findings) {
+    if (f.line === undefined) continue;
+    if (!totals.has(f.file)) totals.set(f.file, fileLineCount(cwd, ref, f.file));
+    const total = totals.get(f.file);
+    if (total !== null && total !== undefined && f.line > total) {
+      delete f.line;
+      dropped++;
+    }
+  }
+  return dropped;
 }
 
 function walk(dir: string, base: string, out: string[]): void {
