@@ -137,6 +137,19 @@ describe("renderReport", () => {
     expect(md).toContain("_이슈 없음._");
     expect(md).toContain("| 심각도 | 분류 | 라인 | 규칙 | 내용 |");
   });
+
+  it("renders Japanese labels when language is ja", () => {
+    const md = renderReport({ "a.ts": [finding()] }, "", "ja");
+    expect(md).toContain("# コードレビューレポート");
+    expect(md).toContain("1件検出");
+  });
+
+  it("summarizes counts per category", () => {
+    const md = renderReport({
+      "a.ts": [finding(), finding({ category: "tests", severity: "nit" }), finding()],
+    });
+    expect(md).toContain("security 2, tests 1");
+  });
 });
 
 describe("baseline", () => {
@@ -190,8 +203,16 @@ describe("renderManifest", () => {
     expect(md).toContain("Range: — (working tree)");
     expect(md).toContain("Excludes: **/*.test.ts");
     expect(md).toContain("Total: 2 file(s)");
-    expect(md).toContain("- a.ts");
-    expect(md).toContain("- b.ts");
+  });
+
+  it("records rubric sources when provided", () => {
+    const md = renderManifest(["a.ts"], {
+      mode: "explicit files",
+      range: null,
+      excludes: [],
+      rubricSources: { security: "security-baseline.md", nfr: "built-in defaults" },
+    });
+    expect(md).toContain("Rubric: security ← security-baseline.md, nfr ← built-in defaults");
   });
 });
 

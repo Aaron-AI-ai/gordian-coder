@@ -36,6 +36,13 @@ function counts(all: Finding[]): string {
   return `blocker ${by("blocker")}, major ${by("major")}, minor ${by("minor")}, nit ${by("nit")}`;
 }
 
+/** Per-category tallies for the summary, skipping empty categories. */
+function categoryCounts(all: Finding[]): string {
+  const by = new Map<string, number>();
+  for (const f of all) by.set(f.category, (by.get(f.category) ?? 0) + 1);
+  return [...by].map(([c, n]) => `${c} ${n}`).join(", ");
+}
+
 interface ReportLabels {
   title: string;
   findings: (n: number) => string;
@@ -58,6 +65,13 @@ const LABELS: Record<string, ReportLabels> = {
     noIssues: "_No issues._",
     header: "| severity | category | line | rule | message | suggestion |",
     existing: "existing",
+  },
+  ja: {
+    title: "# コードレビューレポート",
+    findings: (n) => `**${n}件検出**`,
+    noIssues: "_問題なし。_",
+    header: "| 深刻度 | 分類 | 行 | ルール | 内容 | 提案 |",
+    existing: "既存",
   },
 };
 
@@ -137,6 +151,7 @@ export function renderReport(
   const lines: string[] = [L.title, ""];
   if (label) lines.push(`> ${label}`, "");
   lines.push(`${L.findings(all.length)} — ${counts(all)}`, "");
+  if (all.length) lines.push(categoryCounts(all), "");
   if (failOn) {
     const v = verdict(all, failOn);
     lines.push(
@@ -188,6 +203,7 @@ export interface ManifestMeta {
   mode: string;
   range: string | null;
   excludes: string[];
+  rubricSources?: Record<string, string>; // category → rule file | "built-in defaults"
 }
 
 /** Render the collected target list (written at review start). */
@@ -202,6 +218,13 @@ export function renderManifest(
     `- Mode: ${meta.mode}`,
     `- Range: ${meta.range ?? "— (working tree)"}`,
     `- Excludes: ${meta.excludes.length ? meta.excludes.join(", ") : "none"}`,
+    ...(meta.rubricSources
+      ? [
+          `- Rubric: ${Object.entries(meta.rubricSources)
+            .map(([c, s]) => `${c} ← ${s}`)
+            .join(", ")}`,
+        ]
+      : []),
     `- Total: ${targets.length} file(s)`,
     "",
     "## Files",

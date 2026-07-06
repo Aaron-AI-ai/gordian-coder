@@ -21,7 +21,7 @@ import {
   resolveDiffRange,
   type CommitSpec,
 } from "./context";
-import { buildRubric, loadFrameworkGuide } from "./rubric";
+import { buildRubric, loadFrameworkGuide, rubricSources } from "./rubric";
 import { buildReviewPrompt } from "./template";
 import {
   resolveOutputPath,
@@ -134,7 +134,13 @@ export async function startReview(
     /\.md$/,
     "-targets.md"
   );
-  await writeManifest(manifestPath, targets, { mode, range, excludes }, state.label, cwd);
+  await writeManifest(
+    manifestPath,
+    targets,
+    { mode, range, excludes, rubricSources: rubricSources(cwd) },
+    state.label,
+    cwd
+  );
 
   const PREVIEW = 30;
   const preview = targets.slice(0, PREVIEW).map((t) => `  - ${t}`);

@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extractChecklist, buildRubric } from "../rubric";
+import { extractChecklist, buildRubric, rubricSources } from "../rubric";
 
 const tmps: string[] = [];
 function tmp(): string {
@@ -58,5 +58,26 @@ describe("buildRubric", () => {
     );
     const out = buildRubric(d);
     expect(out).toContain("Custom security rule X");
+  });
+});
+
+describe("rubricSources", () => {
+  it("reports built-in defaults when no rule files exist", () => {
+    const src = rubricSources(tmp());
+    expect(src.security).toBe("built-in defaults");
+    expect(src.tests).toBe("built-in defaults");
+  });
+
+  it("reports the rule file label when it provides the checklist", () => {
+    const d = tmp();
+    const dir = join(d, ".aidlc-rule-details", "extensions", "security", "baseline");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "security-baseline.md"),
+      "## Critical Rules\n- Custom security rule X\n"
+    );
+    const src = rubricSources(d);
+    expect(src.security).toBe("security-baseline.md");
+    expect(src.nfr).toBe("built-in defaults");
   });
 });

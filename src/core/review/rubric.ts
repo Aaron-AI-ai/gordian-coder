@@ -82,13 +82,26 @@ export function extractChecklist(md: string): string[] {
 function checklistFor(
   src: { file: string; label: string; defaults: string[] },
   baseDir: string
-): string[] {
+): { items: string[]; fromFile: boolean } {
   const path = join(baseDir, src.file);
   if (existsSync(path)) {
     const extracted = extractChecklist(readFileSync(path, "utf8"));
-    if (extracted.length) return extracted.slice(0, MAX_BULLETS_PER_CATEGORY);
+    if (extracted.length)
+      return { items: extracted.slice(0, MAX_BULLETS_PER_CATEGORY), fromFile: true };
   }
-  return src.defaults;
+  return { items: src.defaults, fromFile: false };
+}
+
+/** Where each category's checklist came from: the rule file, or built-in
+ * defaults (so a silent fallback is visible in the target manifest). */
+export function rubricSources(cwd: string = process.cwd()): Record<string, string> {
+  const baseDir = join(cwd, ".aidlc-rule-details");
+  const out: Record<string, string> = {};
+  for (const [cat, src] of Object.entries(SOURCES)) {
+    if (!src) continue;
+    out[cat] = checklistFor(src, baseDir).fromFile ? src.label : "built-in defaults";
+  }
+  return out;
 }
 
 /**
@@ -104,7 +117,7 @@ export function buildRubric(
     .map((cat) => ({ cat, src: SOURCES[cat] }))
     .filter((x): x is { cat: Category; src: NonNullable<typeof x.src> } => !!x.src)
     .map(({ cat, src }) => {
-      const items = checklistFor(src, baseDir).map((b) => `  - ${b}`);
+      const items = checklistFor(src, baseDir).items.map((b) => `  - ${b}`);
       return `**${cat}** (${src.label})\n${items.join("\n")}`;
     })
     .join("\n\n");
