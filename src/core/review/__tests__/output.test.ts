@@ -8,6 +8,9 @@ import {
   writeReport,
   renderManifest,
   defaultLabel,
+  baselineKey,
+  parseReportKeys,
+  loadBaseline,
 } from "../output";
 import type { Finding } from "../contract";
 
@@ -133,6 +136,45 @@ describe("renderReport", () => {
     expect(md).toContain("1건 발견");
     expect(md).toContain("_이슈 없음._");
     expect(md).toContain("| 심각도 | 분류 | 라인 | 규칙 | 내용 |");
+  });
+});
+
+describe("baseline", () => {
+  it("round-trips: keys parsed from a rendered report match baselineKey", () => {
+    const md = renderReport({ "src/a.ts": [finding()], "src/clean.ts": [] });
+    const keys = parseReportKeys(md);
+    expect(keys.has(baselineKey("src/a.ts", "no-secret"))).toBe(true);
+    expect(keys.size).toBe(1);
+  });
+
+  it("round-trips a rule containing a pipe", () => {
+    const md = renderReport({ "a.ts": [finding({ rule: "no|pipe" })] });
+    expect(parseReportKeys(md).has(baselineKey("a.ts", "no|pipe"))).toBe(true);
+  });
+
+  it("marks re-found findings as existing in the next report", () => {
+    const prev = renderReport({ "a.ts": [finding()] });
+    const next = renderReport(
+      { "a.ts": [finding(), finding({ rule: "new-rule" })] },
+      "",
+      "en",
+      undefined,
+      parseReportKeys(prev)
+    );
+    expect(next).toContain("**[existing]** hardcoded token");
+    expect(next.match(/\*\*\[existing\]\*\*/g)).toHaveLength(1);
+  });
+
+  it("loadBaseline picks the latest report in the output dir, ignoring manifests", async () => {
+    const d = tmp();
+    await writeReport("k-codereview/review-old.md", { "a.ts": [finding()] }, "", d);
+    writeFileSync(join(d, "k-codereview/review-old-targets.md"), "# Code Review Targets");
+    const keys = loadBaseline(undefined, d);
+    expect(keys.has(baselineKey("a.ts", "no-secret"))).toBe(true);
+  });
+
+  it("loadBaseline returns an empty set when nothing exists", () => {
+    expect(loadBaseline(undefined, tmp()).size).toBe(0);
   });
 });
 

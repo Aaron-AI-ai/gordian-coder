@@ -25,6 +25,7 @@ function baseState(over: Partial<ReviewState> = {}): ReviewState {
     requirementBackground: "",
     planGuidance: "",
     findings: {},
+    baseline: new Set<string>(),
     label: "L",
     language: "ko",
     iterations: 0,

@@ -26,6 +26,7 @@ export interface ReviewState {
   findings: Record<string, Finding[]>;
   output?: string;
   failOn?: Severity; // CI gate threshold; unset = no gate
+  baseline: Set<string>; // finding keys from the previous report (marks re-found issues)
   label: string;
   language: string; // findings/report language, e.g. "ko"
   iterations: number;

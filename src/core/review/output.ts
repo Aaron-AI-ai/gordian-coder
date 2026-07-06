@@ -6,10 +6,10 @@
  * used as-is.
  */
 
-import { existsSync, statSync } from "node:fs";
+import { existsSync, statSync, readdirSync, readFileSync } from "node:fs";
 import { join, isAbsolute } from "node:path";
 import { loadConfig } from "./context";
-import { verdict, type Finding, type Severity } from "./contract";
+import { SEVERITIES, verdict, type Finding, type Severity } from "./contract";
 
 function isDirSync(p: string): boolean {
   return existsSync(p) && statSync(p).isDirectory();
@@ -41,6 +41,7 @@ interface ReportLabels {
   findings: (n: number) => string;
   noIssues: string;
   header: string;
+  existing: string; // marker for findings already present in the baseline report
 }
 
 const LABELS: Record<string, ReportLabels> = {
@@ -49,12 +50,14 @@ const LABELS: Record<string, ReportLabels> = {
     findings: (n) => `**${n}건 발견**`,
     noIssues: "_이슈 없음._",
     header: "| 심각도 | 분류 | 라인 | 규칙 | 내용 | 제안 |",
+    existing: "기존",
   },
   en: {
     title: "# Code Review Report",
     findings: (n) => `**${n} finding(s)**`,
     noIssues: "_No issues._",
     header: "| severity | category | line | rule | message | suggestion |",
+    existing: "existing",
   },
 };
 
@@ -63,11 +66,70 @@ function cell(s: string): string {
   return s.replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
 }
 
+// ── baseline (previous-report) support ───────────────────────────
+
+/** Key identifying a finding across reviews: report file heading + rule.
+ * `rule` goes through cell() so keys built from raw findings match keys
+ * parsed back out of a rendered report. */
+export function baselineKey(file: string, rule: string): string {
+  return `${file}\u001f${cell(rule).trim()}`;
+}
+
+/** Parse (file, rule) keys out of a rendered report's tables. */
+export function parseReportKeys(md: string): Set<string> {
+  const keys = new Set<string>();
+  let file = "";
+  for (const line of md.split("\n")) {
+    const h = /^## (.+)$/.exec(line);
+    if (h) {
+      file = h[1].trim();
+      continue;
+    }
+    if (!file || !line.startsWith("|")) continue;
+    const parts = line.split(/(?<!\\)\|/); // split on unescaped pipes only
+    // Data rows start with a severity value — this skips header/separator rows.
+    if (!(SEVERITIES as readonly string[]).includes(parts[1]?.trim() ?? "")) continue;
+    const rule = parts[4]?.trim();
+    if (rule) keys.add(`${file}\u001f${rule}`);
+  }
+  return keys;
+}
+
+/**
+ * Load the baseline: finding keys from the most recent prior report at the
+ * output location (same resolution as resolveOutputPath). Missing dir/file →
+ * empty set. Target manifests (`*-targets.md`) are ignored.
+ */
+export function loadBaseline(
+  opt: string | undefined,
+  cwd: string = process.cwd()
+): Set<string> {
+  const p = opt ?? loadConfig(cwd).output ?? "k-codereview/";
+  const full = isAbsolute(p) ? p : join(cwd, p);
+  let report: string | null = null;
+  if (isDirSync(full)) {
+    const latest = readdirSync(full)
+      .filter((f) => /^review-.*\.md$/.test(f) && !f.endsWith("-targets.md"))
+      .map((f) => join(full, f))
+      .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
+    report = latest ?? null;
+  } else if (!p.endsWith("/") && existsSync(full)) {
+    report = full;
+  }
+  if (!report) return new Set();
+  try {
+    return parseReportKeys(readFileSync(report, "utf8"));
+  } catch {
+    return new Set();
+  }
+}
+
 export function renderReport(
   findings: Record<string, Finding[]>,
   label: string = "",
   language: string = "en",
-  failOn?: Severity
+  failOn?: Severity,
+  baseline?: Set<string>
 ): string {
   const L = LABELS[language] ?? LABELS.en;
   const files = Object.keys(findings).sort();
@@ -95,8 +157,9 @@ export function renderReport(
     lines.push(L.header);
     lines.push("| --- | --- | --- | --- | --- | --- |");
     for (const x of fs) {
+      const old = baseline?.has(baselineKey(file, x.rule)) ? `**[${L.existing}]** ` : "";
       lines.push(
-        `| ${x.severity} | ${x.category} | ${x.line ?? "-"} | ${cell(x.rule)} | ${cell(x.message)} | ${x.suggestion ? cell(x.suggestion) : "-"} |`
+        `| ${x.severity} | ${x.category} | ${x.line ?? "-"} | ${cell(x.rule)} | ${old}${cell(x.message)} | ${x.suggestion ? cell(x.suggestion) : "-"} |`
       );
     }
     lines.push("");
@@ -111,11 +174,12 @@ export async function writeReport(
   label: string = "",
   cwd: string = process.cwd(),
   language: string = "en",
-  failOn?: Severity
+  failOn?: Severity,
+  baseline?: Set<string>
 ): Promise<string> {
   await Bun.write(
     isAbsolute(path) ? path : join(cwd, path),
-    renderReport(findings, label, language, failOn)
+    renderReport(findings, label, language, failOn, baseline)
   );
   return path;
 }

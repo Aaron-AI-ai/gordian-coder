@@ -33,6 +33,7 @@ import {
   resolveOutputPath,
   writeReport,
   writeManifest,
+  loadBaseline,
   setState,
   getState,
   clearState,
@@ -129,6 +130,7 @@ export function createReviewModule(input: PluginInput): {
           (SEVERITIES.includes(loadConfig(cwd).failOn as Severity)
             ? (loadConfig(cwd).failOn as Severity)
             : undefined),
+        baseline: loadBaseline(args.output, cwd),
         label: shortSha(cwd) ?? defaultLabel(),
         language: args.language ?? loadConfig(cwd).language ?? "ko",
         iterations: 0,
@@ -299,7 +301,7 @@ export function createReviewModule(input: PluginInput): {
 
       st.active = false;
       const path = resolveOutputPath(st.output, st.label, st.cwd);
-      await writeReport(path, st.findings, st.label, st.cwd, st.language, st.failOn);
+      await writeReport(path, st.findings, st.label, st.cwd, st.language, st.failOn, st.baseline);
       clearState(ctx.sessionID);
       const all = Object.values(st.findings).flat();
       let gate = "";
