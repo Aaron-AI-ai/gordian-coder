@@ -92,7 +92,9 @@ export function applyExclude(files: string[], patterns: string[]): string[] {
 
 function git(args: string[], cwd: string): string {
   // ponytail: shell out to git rather than depend on a git library
-  const proc = Bun.spawnSync(["git", ...args], { cwd });
+  // quotepath=false: emit non-ASCII paths (한글 등) raw instead of quoted
+  // octal escapes, so diff headers / --name-only match our path strings.
+  const proc = Bun.spawnSync(["git", "-c", "core.quotepath=false", ...args], { cwd });
   if (proc.exitCode !== 0) {
     throw new Error(`git ${args.join(" ")} failed: ${proc.stderr.toString().trim()}`);
   }
@@ -128,17 +130,9 @@ async function scanDir(pkg: string, cwd: string): Promise<string[]> {
   return out;
 }
 
-/** Pre-parse the diff into a per-file snapshot (used by file_read_diff).
- * One `git diff <range>` call, split per-file — not N spawns. */
-export function buildDiffMap(
-  range: string | null,
-  files: string[],
-  cwd: string = process.cwd()
-): Record<string, string> {
+/** Split a `git diff` output into per-file chunks, keyed by the wanted paths. */
+function parseDiffPerFile(full: string, want: Set<string>): Record<string, string> {
   const map: Record<string, string> = {};
-  if (!range) return map;
-  const want = new Set(files);
-  const full = git(["diff", range], cwd);
   // Each file's diff starts with a "diff --git a/<path> b/<path>" header.
   for (const chunk of full.split(/(?=^diff --git )/m)) {
     const m = /^diff --git a\/.+? b\/(.+)$/m.exec(chunk);
@@ -147,6 +141,28 @@ export function buildDiffMap(
     if (want.has(path)) map[path] = chunk.trim();
   }
   return map;
+}
+
+/** Pre-parse the review diff into a per-file snapshot (used by file_read_diff).
+ * One `git diff` call, split per-file — not N spawns.
+ * range given → diff of that commit range; range null (files/package mode) →
+ * working tree (staged + unstaged) vs HEAD, so uncommitted local changes are
+ * still shown as a diff. Safe on a non-git dir or a repo without HEAD ({}).
+ * ponytail: targets passed as pathspec — fine up to thousands of files;
+ * chunk the args if ARG_MAX ever bites. */
+export function buildDiffMap(
+  range: string | null,
+  files: string[],
+  cwd: string = process.cwd()
+): Record<string, string> {
+  try {
+    return parseDiffPerFile(
+      git(["diff", range ?? "HEAD", "--", ...files], cwd),
+      new Set(files)
+    );
+  } catch {
+    return {};
+  }
 }
 
 /** Build the deduped, exclude-filtered, sorted target file list. */
@@ -159,7 +175,10 @@ export async function collectTargets(
   const range = resolveDiffRange(input.commit, hasFilesOrPkg);
 
   if (range) for (const f of gitDiffFiles(range, cwd)) set.add(f);
-  if (input.files) for (const f of input.files) set.add(f);
+  // Normalize user-supplied paths ("./x", backslashes) to git's repo-relative
+  // forward-slash form, so they match diff headers and each other.
+  if (input.files)
+    for (const f of input.files) set.add(f.replaceAll("\\", "/").replace(/^\.\//, ""));
   if (input.package) for (const f of await scanDir(input.package, cwd)) set.add(f);
 
   const kept = [...set].filter((f) => !isDefaultExcluded(f));

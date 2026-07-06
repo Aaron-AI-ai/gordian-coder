@@ -135,6 +135,14 @@ describe("collectTargets (files-only, no git)", () => {
     expect(targets).toEqual(["src/Foo.java"]);
   });
 
+  it("normalizes './' prefixes and backslashes in explicit files", async () => {
+    const targets = await collectTargets(
+      { files: ["./src/a.ts", "src\\b.ts", "src/a.ts"] },
+      tmp()
+    );
+    expect(targets).toEqual(["src/a.ts", "src/b.ts"]); // deduped + normalized
+  });
+
   it("scans a package directory", async () => {
     const d = tmp();
     writeFileSync(join(d, "keep.ts"), "x");
@@ -163,8 +171,38 @@ describe("buildDiffMap", () => {
     expect(map["b.ts"]).toContain("+b2");
   });
 
-  it("returns {} when range is null", () => {
-    expect(buildDiffMap(null, ["a.ts"], gitRepo())).toEqual({});
+  it("maps non-ASCII filenames despite git's default path quoting", () => {
+    const d = gitRepo();
+    const sh = (c: string[]) => Bun.spawnSync(c, { cwd: d });
+    writeFileSync(join(d, "한글파일.ts"), "a1\n");
+    sh(["git", "add", "-A"]);
+    sh(["git", "commit", "-qm", "init"]);
+    writeFileSync(join(d, "한글파일.ts"), "a2\n");
+    sh(["git", "add", "-A"]);
+    sh(["git", "commit", "-qm", "change"]);
+
+    const map = buildDiffMap("HEAD~1..HEAD", ["한글파일.ts"], d);
+    expect(map["한글파일.ts"]).toContain("+a2");
+  });
+
+  it("null range → diffs uncommitted local changes vs HEAD per file", () => {
+    const d = gitRepo();
+    const sh = (c: string[]) => Bun.spawnSync(c, { cwd: d });
+    writeFileSync(join(d, "a.ts"), "a1\n");
+    writeFileSync(join(d, "b.ts"), "b1\n");
+    sh(["git", "add", "-A"]);
+    sh(["git", "commit", "-qm", "init"]);
+    // local edit, NOT committed
+    writeFileSync(join(d, "a.ts"), "a2\n");
+
+    const map = buildDiffMap(null, ["a.ts", "b.ts"], d);
+    expect(Object.keys(map)).toEqual(["a.ts"]); // only the locally-changed file
+    expect(map["a.ts"]).toContain("+a2");
+    expect(map["a.ts"]).toContain("-a1");
+  });
+
+  it("returns {} on a non-git directory", () => {
+    expect(buildDiffMap(null, ["a.ts"], tmp())).toEqual({});
   });
 });
 
