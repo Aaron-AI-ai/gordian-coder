@@ -1,17 +1,17 @@
 /**
  * Review input contract + target collection.
  *
- * Builds the set of files to review from three optional inputs (commit /
- * files / package), then subtracts excludes:
+ * Builds the set of files to review from two optional inputs (commit /
+ * files), then subtracts excludes:
  *
- *   targets = (commit diff) ∪ (files) ∪ (package glob)  −  exclude
+ *   targets = (commit diff) ∪ (files)  −  exclude
  *
- * If commit, files and package are ALL empty, the commit defaults to the
+ * If commit and files are BOTH empty, the commit defaults to the
  * latest commit (HEAD~1..HEAD).
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join, basename } from "node:path";
+import { basename, join } from "node:path";
 import { z } from "zod";
 
 export const CommitSpec = z.union([
@@ -23,7 +23,6 @@ export type CommitSpec = z.infer<typeof CommitSpec>;
 export const ReviewInputSchema = z.object({
   commit: CommitSpec.optional(),
   files: z.array(z.string()).optional(),
-  package: z.string().optional(),
   exclude: z.array(z.string()).optional(),
   output: z.string().optional(),
   requirementBackground: z.string().optional(),
@@ -38,6 +37,7 @@ export interface ReviewConfig {
   language?: string; // report/findings language, e.g. "ko" (default), "en"
   frameworkGuide?: string; // path to a framework conventions md (overrides bundled default)
   failOn?: string; // CI gate: FAIL when any finding is at/above this severity ("blocker"|"major"|"minor"|"nit")
+  debug?: boolean; // emit `[k-review:*]` trace logs (alternative to K_REVIEW_DEBUG env)
 }
 
 /** Read project-root `.k-codereview.json`; missing/invalid → {}. */
@@ -53,13 +53,13 @@ export function loadConfig(cwd: string = process.cwd()): ReviewConfig {
 
 /**
  * Translate a commit spec into a `git diff` range, or null when there is no
- * commit to diff (files/package-only review).
+ * commit to diff (files-only review).
  */
 export function resolveDiffRange(
   commit: CommitSpec | undefined,
-  hasFilesOrPkg: boolean
+  hasFiles: boolean
 ): string | null {
-  if (commit === undefined) return hasFilesOrPkg ? null : "HEAD~1..HEAD";
+  if (commit === undefined) return hasFiles ? null : "HEAD~1..HEAD";
   if (typeof commit === "object") return `${commit.from}..${commit.to ?? "HEAD"}`;
   if (commit.includes("..")) return commit;
   return `${commit}~1..${commit}`;
@@ -120,17 +120,6 @@ export function gitDiffForFile(
   return git(["diff", range, "--", file], cwd).trim();
 }
 
-async function scanDir(pkg: string, cwd: string): Promise<string[]> {
-  const out: string[] = [];
-  const base = join(cwd, pkg);
-  if (!existsSync(base)) return out;
-  for await (const rel of new Bun.Glob("**/*").scan({ cwd: base, onlyFiles: true })) {
-    // Normalize to forward slashes so paths match git's output on Windows.
-    out.push(join(pkg, rel).replaceAll("\\", "/"));
-  }
-  return out;
-}
-
 /** Split a `git diff` output into per-file chunks, keyed by the wanted paths. */
 function parseDiffPerFile(full: string, want: Set<string>): Record<string, string> {
   const map: Record<string, string> = {};
@@ -146,7 +135,7 @@ function parseDiffPerFile(full: string, want: Set<string>): Record<string, strin
 
 /** Pre-parse the review diff into a per-file snapshot (used by file_read_diff).
  * One `git diff` call, split per-file — not N spawns.
- * range given → diff of that commit range; range null (files/package mode) →
+ * range given → diff of that commit range; range null (files mode) →
  * working tree (staged + unstaged) vs HEAD, so uncommitted local changes are
  * still shown as a diff. Safe on a non-git dir or a repo without HEAD ({}).
  * ponytail: targets passed as pathspec — fine up to thousands of files;
@@ -172,15 +161,13 @@ export async function collectTargets(
   cwd: string = process.cwd()
 ): Promise<string[]> {
   const set = new Set<string>();
-  const hasFilesOrPkg = !!(input.files?.length || input.package);
-  const range = resolveDiffRange(input.commit, hasFilesOrPkg);
+  const range = resolveDiffRange(input.commit, !!input.files?.length);
 
   if (range) for (const f of gitDiffFiles(range, cwd)) set.add(f);
   // Normalize user-supplied paths ("./x", backslashes) to git's repo-relative
   // forward-slash form, so they match diff headers and each other.
   if (input.files)
     for (const f of input.files) set.add(f.replaceAll("\\", "/").replace(/^\.\//, ""));
-  if (input.package) for (const f of await scanDir(input.package, cwd)) set.add(f);
 
   const kept = [...set].filter((f) => !isDefaultExcluded(f));
   const patterns = [...(loadConfig(cwd).exclude ?? []), ...(input.exclude ?? [])];

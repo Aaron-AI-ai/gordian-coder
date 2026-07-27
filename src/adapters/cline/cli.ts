@@ -18,8 +18,7 @@ import { registerHook } from "./hooks";
 import type { HookName } from "./hooks";
 import { initClineHooks, deinitClineHooks } from "./init";
 import * as tty from "node:tty";
-
-const VERSION = "0.1.0";
+import { VERSION } from "../../version";
 
 function printHelp(): void {
   const help = `

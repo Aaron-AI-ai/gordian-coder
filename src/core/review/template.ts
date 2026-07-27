@@ -6,7 +6,7 @@
  * variable is empty so the reviewer never sees a dangling heading.
  */
 
-export const TEMPLATE = `You are a code reviewer. Review the change in <current_file_diff> against the checklist.
+export const TEMPLATE = `You are a code reviewer. {{review_instruction}}
 
 // The following is the list of other files changed in this update.
 <other_changed_files>
@@ -15,9 +15,11 @@ export const TEMPLATE = `You are a code reviewer. Review the change in <current_
 
 <current_file_path>{{current_file_path}}</current_file_path>
 
-<current_file_diff>
-{{diff}}
-</current_file_diff>
+{{review_target}}
+
+<review_evidence>
+{{review_evidence}}
+</review_evidence>
 
 Current time in the real world: {{current_system_date_time}}
 
@@ -35,28 +37,78 @@ When a general convention conflicts with a Framework Rule above, the Framework
 Rule wins; never suggest a change that violates it. Always assess the
 "framework" category and report any framework-convention violation.
 
+### Related Code and Change History
+The <review_evidence> block is collected deterministically to help you review
+dependencies, callers, tests, and regression risk even with limited reasoning.
+Use it as leads, not proof. Inspect high-confidence related files when the
+current change can affect them. Use related_code for a refreshed candidate
+list and git_history(include_patch=true) when a prior change may explain intent
+or reveal a regression.
+
 ### Review Plan (Optional)
 {{plan_guidance}}
 
 For each finding, include a concrete \`suggestion\` — the fixed code or the
 exact steps to fix — whenever you can offer one.
 
-Now please review the code changes in <current_file_diff>.
+Now please {{review_action}}.
 When you need more context, use file_read (wider context), code_search (symbols/usages),
-file_find (locate files), or file_read_diff (other changed files).
+file_find (locate files), file_read_diff (other changed files), related_code
+(ranked dependencies/callers/tests), or git_history (previous changes).
 When done with THIS file, call k_review_submit.
 </user_task>`;
 
 export type TemplateVars = {
   change_files: string;
   current_file_path: string;
-  diff: string;
+  // Mode-specific target framing, filled by targetVars(): the intro sentence,
+  // the tagged content block (diff or whole file), and the closing action.
+  review_instruction: string;
+  review_target: string;
+  review_action: string;
   current_system_date_time: string;
   requirement_background?: string;
   system_rule: string;
   framework_rules: string;
+  review_evidence: string;
   plan_guidance?: string;
 };
+
+export type TargetKind = "diff" | "whole" | "segment";
+
+/**
+ * Build the three mode-specific template vars. Diff mode reviews the change
+ * hunks; whole mode reviews the entire (line-numbered) file; segment mode
+ * reviews one line-range slice of a large file (with its `range` noted).
+ */
+export function targetVars(
+  kind: TargetKind,
+  content: string,
+  range?: { start: number; end: number }
+): Pick<TemplateVars, "review_instruction" | "review_target" | "review_action"> {
+  if (kind === "diff") {
+    return {
+      review_instruction: "Review the change in <current_file_diff> against the checklist.",
+      review_target: `<current_file_diff>\n${content}\n</current_file_diff>`,
+      review_action: "review the code changes in <current_file_diff>",
+    };
+  }
+  if (kind === "segment" && range) {
+    const span = `lines ${range.start}-${range.end}`;
+    return {
+      review_instruction:
+        `Review ${span} of <current_file> — one segment of a large file — against the ` +
+        `checklist. Content outside these lines is shown only as related declarations.`,
+      review_target: `<current_file>\n${content}\n</current_file>`,
+      review_action: `review the code in <current_file> (${span})`,
+    };
+  }
+  return {
+    review_instruction: "Review the full contents of <current_file> against the checklist.",
+    review_target: `<current_file>\n${content}\n</current_file>`,
+    review_action: "review the whole file in <current_file>",
+  };
+}
 
 const OPTIONAL_SECTIONS: Array<{ heading: string; key: keyof TemplateVars }> = [
   { heading: "### Requirement Background (Optional)", key: "requirement_background" },

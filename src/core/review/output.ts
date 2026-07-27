@@ -1,18 +1,40 @@
 /**
  * Output location resolution + report rendering/writing.
  *
- * Path precedence: --output param > .k-codereview.json "output" > ./k-codereview/
- * A directory target gets an auto-named `review-<label>.md`; a file target is
- * used as-is.
+ * Reports and manifests live in separate trees:
+ *   report   → --output param > .k-codereview.json "output" > fcq/report/k-codereview/
+ *   manifest → fcq/k-codereview/manifest/ (fixed)
+ * A directory report target gets an auto-named `review-<label>-<yyyymmdd>.md`;
+ * a file target is used as-is. Writing a report archives any existing
+ * `k-codereview` report folder to `k-codereview.<yyyymmdd-hhmmss>` first.
  */
 
-import { existsSync, statSync, readdirSync, readFileSync } from "node:fs";
-import { join, isAbsolute } from "node:path";
+import { existsSync, statSync, readdirSync, readFileSync, renameSync } from "node:fs";
+import { join, isAbsolute, dirname, basename } from "node:path";
 import { loadConfig } from "./context";
 import { SEVERITIES, verdict, type Finding, type Severity } from "./contract";
 
+const DEFAULT_REPORT_DIR = "fcq/report/k-codereview/";
+const DEFAULT_MANIFEST_DIR = "fcq/k-codereview/manifest/";
+
 function isDirSync(p: string): boolean {
   return existsSync(p) && statSync(p).isDirectory();
+}
+
+/** yyyymmdd, for report filenames. */
+function ymd(d: Date): string {
+  return d.toISOString().slice(0, 10).replace(/-/g, "");
+}
+
+/** yyyymmdd-hhmmss (UTC), for backup-dir suffixes. */
+function stamp(d: Date): string {
+  const s = d.toISOString();
+  return `${s.slice(0, 10).replace(/-/g, "")}-${s.slice(11, 19).replace(/:/g, "")}`;
+}
+
+/** Human-readable UTC timestamp recorded in the manifest body. */
+export function manifestTimestamp(d: Date = new Date()): string {
+  return `${d.toISOString().slice(0, 19).replace("T", " ")} UTC`;
 }
 
 /** Filesystem-safe label used when no commit sha is available. */
@@ -23,12 +45,18 @@ export function defaultLabel(d: Date = new Date()): string {
 export function resolveOutputPath(
   opt: string | undefined,
   label: string,
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
+  date: Date = new Date()
 ): string {
-  const p = opt ?? loadConfig(cwd).output ?? "k-codereview/";
+  const p = opt ?? loadConfig(cwd).output ?? DEFAULT_REPORT_DIR;
   const full = isAbsolute(p) ? p : join(cwd, p);
   const looksDir = p.endsWith("/") || isDirSync(full);
-  return looksDir ? join(p, `review-${label}.md`) : p;
+  return looksDir ? join(p, `review-${label}-${ymd(date)}.md`) : p;
+}
+
+/** Manifest path — its own fixed tree, independent of the report location. */
+export function resolveManifestPath(label: string): string {
+  return join(DEFAULT_MANIFEST_DIR, `review-${label}-targets.md`);
 }
 
 function counts(all: Finding[]): string {
@@ -118,7 +146,7 @@ export function loadBaseline(
   opt: string | undefined,
   cwd: string = process.cwd()
 ): Set<string> {
-  const p = opt ?? loadConfig(cwd).output ?? "k-codereview/";
+  const p = opt ?? loadConfig(cwd).output ?? DEFAULT_REPORT_DIR;
   const full = isAbsolute(p) ? p : join(cwd, p);
   let report: string | null = null;
   if (isDirSync(full)) {
@@ -190,13 +218,24 @@ export async function writeReport(
   cwd: string = process.cwd(),
   language: string = "en",
   failOn?: Severity,
-  baseline?: Set<string>
+  baseline?: Set<string>,
+  now: Date = new Date()
 ): Promise<string> {
-  await Bun.write(
-    isAbsolute(path) ? path : join(cwd, path),
-    renderReport(findings, label, language, failOn, baseline)
-  );
+  const abs = isAbsolute(path) ? path : join(cwd, path);
+  backupReportDir(dirname(abs), now);
+  await Bun.write(abs, renderReport(findings, label, language, failOn, baseline));
   return path;
+}
+
+/**
+ * Archive an existing dedicated report folder before writing a fresh report:
+ * `.../k-codereview` → `.../k-codereview.<yyyymmdd-hhmmss>`. Gated on the
+ * folder name so an arbitrary `--output` directory is never renamed.
+ */
+function backupReportDir(dir: string, now: Date): void {
+  if (basename(dir) === "k-codereview" && isDirSync(dir)) {
+    renameSync(dir, `${dir}.${stamp(now)}`);
+  }
 }
 
 export interface ManifestMeta {
@@ -204,6 +243,7 @@ export interface ManifestMeta {
   range: string | null;
   excludes: string[];
   rubricSources?: Record<string, string>; // category → rule file | "built-in defaults"
+  generatedAt?: string; // UTC timestamp recorded in the body (filename stays date-free)
 }
 
 /** Render the collected target list (written at review start). */
@@ -215,6 +255,7 @@ export function renderManifest(
   const lines = ["# Code Review Targets", ""];
   if (label) lines.push(`> ${label}`, "");
   lines.push(
+    ...(meta.generatedAt ? [`- Generated: ${meta.generatedAt}`] : []),
     `- Mode: ${meta.mode}`,
     `- Range: ${meta.range ?? "— (working tree)"}`,
     `- Excludes: ${meta.excludes.length ? meta.excludes.join(", ") : "none"}`,

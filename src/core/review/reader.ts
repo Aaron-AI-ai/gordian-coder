@@ -171,7 +171,8 @@ export function fileRead(
   ref: string | null,
   file_path: string,
   start_line = 1,
-  end_line?: number
+  end_line?: number,
+  maxLines = FILE_READ_MAX_LINES
 ): string {
   const content = readFileAt(cwd, ref, file_path);
   if (content === null) return `Error: file not found: ${file_path}`;
@@ -190,8 +191,8 @@ export function fileRead(
   if (end > total) end = total;
 
   let truncated = false;
-  if (end - start + 1 > FILE_READ_MAX_LINES) {
-    end = start + FILE_READ_MAX_LINES - 1;
+  if (end - start + 1 > maxLines) {
+    end = start + maxLines - 1;
     truncated = true;
   }
 
@@ -206,7 +207,7 @@ export function fileRead(
     `LINE_RANGE: ${start}-${end}`,
   ];
   if (truncated) {
-    header.push(`Note: output truncated at ${FILE_READ_MAX_LINES} lines — narrow the range.`);
+    header.push(`Note: output truncated at ${maxLines} lines — narrow the range.`);
   }
   return `${header.join("\n")}\n${body}`;
 }

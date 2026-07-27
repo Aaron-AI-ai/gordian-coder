@@ -1,5 +1,5 @@
 ---
-description: Rule-based code review over a git commit, files, or package
+description: Rule-based code review over a git commit or files
 agent: k-reviewer
 ---
 Start a code review using the k-codereview tools.
@@ -10,18 +10,21 @@ Parse the arguments into `k_review_context` parameters (all optional):
 - a bare ref (`HEAD`, `<sha>`) or range (`A..B`) → `commit`
 - `--from=<ref>` / `--to=<ref>` → `from` / `to`
 - `--files=a.ts,b.ts` → `files`
-- `--package=src/foo` → `package`
+- `--whole` → `whole` (review the full file content instead of just the diff)
 - `--exclude=glob,glob` → `exclude`
 - `--output=path` → `output`
 - `--background=...` → `requirementBackground`
 - `--plan=...` → `planGuidance`
 
-If no arguments are given, call `k_review_context` with no commit/files/package — it reviews the latest commit.
+If no arguments are given, call `k_review_context` with no commit/files — it reviews the latest commit.
 
 After seeding, follow the injected review checklist. For EACH file:
-1. Read the diff; pull missing context with `file_read` (wider lines), `code_search`
-   (symbols/usages), `file_find` (locate files), `file_read_diff` (other changed files) — do not guess.
-2. Assess every rubric category (security, nfr, correctness, tests).
-3. Call `k_review_submit` with `assessed` (all categories you evaluated) and `findings` (issues, may be empty).
+1. Start from the automatically injected related-code and Git-history evidence.
+   Inspect high-confidence dependencies, callers, tests, and co-changed files with
+   `related_code`, `file_read`, `code_search`, and `file_read_diff` — do not guess.
+2. When commit intent or regression risk is unclear, call `git_history` with
+   `include_patch=true` and compare the historical behavior with the current diff.
+3. Assess every rubric category (security, nfr, correctness, tests, framework).
+4. Call `k_review_submit` with `assessed` (all categories you evaluated) and `findings` (issues, may be empty).
 
 Keep going until `k_review_submit` reports the review is complete and gives the report path.

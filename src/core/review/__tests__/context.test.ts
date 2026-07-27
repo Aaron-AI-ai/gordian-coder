@@ -37,7 +37,7 @@ describe("resolveDiffRange", () => {
     expect(resolveDiffRange(undefined, false)).toBe("HEAD~1..HEAD");
   });
 
-  it("returns null when files/package are present but no commit", () => {
+  it("returns null when files are present but no commit", () => {
     expect(resolveDiffRange(undefined, true)).toBeNull();
   });
 
@@ -141,13 +141,6 @@ describe("collectTargets (files-only, no git)", () => {
       tmp()
     );
     expect(targets).toEqual(["src/a.ts", "src/b.ts"]); // deduped + normalized
-  });
-
-  it("scans a package directory", async () => {
-    const d = tmp();
-    writeFileSync(join(d, "keep.ts"), "x");
-    const targets = await collectTargets({ package: "." }, d);
-    expect(targets).toContain("keep.ts");
   });
 });
 

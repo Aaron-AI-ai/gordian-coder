@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   resolveOutputPath,
+  resolveManifestPath,
   renderReport,
   writeReport,
   renderManifest,
   defaultLabel,
+  manifestTimestamp,
   baselineKey,
   parseReportKeys,
   loadBaseline,
@@ -34,41 +36,51 @@ const finding = (over: Partial<Finding> = {}): Finding => ({
   ...over,
 });
 
+const DATE = new Date("2026-07-27T09:30:05Z"); // ymd → 20260727
+
 describe("resolveOutputPath", () => {
-  it("defaults to ./k-codereview/ with auto filename", () => {
-    expect(resolveOutputPath(undefined, "L", tmp())).toBe("k-codereview/review-L.md");
+  it("defaults to fcq/report/k-codereview/ with dated auto filename", () => {
+    expect(resolveOutputPath(undefined, "L", tmp(), DATE)).toBe(
+      "fcq/report/k-codereview/review-L-20260727.md"
+    );
   });
 
   it("treats a trailing-slash param as a directory", () => {
-    expect(resolveOutputPath("reports/", "L", tmp())).toBe("reports/review-L.md");
+    expect(resolveOutputPath("reports/", "L", tmp(), DATE)).toBe("reports/review-L-20260727.md");
   });
 
-  it("uses an explicit filename as-is", () => {
-    expect(resolveOutputPath("reports/pr-42.md", "L", tmp())).toBe("reports/pr-42.md");
+  it("uses an explicit filename as-is (no date appended)", () => {
+    expect(resolveOutputPath("reports/pr-42.md", "L", tmp(), DATE)).toBe("reports/pr-42.md");
   });
 
   it("reads output from config when no param", () => {
     const d = tmp();
     writeFileSync(join(d, ".k-codereview.json"), JSON.stringify({ output: "docs/rv/" }));
-    expect(resolveOutputPath(undefined, "L", d)).toBe("docs/rv/review-L.md");
+    expect(resolveOutputPath(undefined, "L", d, DATE)).toBe("docs/rv/review-L-20260727.md");
   });
 
   it("param overrides config", () => {
     const d = tmp();
     writeFileSync(join(d, ".k-codereview.json"), JSON.stringify({ output: "docs/rv/" }));
-    expect(resolveOutputPath("out.md", "L", d)).toBe("out.md");
+    expect(resolveOutputPath("out.md", "L", d, DATE)).toBe("out.md");
   });
 
   it("detects an existing directory without trailing slash", () => {
     const d = tmp();
     mkdirSync(join(d, "reports"));
-    expect(resolveOutputPath("reports", "L", d)).toBe("reports/review-L.md");
+    expect(resolveOutputPath("reports", "L", d, DATE)).toBe("reports/review-L-20260727.md");
   });
 
   it("keeps an absolute directory path absolute (not re-rooted under cwd)", () => {
     const d = tmp();
     const abs = join(d, "out") + "/";
-    expect(resolveOutputPath(abs, "L", d)).toBe(join(abs, "review-L.md"));
+    expect(resolveOutputPath(abs, "L", d, DATE)).toBe(join(abs, "review-L-20260727.md"));
+  });
+});
+
+describe("resolveManifestPath", () => {
+  it("puts manifests in their own fixed tree, no date in the name", () => {
+    expect(resolveManifestPath("L")).toBe("fcq/k-codereview/manifest/review-L-targets.md");
   });
 });
 
@@ -180,8 +192,8 @@ describe("baseline", () => {
 
   it("loadBaseline picks the latest report in the output dir, ignoring manifests", async () => {
     const d = tmp();
-    await writeReport("k-codereview/review-old.md", { "a.ts": [finding()] }, "", d);
-    writeFileSync(join(d, "k-codereview/review-old-targets.md"), "# Code Review Targets");
+    await writeReport("fcq/report/k-codereview/review-old.md", { "a.ts": [finding()] }, "", d);
+    writeFileSync(join(d, "fcq/report/k-codereview/review-old-targets.md"), "# Code Review Targets");
     const keys = loadBaseline(undefined, d);
     expect(keys.has(baselineKey("a.ts", "no-secret"))).toBe(true);
   });
@@ -194,12 +206,12 @@ describe("baseline", () => {
 describe("renderManifest", () => {
   it("lists targets with mode/range/excludes and count", () => {
     const md = renderManifest(["a.ts", "b.ts"], {
-      mode: "package scan (src)",
+      mode: "explicit files",
       range: null,
       excludes: ["**/*.test.ts"],
     }, "L");
     expect(md).toContain("# Code Review Targets");
-    expect(md).toContain("Mode: package scan (src)");
+    expect(md).toContain("Mode: explicit files");
     expect(md).toContain("Range: — (working tree)");
     expect(md).toContain("Excludes: **/*.test.ts");
     expect(md).toContain("Total: 2 file(s)");
@@ -214,6 +226,16 @@ describe("renderManifest", () => {
     });
     expect(md).toContain("Rubric: security ← security-baseline.md, nfr ← built-in defaults");
   });
+
+  it("records the generated timestamp in the body when provided", () => {
+    const md = renderManifest(["a.ts"], {
+      mode: "explicit files",
+      range: null,
+      excludes: [],
+      generatedAt: manifestTimestamp(DATE),
+    });
+    expect(md).toContain("Generated: 2026-07-27 09:30:05 UTC");
+  });
 });
 
 describe("writeReport", () => {
@@ -222,6 +244,25 @@ describe("writeReport", () => {
     const path = await writeReport("nested/dir/out.md", { "a.ts": [finding()] }, "L", d);
     expect(path).toBe("nested/dir/out.md");
     expect(existsSync(join(d, "nested/dir/out.md"))).toBe(true);
+  });
+
+  it("archives an existing k-codereview report folder before writing anew", async () => {
+    const d = tmp();
+    const dir = "fcq/report/k-codereview";
+    await writeReport(join(dir, "review-A-20260726.md"), { "a.ts": [finding()] }, "A", d);
+    // second review the next day: old folder is backed up, new report written fresh
+    await writeReport(join(dir, "review-B-20260727.md"), { "b.ts": [finding()] }, "B", d, "en", undefined, undefined, DATE);
+    expect(existsSync(join(d, dir, "review-A-20260726.md"))).toBe(false); // moved out
+    expect(existsSync(join(d, dir, "review-B-20260727.md"))).toBe(true); // fresh
+    expect(existsSync(join(d, `${dir}.20260727-093005`, "review-A-20260726.md"))).toBe(true); // archived
+  });
+
+  it("never renames an arbitrary --output directory (only k-codereview)", async () => {
+    const d = tmp();
+    await writeReport("nested/dir/first.md", { "a.ts": [finding()] }, "A", d);
+    await writeReport("nested/dir/second.md", { "b.ts": [finding()] }, "B", d);
+    expect(existsSync(join(d, "nested/dir/first.md"))).toBe(true); // untouched
+    expect(existsSync(join(d, "nested/dir/second.md"))).toBe(true);
   });
 
   it("writes an absolute path to that absolute location (not under cwd)", async () => {

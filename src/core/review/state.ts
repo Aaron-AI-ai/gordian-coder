@@ -19,8 +19,10 @@ export interface ReviewState {
   diffRange: string | null;
   ref: string | null; // afterRef(diffRange): the version code-search/read operate on
   diffMap: Record<string, string>; // per-file diff snapshot for file_read_diff
+  wholeFile: boolean; // review the full file content instead of just the diff
   systemRule: string;
   frameworkRules: string; // authoritative framework conventions (always injected)
+  evidenceCache: Record<string, string>; // related-code + git-history dossier per target
   requirementBackground: string;
   planGuidance: string;
   findings: Record<string, Finding[]>;
@@ -30,20 +32,44 @@ export interface ReviewState {
   label: string;
   language: string; // findings/report language, e.g. "ko"
   iterations: number;
+  callLog: Record<string, Record<string, number>>; // per-file tool-call audit: file → tool → count
+  recheckCount: Record<string, number>; // per-file count of final-check reworks issued (cap MAX_FINAL_RECHECKS)
+  resumes: number; // times the idle watchdog re-drove an incomplete review (cap MAX_RESUMES)
 }
+
+// LRU cap: a completed review clears itself, so every lingering entry is an
+// in-progress or abandoned (active:true) review. Bound the store and evict the
+// least-recently-touched first — the review currently under review is bumped on
+// every getState, so it's always newest and never the eviction target.
+// ponytail: fixed cap, no TTL — raise if concurrent OpenCode sessions exceed it.
+const MAX_SESSIONS = 50;
 
 const store = new Map<string, ReviewState>();
 
 export function setState(sessionId: string, state: ReviewState): void {
+  store.delete(sessionId); // re-insert at the tail = most recently touched
   store.set(sessionId, state);
+  while (store.size > MAX_SESSIONS) {
+    store.delete(store.keys().next().value as string); // head = oldest
+  }
 }
 
 export function getState(sessionId: string): ReviewState | undefined {
-  return store.get(sessionId);
+  const state = store.get(sessionId);
+  if (state) {
+    store.delete(sessionId); // bump recency so the active review is never evicted
+    store.set(sessionId, state);
+  }
+  return state;
 }
 
 export function clearState(sessionId: string): void {
   store.delete(sessionId);
+}
+
+/** Currently-active review states (for cross-session output-path collision checks). */
+export function activeStates(): ReviewState[] {
+  return [...store.values()].filter((s) => s.active);
 }
 
 /** File currently under review, or undefined when the loop is exhausted. */

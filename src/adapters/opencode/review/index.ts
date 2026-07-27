@@ -7,6 +7,8 @@
  *   - file_read_diff   : read the diff of other changed files
  *   - file_find        : find files by filename substring
  *   - code_search      : git grep the codebase (regex / pathspec)
+ *   - related_code     : rank dependencies, callers, tests, and co-change files
+ *   - git_history      : inspect commits, co-changes, and historical patches
  *   - k_review_submit  : declare done for a file → coverage gate → advance/finish
  *   - system.transform : inject the per-file review template each turn
  *
@@ -24,11 +26,15 @@ import {
   fileReadDiff,
   fileFind,
   codeSearch,
+  renderRelatedCode,
+  gitHistory,
+  currentFile,
   startReview,
   submitReview,
   guardExploration,
   reviewPromptFor,
   languageInstructionFor,
+  onSessionIdle,
   NO_ACTIVE_REVIEW,
 } from "../../../core/review";
 
@@ -37,18 +43,24 @@ const z = tool.schema;
 export function createReviewModule(input: PluginInput): {
   tools: Record<string, ReturnType<typeof tool>>;
   systemTransform: NonNullable<Hooks["experimental.chat.system.transform"]>;
+  event: NonNullable<Hooks["event"]>;
 } {
   const cwd = input.directory;
 
   const k_review_context = tool({
     description:
-      "Start a code review. Collects target files from a git commit/range, explicit files, and/or a package path (minus excludes), loads the rubric, and seeds the review loop. All inputs optional; with none, reviews the latest commit.",
+      "Start a code review. Collects target files from a git commit/range and/or explicit files (minus excludes), loads the rubric, and seeds the review loop. All inputs optional; with none, reviews the latest commit.",
     args: {
       commit: z.string().optional().describe('Single ref ("HEAD","<sha>") or range ("A..B")'),
       from: z.string().optional().describe("Range start (used with `to`)"),
       to: z.string().optional().describe("Range end (defaults HEAD)"),
       files: z.array(z.string()).optional().describe("Explicit file paths"),
-      package: z.string().optional().describe("Directory/package path to scan"),
+      whole: z
+        .boolean()
+        .optional()
+        .describe(
+          "Review full file content instead of the diff; large files (>~1000 lines) are split into overlapping segments, each reviewed with its referenced same-file declarations"
+        ),
       exclude: z.array(z.string()).optional().describe("Glob patterns to exclude"),
       output: z.string().optional().describe("Report output file or directory"),
       failOn: z
@@ -77,6 +89,7 @@ export function createReviewModule(input: PluginInput): {
       if (!st?.active) return NO_ACTIVE_REVIEW;
       return guardExploration(
         st,
+        "file_read",
         fileRead(st.cwd, st.ref, args.file_path, args.start_line, args.end_line)
       );
     },
@@ -91,7 +104,7 @@ export function createReviewModule(input: PluginInput): {
     async execute(args, ctx) {
       const st = getState(ctx.sessionID);
       if (!st?.active) return NO_ACTIVE_REVIEW;
-      return guardExploration(st, fileReadDiff(st.diffMap, args.path_array));
+      return guardExploration(st, "file_read_diff", fileReadDiff(st.diffMap, args.path_array));
     },
   });
 
@@ -105,7 +118,11 @@ export function createReviewModule(input: PluginInput): {
     async execute(args, ctx) {
       const st = getState(ctx.sessionID);
       if (!st?.active) return NO_ACTIVE_REVIEW;
-      return guardExploration(st, fileFind(st.cwd, st.ref, args.query_name, args.case_sensitive));
+      return guardExploration(
+        st,
+        "file_find",
+        fileFind(st.cwd, st.ref, args.query_name, args.case_sensitive)
+      );
     },
   });
 
@@ -129,6 +146,7 @@ export function createReviewModule(input: PluginInput): {
       if (!st?.active) return NO_ACTIVE_REVIEW;
       return guardExploration(
         st,
+        "code_search",
         codeSearch(
           st.cwd,
           st.ref,
@@ -137,6 +155,63 @@ export function createReviewModule(input: PluginInput): {
           args.case_sensitive,
           args.use_perl_regexp
         )
+      );
+    },
+  });
+
+  const related_code = tool({
+    description:
+      "Find code related to the current file using imports, symbol usages, likely tests, and git co-change history. Results are ranked and can include bounded source previews.",
+    args: {
+      file_path: z
+        .string()
+        .optional()
+        .describe("Relative path (defaults to the file currently under review)"),
+      max_results: z.number().int().positive().max(30).optional().describe("Maximum candidates"),
+      include_preview: z
+        .boolean()
+        .optional()
+        .describe("Include first lines of top candidates (default true)"),
+    },
+    async execute(args, ctx) {
+      const st = getState(ctx.sessionID);
+      if (!st?.active) return NO_ACTIVE_REVIEW;
+      const file = args.file_path ?? currentFile(st);
+      if (!file) return "No current file under review.";
+      return guardExploration(
+        st,
+        "related_code",
+        renderRelatedCode(
+          st.cwd,
+          st.ref,
+          file,
+          args.max_results,
+          args.include_preview ?? true
+        )
+      );
+    },
+  });
+
+  const git_history = tool({
+    description:
+      "Inspect recent git history for a review file, including commit intent and files changed together. Enable include_patch for historical diffs when checking regressions.",
+    args: {
+      file_path: z
+        .string()
+        .optional()
+        .describe("Relative path (defaults to the file currently under review)"),
+      max_commits: z.number().int().positive().max(10).optional().describe("Recent commits"),
+      include_patch: z.boolean().optional().describe("Include bounded historical patches"),
+    },
+    async execute(args, ctx) {
+      const st = getState(ctx.sessionID);
+      if (!st?.active) return NO_ACTIVE_REVIEW;
+      const file = args.file_path ?? currentFile(st);
+      if (!file) return "No current file under review.";
+      return guardExploration(
+        st,
+        "git_history",
+        gitHistory(st.cwd, file, args.max_commits, args.include_patch, st.ref)
       );
     },
   });
@@ -180,6 +255,22 @@ export function createReviewModule(input: PluginInput): {
     output.system.push(languageInstructionFor(st));
   };
 
+  // Turn-end watchdog: when the session goes idle with an unfinished review,
+  // re-drive the LLM to finish the remaining files (up to MAX_RESUMES), or let
+  // core finalize a partial report once the cap is hit.
+  const event: NonNullable<Hooks["event"]> = async ({ event }) => {
+    if (event.type !== "session.idle") return;
+    const sessionID = event.properties.sessionID;
+    const action = await onSessionIdle(sessionID);
+    if (action?.kind === "resume") {
+      await input.client.session.promptAsync({
+        path: { id: sessionID },
+        body: { parts: [{ type: "text", text: action.text }] },
+      });
+    }
+    // "finalized": partial report already written; nothing to re-drive.
+  };
+
   return {
     tools: {
       k_review_context,
@@ -187,8 +278,11 @@ export function createReviewModule(input: PluginInput): {
       file_read_diff,
       file_find,
       code_search,
+      related_code,
+      git_history,
       k_review_submit,
     },
     systemTransform,
+    event,
   };
 }

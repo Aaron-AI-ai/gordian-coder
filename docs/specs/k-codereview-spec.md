@@ -4,7 +4,7 @@
 
 ## 1. 개념
 
-코드 리뷰 슬래시 명령으로 **git 커밋 / 대상 파일 / 패키지 경로**를 입력하면, 해당 코드를 룰 기반으로 리뷰한다.
+코드 리뷰 슬래시 명령으로 **git 커밋 / 대상 파일**을 입력하면, 해당 코드를 룰 기반으로 리뷰한다.
 
 - **리뷰 주체**: LLM. 도구·훅은 컨텍스트 수집·룰 주입·커버리지 검증 등 **결정적인 부분만** 강제한다.
 - **리뷰 기준**: `.aidlc-rule-details/` 의 룰(security-baseline, nfr-design, code-generation Critical Rules, build-and-test 등)을 체크리스트로 사용.
@@ -16,7 +16,7 @@
 
 | 능력 | OpenCode 실체 | 용도 |
 |------|---------------|------|
-| 커스텀 도구 | `tool: { [key]: ToolDefinition }` | 리뷰 도구 6종 등록 |
+| 커스텀 도구 | `tool: { [key]: ToolDefinition }` | 리뷰 도구 8종 등록 |
 | 시스템 프롬프트 주입 | `experimental.chat.system.transform` | 템플릿·룰·루프규칙 주입 (실험 API → 어댑터에 격리) |
 | 도구 호출 검증/가공 | `tool.execute.before` / `tool.execute.after` | 커버리지 검증, 루프 가드, 리포트 저장 |
 | 사용자 입력 가로채기 | `chat.message` (읽기 전용) | 프롬프트 수정 **불가** → 주입은 반드시 system.transform |
@@ -36,23 +36,33 @@ const CommitSpec = z.union([
 const ReviewInputSchema = z.object({
   commit:  CommitSpec.optional(),
   files:   z.array(z.string()).optional(),
-  package: z.string().optional(),
+  whole:   z.boolean().optional(),           // diff 대신 파일 전체를 리뷰 대상으로
   exclude: z.array(z.string()).optional(),   // 추가 파라미터 (glob)
   output:  z.string().optional(),            // 산출물 경로 (파일 또는 디렉터리)
 });
 ```
 
-세 입력(commit/files/package)은 **각각 선택**, 합집합으로 대상 파일을 모은 뒤 exclude로 뺀다:
+두 입력(commit/files)은 **각각 선택**, 합집합으로 대상 파일을 모은 뒤 exclude로 뺀다:
 
 ```
-대상 = (commit diff 파일) ∪ (files) ∪ (package glob)  −  exclude
+대상 = (commit diff 파일) ∪ (files)  −  exclude
 ```
+
+`whole: true`이면 각 대상 파일의 리뷰 프롬프트에 diff 대신 **파일 전체 내용(라인번호 포함)**을 주입한다.
+대상 파일 집합을 고르는 방식(commit/files)은 그대로이고, 리뷰 근거만 diff → 전체 파일로 바뀐다.
+
+큰 파일(약 1000줄 초과)은 통째로 넣으면 품질이 떨어지므로 **겹치는 라인 세그먼트로 분할**해
+각 세그먼트를 별도 리뷰 대상(`path#start-end`)으로 큐에 넣는다(세그먼트당 500줄, 60줄 겹침).
+각 세그먼트에는 **그 구간이 참조하지만 선언은 구간 밖에 있는 같은 파일 내 심볼**(함수/클래스/const 등)의
+선언부를 **전부**(개수 제한 없음, 과도한 경우 문자수 백스톱 24k에서만 절단) 함께 주입해,
+연관 코드를 세그먼트와 같이 읽고 리뷰하도록 한다(결정론적, 정규식 기반).
+findings는 세그먼트 단위로 수집하되 **리포트는 실제 파일 단위로 병합**한다. (`segment.ts`)
 
 ### 3.1 commit diff 범위 해석
 
 ```ts
-function resolveDiffRange(commit, hasFilesOrPkg) {
-  if (!commit) return hasFilesOrPkg ? null : "HEAD~1..HEAD"; // 아무것도 없으면 최근 commit
+function resolveDiffRange(commit, hasFiles) {
+  if (!commit) return hasFiles ? null : "HEAD~1..HEAD"; // 아무것도 없으면 최근 commit
   if (typeof commit === "object") return `${commit.from}..${commit.to ?? "HEAD"}`;
   if (commit.includes("..")) return commit;                  // "A..B"
   return `${commit}~1..${commit}`;                           // 단일 커밋의 변경분
@@ -61,15 +71,15 @@ function resolveDiffRange(commit, hasFilesOrPkg) {
 
 | 입력 | diff 범위 |
 |------|-----------|
-| (없음, files·package도 없음) | `HEAD~1..HEAD` — **최근 commit** |
+| (없음, files도 없음) | `HEAD~1..HEAD` — **최근 commit** |
 | `--commit=HEAD` | `HEAD~1..HEAD` |
 | `--commit=<sha>` | `<sha>~1..<sha>` |
 | `--commit=A..B` | `A..B` |
 | `--from=A --to=B` | `A..B` |
 | `--from=A` | `A..HEAD` |
-| files/package만 | commit diff 없음, 파일집합만 |
+| files만 | commit diff 없음, 파일집합만 |
 
-> commit 기본값(HEAD)은 files·package가 **둘 다 비었을 때만** 적용 → "파일만 리뷰" 의도에 최근 커밋이 섞이지 않음.
+> commit 기본값(HEAD)은 files가 **비었을 때만** 적용 → "파일만 리뷰" 의도에 최근 커밋이 섞이지 않음.
 
 ### 3.2 exclude (예외 경로)
 
@@ -84,28 +94,35 @@ const targets = collected.filter(f => !globs.some(g => g.match(f)));
 
 ### 3.3 output (산출물 위치)
 
-- 우선순위: `--output` > `.k-codereview.json` 의 `output` > 기본 `./k-codereview/`
+report와 manifest는 서로 다른 트리에 저장한다.
+
+- **report**: 우선순위 `--output` > `.k-codereview.json` 의 `output` > 기본 `fcq/report/k-codereview/`. 디렉터리 대상이면 파일명에 날짜가 붙는다(`review-<label>-<yyyymmdd>.md`).
+- **manifest**: 고정 `fcq/k-codereview/manifest/review-<label>-targets.md`. 파일명에는 날짜를 넣지 않고, 본문에 생성 시각(UTC)을 기록한다.
+- **백업**: report 기록 시 `k-codereview` report 폴더가 이미 있으면 `k-codereview.<yyyymmdd-hhmmss>`로 폴더째 백업한 뒤 새로 쓴다. (임의의 `--output` 디렉터리는 백업 대상이 아니다 — 폴더명이 `k-codereview`일 때만.)
 
 ```ts
-function resolveOutputPath(opt, label /* commit short sha | timestamp */) {
-  const p = opt ?? readConfig()?.output ?? "k-codereview/";
-  if (p.endsWith("/") || isDir(p)) return `${p}review-${label}.md`;
+function resolveOutputPath(opt, label /* commit short sha | timestamp */, cwd, date = new Date()) {
+  const p = opt ?? readConfig()?.output ?? "fcq/report/k-codereview/";
+  if (p.endsWith("/") || isDir(p)) return `${p}review-${label}-${ymd(date)}.md`;
   return p;
+}
+function resolveManifestPath(label) {
+  return `fcq/k-codereview/manifest/review-${label}-targets.md`;
 }
 ```
 
-| 입력 | 결과 파일 |
+| 입력 | report 파일 |
 |------|-----------|
-| (없음) | `./k-codereview/review-<sha|ts>.md` |
-| `--output=reports/` | `reports/review-<sha|ts>.md` |
+| (없음) | `fcq/report/k-codereview/review-<sha|ts>-<yyyymmdd>.md` |
+| `--output=reports/` | `reports/review-<sha|ts>-<yyyymmdd>.md` |
 | `--output=reports/pr-42.md` | `reports/pr-42.md` |
-| config `"output":"docs/rv/"` | `docs/rv/review-<sha|ts>.md` |
+| config `"output":"docs/rv/"` | `docs/rv/review-<sha|ts>-<yyyymmdd>.md` |
 
 > 디렉터리는 없으면 자동 생성(`{recursive:true}`). label은 commit 있으면 short sha, 없으면 타임스탬프(덮어쓰기 방지).
 
 ---
 
-## 4. 도구 (tool) 6종
+## 4. 도구 (tool) 8종
 
 | 도구 | 시점 | 역할 |
 |------|------|------|
@@ -114,7 +131,15 @@ function resolveOutputPath(opt, label /* commit short sha | timestamp */) {
 | `file_read_diff` | 루프 중 | 다른 변경 파일의 diff 읽기(DiffMap 스냅샷, 다중경로) |
 | `file_find` | 루프 중 | 파일명 부분일치 검색(basename, 100건 cap) |
 | `code_search` | 루프 중 | git grep 검색(pathspec·정규식·100건 cap, 파일별 그룹핑) |
+| `related_code` | 루프 중 | import·심볼 사용처·테스트·동시변경 이력을 점수화해 연관 코드 후보(+요청 시 미리보기) 제공 |
+| `git_history` | 루프 중 | 최근 커밋 의도·동시변경 파일·선택적 과거 patch 제공 |
 | `k_review_submit` | done 시도 | 구조화 결과 제출 → 검증 게이트 |
+
+**자동 주입 evidence 정책** — `{{review_evidence}}`의 **크로스파일 연관은 프리뷰를 넣지 않고 경로 목록만** 준다.
+앞부분 프리뷰는 대개 그 파일의 import/헤더라 리뷰 대상이 실제 호출하는 함수를 놓치기 때문. 대신
+"이 프로젝트 파일들에서 네가 쓰는 심볼은 `code_search(<symbol>)`/`file_read`로 정의부를 확인하라"는 recipe를
+붙여, 모델이 **리뷰 중인 세그먼트/diff가 실제 참조하는 심볼**을 grep으로 집어오게 한다(세그먼트 맞춤이 자동으로 성립).
+같은 파일 내부 연관 선언은 `segment.ts`가 세그먼트 단위로 직접 주입한다. (프리뷰 자체는 on-demand `related_code`에는 남아 있음.)
 
 **공통 `FileReader(cwd + ref)`** 추상화로 3모드를 한 곳에서 처리:
 - `ref === null` → **workspace** 모드 (working tree / untracked)
@@ -147,7 +172,7 @@ function resolveOutputPath(opt, label /* commit short sha | timestamp */) {
 
 ### 5.3 무한루프 가드
 
-탐색 도구(file_read·code_search·file_find·file_read_diff) 호출이 `MAX_ITER` 초과 → 결과에 "지금 정보로 submit 하라" 주입 → 강제 수렴.
+탐색 도구(file_read·code_search·file_find·file_read_diff·related_code·git_history) 호출이 `MAX_ITER` 초과 → 결과에 "지금 정보로 submit 하라" 주입 → 강제 수렴.
 
 ---
 
@@ -184,7 +209,7 @@ Current time in the real world: {{current_system_date_time}}
 {{plan_guidance}}
 
 Now please review the code changes in <current_file_diff>.
-When you need more context, use file_read / code_search / file_find / file_read_diff.
+When you need more context, use file_read / code_search / file_find / file_read_diff / related_code / git_history.
 When done with THIS file, call k_review_submit.
 </user_task>
 ```
@@ -196,6 +221,7 @@ When done with THIS file, call k_review_submit.
 | `{{change_files}}` | state.targets 중 **현재 파일 제외** 목록 | 다른 변경파일 컨텍스트 |
 | `{{current_file_path}}` | `state.targets[currentIndex]` | 루프 포인터 |
 | `{{diff}}` | context.ts — 그 파일의 git diff hunk | |
+| `{{review_evidence}}` | evidence.ts — 연관 코드 **경로 목록 + grep recipe**·최근 Git 이력 | 파일별 lazy 생성·캐시 (프리뷰 X, 아래 참고) |
 | `{{current_system_date_time}}` | 시스템 시계(ISO) | |
 | `{{requirement_background}}` | slash 인자/param (선택) | 없으면 블록 생략 |
 | `{{system_rule}}` | rubric.ts — `.aidlc-rule-details` 체크리스트 | |
@@ -215,14 +241,14 @@ function render(tpl, vars) {
 ## 7. 전체 워크플로우
 
 ```
-/k-codereview <commit> --files=… --package=… --exclude=… --output=…
+/k-codereview <commit> --files=… --exclude=… --output=…
   ▼  [진입점: .opencode/command/k-codereview.md, $ARGUMENTS]
 ① k_review_context → targets[] 정렬·룰·배경·plan 수집, state 시드(currentIndex=0)
   ▼
 ② system.transform → render(template, 현재파일 변수) 주입        ← 변수 치환 주입
   ┌──── 현재 파일 LOOP (네이티브 에이전트 루프) ─────────────
   │  LLM 분석
-  │   ├─ 정보 필요 → ③ file_read·code_search·file_find·file_read_diff → 다시 분석 ↺
+  │   ├─ 정보 필요 → ③ file_read·code_search·file_find·file_read_diff·related_code·git_history → 다시 분석 ↺
   │   └─ 이 파일 끝 → ④ k_review_submit(findings)
   │        ▼ hook: tool.execute.after (검증)
   │        ├─ 이 파일 룰 미커버 → "누락:{X} 계속" ───────────┘ (현재 파일 유지·반복)
@@ -319,10 +345,12 @@ type ReviewState = {
 ```
 src/core/review/                ← 플랫폼 독립 (Cline/MCP 재사용 가능)
   rubric.ts      # .aidlc-rule-details 룰 → 카테고리 체크리스트 로드
-  context.ts     # git diff + 파일/패키지 수집, exclude 적용
+  context.ts     # git diff + 파일 수집, exclude 적용
   contract.ts    # REQUIRED_CATEGORIES + submit zod 스키마
   template.ts    # 리뷰 프롬프트 템플릿 + render()
   reader.ts      # FileReader(3모드) + file_read·file_read_diff·file_find·code_search
+  evidence.ts    # 연관 파일 점수화(경로 목록+grep recipe, 프리뷰 X) + Git 이력/동시변경 증거
+  segment.ts     # whole 모드 큰 파일 세그먼트 분할 + 같은 파일 내 연관 선언 주입
   state.ts       # 세션별 리뷰 상태
   output.ts      # 출력 경로 해석 + 리포트 렌더·저장
 src/adapters/opencode/review/
@@ -337,7 +365,7 @@ src/adapters/opencode/review/
 
 ## 11. 구현 단계 (제안)
 
-1. **Phase 1 — core**: `rubric.ts`, `context.ts`(commit/files/package/exclude 해석), `contract.ts`, `template.ts`, `output.ts`. 플랫폼 독립, 단위 테스트 가능. 가장 가치 높고 독립적.
+1. **Phase 1 — core**: `rubric.ts`, `context.ts`(commit/files/exclude 해석), `contract.ts`, `template.ts`, `output.ts`. 플랫폼 독립, 단위 테스트 가능. 가장 가치 높고 독립적.
 2. **Phase 2 — 루프/상태**: `state.ts`, `reader.ts`.
 3. **Phase 3 — opencode 어댑터**: `adapters/opencode/review/index.ts` (도구 3개 + 훅 2개 wiring) + `.opencode/command` / `agent`.
 

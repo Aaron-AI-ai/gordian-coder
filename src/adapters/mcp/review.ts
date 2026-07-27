@@ -14,6 +14,9 @@ import {
   fileReadDiff,
   fileFind,
   codeSearch,
+  renderRelatedCode,
+  gitHistory,
+  currentFile,
   startReview,
   submitReview,
   guardExploration,
@@ -47,13 +50,17 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
   const k_review_context: ToolDefinition = {
     name: "k_review_context",
     description:
-      "Start a code review. Collects target files from a git commit/range, explicit files, and/or a package path (minus excludes), loads the rubric, and seeds the review loop. All inputs optional; with none, reviews the latest commit. The result includes the review instructions for the first file.",
+      "Start a code review. Collects target files from a git commit/range and/or explicit files (minus excludes), loads the rubric, and seeds the review loop. All inputs optional; with none, reviews the latest commit. The result includes the review instructions for the first file.",
     parameters: {
       commit: { type: "string", description: 'Single ref ("HEAD","<sha>") or range ("A..B")' },
       from: { type: "string", description: "Range start (used with `to`)" },
       to: { type: "string", description: "Range end (defaults HEAD)" },
       files: { type: "array", description: "Explicit file paths" },
-      package: { type: "string", description: "Directory/package path to scan" },
+      whole: {
+        type: "boolean",
+        description:
+          "Review full file content instead of the diff; files over ~1000 lines are split into overlapping segments, each reviewed with its referenced same-file declarations",
+      },
       exclude: { type: "array", description: "Glob patterns to exclude" },
       output: { type: "string", description: "Report output file or directory" },
       failOn: {
@@ -86,6 +93,7 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
       return ok(
         guardExploration(
           st,
+          "file_read",
           fileRead(
             st.cwd,
             st.ref,
@@ -108,7 +116,9 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
     execute: async (params) => {
       const st = getState(SESSION);
       if (!st?.active) return ok(NO_ACTIVE_REVIEW);
-      return ok(guardExploration(st, fileReadDiff(st.diffMap, (params.path_array as string[]) ?? [])));
+      return ok(
+        guardExploration(st, "file_read_diff", fileReadDiff(st.diffMap, (params.path_array as string[]) ?? []))
+      );
     },
   };
 
@@ -125,6 +135,7 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
       return ok(
         guardExploration(
           st,
+          "file_find",
           fileFind(st.cwd, st.ref, params.query_name as string, params.case_sensitive as boolean)
         )
       );
@@ -153,6 +164,7 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
       return ok(
         guardExploration(
           st,
+          "code_search",
           codeSearch(
             st.cwd,
             st.ref,
@@ -160,6 +172,75 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
             (params.file_patterns as string[]) ?? [],
             params.case_sensitive as boolean,
             params.use_perl_regexp as boolean
+          )
+        )
+      );
+    },
+  };
+
+  const related_code: ToolDefinition = {
+    name: "related_code",
+    description:
+      "Find code related to the current review file using imports, symbol usages, likely tests, and git co-change history. Ranked results can include bounded previews.",
+    parameters: {
+      file_path: {
+        type: "string",
+        description: "Relative path (defaults to the file currently under review)",
+      },
+      max_results: { type: "number", description: "Maximum candidates (default 12, max 30)" },
+      include_preview: {
+        type: "boolean",
+        description: "Include first lines of top candidates (default true)",
+      },
+    },
+    execute: async (params) => {
+      const st = getState(SESSION);
+      if (!st?.active) return ok(NO_ACTIVE_REVIEW);
+      const file = (params.file_path as string | undefined) ?? currentFile(st);
+      if (!file) return ok("No current file under review.");
+      return ok(
+        guardExploration(
+          st,
+          "related_code",
+          renderRelatedCode(
+            st.cwd,
+            st.ref,
+            file,
+            params.max_results as number | undefined,
+            (params.include_preview as boolean | undefined) ?? true
+          )
+        )
+      );
+    },
+  };
+
+  const git_history: ToolDefinition = {
+    name: "git_history",
+    description:
+      "Inspect recent git history for a review file, including commit intent and files changed together. Can include bounded historical patches.",
+    parameters: {
+      file_path: {
+        type: "string",
+        description: "Relative path (defaults to the file currently under review)",
+      },
+      max_commits: { type: "number", description: "Recent commits (default 5, max 10)" },
+      include_patch: { type: "boolean", description: "Include historical patches" },
+    },
+    execute: async (params) => {
+      const st = getState(SESSION);
+      if (!st?.active) return ok(NO_ACTIVE_REVIEW);
+      const file = (params.file_path as string | undefined) ?? currentFile(st);
+      if (!file) return ok("No current file under review.");
+      return ok(
+        guardExploration(
+          st,
+          "git_history",
+          gitHistory(
+            st.cwd,
+            file,
+            params.max_commits as number | undefined,
+            (params.include_patch as boolean | undefined) ?? false,
+            st.ref
           )
         )
       );
@@ -180,5 +261,14 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
     },
   };
 
-  return [k_review_context, file_read, file_read_diff, file_find, code_search, k_review_submit];
+  return [
+    k_review_context,
+    file_read,
+    file_read_diff,
+    file_find,
+    code_search,
+    related_code,
+    git_history,
+    k_review_submit,
+  ];
 }

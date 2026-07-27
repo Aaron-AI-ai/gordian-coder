@@ -5,7 +5,8 @@
 
 import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
-import { createReviewModule } from "./review";
+import { VERSION } from "../../version";
+import { createModules } from "./modules";
 import {
   getAllTools,
   processMessage,
@@ -80,23 +81,40 @@ function createOpenCodeTools() {
  * OpenCode Plugin implementation
  */
 const OpenCodeAdapter: Plugin = async (input) => {
+  // Printed to the OpenCode server log on load — lets you verify which build is
+  // actually deployed (the plugin path points at a local dist bundle).
+  console.error(`[gordian-coder] opencode plugin v${VERSION} loaded`);
+
   const context: GordianContext = {
     sessionId: undefined,
     workingDirectory: input.directory,
     config: {},
   };
 
-  const review = createReviewModule(input);
+  // Feature modules come from the registry (modules.ts) — register new
+  // modules there; this file stays untouched.
+  const modules = createModules(input);
+
+  const moduleTools = Object.assign({}, ...modules.map((m) => m.tools));
+  const moduleTransforms = modules
+    .map((m) => m.systemTransform)
+    .filter((t) => t != null);
+  const moduleEvents = modules.map((m) => m.event).filter((e) => e != null);
 
   return {
-    // Register tools from core + k-codereview tools
-    tool: { ...createOpenCodeTools(), ...review.tools },
+    // Register tools from core + feature-module tools
+    tool: { ...createOpenCodeTools(), ...moduleTools },
 
-    // k-codereview: inject the per-file review template into the system prompt
-    "experimental.chat.system.transform": review.systemTransform,
+    // Run every module's system-prompt transform in order
+    "experimental.chat.system.transform": async (hookInput, output) => {
+      for (const transform of moduleTransforms) {
+        await transform(hookInput, output);
+      }
+    },
 
     // Event handler
-    event: async ({ event }) => {
+    event: async (hookInput) => {
+      const { event } = hookInput;
       await handleEvent(
         {
           type: event.type as "session.created" | "session.ended",
@@ -105,6 +123,8 @@ const OpenCodeAdapter: Plugin = async (input) => {
         },
         context
       );
+      // Let feature modules react to raw events (e.g. review's idle watchdog).
+      for (const ev of moduleEvents) await ev(hookInput);
     },
 
     // Hook: before tool execution
@@ -124,6 +144,23 @@ const OpenCodeAdapter: Plugin = async (input) => {
         { ...context, sessionId: hookInput.sessionID }
       );
     },
+
+    // Hook: config loaded — placeholder, no-op for now.
+    // Use to read/react to opencode.json settings (e.g. plugin options).
+    config: async (_config) => {},
+
+    // Hook: modify LLM call parameters (temperature, topP, topK, options)
+    // — placeholder, no-op for now. Mutate `output` fields to override.
+    "chat.params": async (_hookInput, _output) => {},
+
+    // Hook: before session compaction — placeholder, no-op for now.
+    // Push to output.context to add compaction hints, or set output.prompt
+    // to replace the compaction prompt (e.g. preserve review state).
+    "experimental.session.compacting": async (_hookInput, _output) => {},
+
+    // Hook: after a text part completes — placeholder, no-op for now.
+    // Use to inspect/post-process completed assistant text.
+    "experimental.text.complete": async (_hookInput, _output) => {},
 
     // Hook: chat message interceptor
     "chat.message": async (hookInput, output) => {
