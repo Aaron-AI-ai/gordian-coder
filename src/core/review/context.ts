@@ -37,12 +37,12 @@ export interface ReviewConfig {
   language?: string; // report/findings language, e.g. "ko" (default), "en"
   frameworkGuide?: string; // path to a framework conventions md (overrides bundled default)
   failOn?: string; // CI gate: FAIL when any finding is at/above this severity ("blocker"|"major"|"minor"|"nit")
-  debug?: boolean; // emit `[k-review:*]` trace logs (alternative to K_REVIEW_DEBUG env)
+  debug?: boolean; // emit `[f-review:*]` trace logs (alternative to F_REVIEW_DEBUG env)
 }
 
-/** Read project-root `.k-codereview.json`; missing/invalid → {}. */
+/** Read project-root `.f-review.json`; missing/invalid → {}. */
 export function loadConfig(cwd: string = process.cwd()): ReviewConfig {
-  const p = join(cwd, ".k-codereview.json");
+  const p = join(cwd, ".f-review.json");
   if (!existsSync(p)) return {};
   try {
     return JSON.parse(readFileSync(p, "utf8")) as ReviewConfig;

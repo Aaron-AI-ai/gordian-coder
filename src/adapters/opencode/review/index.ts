@@ -1,15 +1,15 @@
 /**
- * k-codereview wiring for the OpenCode plugin.
+ * f-review wiring for the OpenCode plugin.
  *
  * Exposes the review tools and one system-prompt injection hook:
- *   - k_review_context : collect targets + rubric + diff snapshot, seed state
+ *   - f_review_context : collect targets + rubric + diff snapshot, seed state
  *   - file_read        : read a file's after-version (line range, numbered)
  *   - file_read_diff   : read the diff of other changed files
  *   - file_find        : find files by filename substring
  *   - code_search      : git grep the codebase (regex / pathspec)
  *   - related_code     : rank dependencies, callers, tests, and co-change files
  *   - git_history      : inspect commits, co-changes, and historical patches
- *   - k_review_submit  : declare done for a file → coverage gate → advance/finish
+ *   - f_review_submit  : declare done for a file → coverage gate → advance/finish
  *   - system.transform : inject the per-file review template each turn
  *
  * The loop itself lives in core (core/review/loop.ts); this file only adapts
@@ -47,7 +47,7 @@ export function createReviewModule(input: PluginInput): {
 } {
   const cwd = input.directory;
 
-  const k_review_context = tool({
+  const f_review_context = tool({
     description:
       "Start a code review. Collects target files from a git commit/range and/or explicit files (minus excludes), loads the rubric, and seeds the review loop. All inputs optional; with none, reviews the latest commit.",
     args: {
@@ -216,7 +216,7 @@ export function createReviewModule(input: PluginInput): {
     },
   });
 
-  const k_review_submit = tool({
+  const f_review_submit = tool({
     description:
       "Declare the current file reviewed. Provide `assessed` (every rubric category you evaluated) and `findings` (issues, may be empty). Coverage is gated: if a category is unassessed, you must continue.",
     args: {
@@ -273,14 +273,14 @@ export function createReviewModule(input: PluginInput): {
 
   return {
     tools: {
-      k_review_context,
+      f_review_context,
       file_read,
       file_read_diff,
       file_find,
       code_search,
       related_code,
       git_history,
-      k_review_submit,
+      f_review_submit,
     },
     systemTransform,
     event,

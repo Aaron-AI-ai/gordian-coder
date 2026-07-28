@@ -49,7 +49,7 @@ import { SEGMENT_THRESHOLD, inFileRelated, planSegments, targetPath, targetRange
 import { dbg, dbgOnce, setReviewDebug } from "./debug";
 import { VERSION } from "../../version";
 
-export const NO_ACTIVE_REVIEW = "No active review. Call k_review_context first.";
+export const NO_ACTIVE_REVIEW = "No active review. Call f_review_context first.";
 
 /** Sequential single-session loop: past this many files context degrades. */
 export const LARGE_REVIEW_WARN_AT = 30;
@@ -239,7 +239,7 @@ export async function startReview(
     `The review checklist is now injected into your instructions.`,
     `Review the first target (${reviewTargets[0]}). Related-code and Git-history evidence is injected`,
     `automatically; use related_code / git_history / file_read / code_search / file_read_diff`,
-    `for deeper context, then call k_review_submit when done with each file.`,
+    `for deeper context, then call f_review_submit when done with each file.`,
   ].join("\n");
 }
 
@@ -253,7 +253,7 @@ export function guardExploration(st: ReviewState, tool: string, out: string): st
   }
   st.iterations++;
   if (st.iterations > MAX_ITER) {
-    return `${out}\n\n⚠️ Exploration limit reached — review with what you have and call k_review_submit now.`;
+    return `${out}\n\n⚠️ Exploration limit reached — review with what you have and call f_review_submit now.`;
   }
   return out;
 }
@@ -310,7 +310,7 @@ export async function submitReview(payload: unknown, sessionId: string): Promise
     return [
       `🔎 Final check for ${file} (attempt ${tries + 1}/${MAX_FINAL_RECHECKS}):`,
       ...notes,
-      `Address what applies, then call k_review_submit again for ${file}.`,
+      `Address what applies, then call f_review_submit again for ${file}.`,
     ].join("\n");
   }
 
@@ -383,7 +383,7 @@ export async function onSessionIdle(
       kind: "resume",
       text:
         `Review incomplete: ${st.currentIndex}/${st.targets.length} file(s) submitted. ` +
-        `Continue with ${currentFile(st)} and call k_review_submit for each remaining file ` +
+        `Continue with ${currentFile(st)} and call f_review_submit for each remaining file ` +
         `(auto-resume ${st.resumes}/${MAX_RESUMES}).`,
     };
   }
@@ -430,7 +430,7 @@ export function reviewPromptFor(st: ReviewState): string | null {
   });
 
   // Once per target (system.transform re-renders every turn): dump what was
-  // injected so `K_REVIEW_DEBUG=1` lets you verify segment/related/evidence.
+  // injected so `F_REVIEW_DEBUG=1` lets you verify segment/related/evidence.
   const kind = range ? `segment ${range.start}-${range.end}` : st.wholeFile ? "whole" : "diff";
   dbgOnce(
     target,

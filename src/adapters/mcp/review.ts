@@ -1,9 +1,9 @@
 /**
- * k-codereview tools for the MCP adapter (Claude Code / Cline).
+ * f-review tools for the MCP adapter (Claude Code / Cline).
  *
  * Same core loop as the OpenCode plugin, adapted to MCP's constraints:
  * MCP servers cannot inject system prompts, so the per-file review prompt is
- * appended to the k_review_context / k_review_submit tool results instead.
+ * appended to the f_review_context / f_review_submit tool results instead.
  * A stdio MCP server serves one client, so a single fixed session id is used.
  */
 
@@ -47,8 +47,8 @@ function promptBlock(): string {
 }
 
 export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[] {
-  const k_review_context: ToolDefinition = {
-    name: "k_review_context",
+  const f_review_context: ToolDefinition = {
+    name: "f_review_context",
     description:
       "Start a code review. Collects target files from a git commit/range and/or explicit files (minus excludes), loads the rubric, and seeds the review loop. All inputs optional; with none, reviews the latest commit. The result includes the review instructions for the first file.",
     parameters: {
@@ -247,8 +247,8 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
     },
   };
 
-  const k_review_submit: ToolDefinition = {
-    name: "k_review_submit",
+  const f_review_submit: ToolDefinition = {
+    name: "f_review_submit",
     description:
       "Declare the current file reviewed. Provide `assessed` (every rubric category you evaluated: security, nfr, correctness, tests, framework) and `findings` (issues with category/severity/file/line/rule/message/suggestion; may be empty). Coverage is gated. The result includes the review instructions for the next file.",
     parameters: {
@@ -262,13 +262,13 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
   };
 
   return [
-    k_review_context,
+    f_review_context,
     file_read,
     file_read_diff,
     file_find,
     code_search,
     related_code,
     git_history,
-    k_review_submit,
+    f_review_submit,
   ];
 }

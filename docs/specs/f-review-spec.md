@@ -1,4 +1,4 @@
-# k-codereview 설계 스펙
+# f-review 설계 스펙
 
 > OpenCode 플러그인으로 동작하는 코드 리뷰 기능. 이 문서를 보고 개발한다.
 
@@ -83,7 +83,7 @@ function resolveDiffRange(commit, hasFiles) {
 
 ### 3.2 exclude (예외 경로)
 
-- 출처: `.k-codereview.json` 의 `exclude` ∪ `--exclude` 파라미터 (**합집합**, 파라미터는 추가만)
+- 출처: `.f-review.json` 의 `exclude` ∪ `--exclude` 파라미터 (**합집합**, 파라미터는 추가만)
 - 매칭: `Bun.Glob` (의존성 추가 없음)
 
 ```ts
@@ -96,24 +96,24 @@ const targets = collected.filter(f => !globs.some(g => g.match(f)));
 
 report와 manifest는 서로 다른 트리에 저장한다.
 
-- **report**: 우선순위 `--output` > `.k-codereview.json` 의 `output` > 기본 `fcq/report/k-codereview/`. 디렉터리 대상이면 파일명에 날짜가 붙는다(`review-<label>-<yyyymmdd>.md`).
-- **manifest**: 고정 `fcq/k-codereview/manifest/review-<label>-targets.md`. 파일명에는 날짜를 넣지 않고, 본문에 생성 시각(UTC)을 기록한다.
-- **백업**: report 기록 시 `k-codereview` report 폴더가 이미 있으면 `k-codereview.<yyyymmdd-hhmmss>`로 폴더째 백업한 뒤 새로 쓴다. (임의의 `--output` 디렉터리는 백업 대상이 아니다 — 폴더명이 `k-codereview`일 때만.)
+- **report**: 우선순위 `--output` > `.f-review.json` 의 `output` > 기본 `fcq/report/f-review/`. 디렉터리 대상이면 파일명에 날짜가 붙는다(`review-<label>-<yyyymmdd>.md`).
+- **manifest**: 고정 `fcq/f-review/manifest/review-<label>-targets.md`. 파일명에는 날짜를 넣지 않고, 본문에 생성 시각(UTC)을 기록한다.
+- **백업**: report 기록 시 `f-review` report 폴더가 이미 있으면 `f-review.<yyyymmdd-hhmmss>`로 폴더째 백업한 뒤 새로 쓴다. (임의의 `--output` 디렉터리는 백업 대상이 아니다 — 폴더명이 `f-review`일 때만.)
 
 ```ts
 function resolveOutputPath(opt, label /* commit short sha | timestamp */, cwd, date = new Date()) {
-  const p = opt ?? readConfig()?.output ?? "fcq/report/k-codereview/";
+  const p = opt ?? readConfig()?.output ?? "fcq/report/f-review/";
   if (p.endsWith("/") || isDir(p)) return `${p}review-${label}-${ymd(date)}.md`;
   return p;
 }
 function resolveManifestPath(label) {
-  return `fcq/k-codereview/manifest/review-${label}-targets.md`;
+  return `fcq/f-review/manifest/review-${label}-targets.md`;
 }
 ```
 
 | 입력 | report 파일 |
 |------|-----------|
-| (없음) | `fcq/report/k-codereview/review-<sha|ts>-<yyyymmdd>.md` |
+| (없음) | `fcq/report/f-review/review-<sha|ts>-<yyyymmdd>.md` |
 | `--output=reports/` | `reports/review-<sha|ts>-<yyyymmdd>.md` |
 | `--output=reports/pr-42.md` | `reports/pr-42.md` |
 | config `"output":"docs/rv/"` | `docs/rv/review-<sha|ts>-<yyyymmdd>.md` |
@@ -126,14 +126,14 @@ function resolveManifestPath(label) {
 
 | 도구 | 시점 | 역할 |
 |------|------|------|
-| `k_review_context` | 진입 1회 | 대상 파일 수집 + 룰 로드 + diff 스냅샷 + 세션 상태 초기화 |
+| `f_review_context` | 진입 1회 | 대상 파일 수집 + 룰 로드 + diff 스냅샷 + 세션 상태 초기화 |
 | `file_read` | 루프 중 | 파일 after-버전 읽기(라인범위·라인번호·500줄 cap·IS_TRUNCATED) |
 | `file_read_diff` | 루프 중 | 다른 변경 파일의 diff 읽기(DiffMap 스냅샷, 다중경로) |
 | `file_find` | 루프 중 | 파일명 부분일치 검색(basename, 100건 cap) |
 | `code_search` | 루프 중 | git grep 검색(pathspec·정규식·100건 cap, 파일별 그룹핑) |
 | `related_code` | 루프 중 | import·심볼 사용처·테스트·동시변경 이력을 점수화해 연관 코드 후보(+요청 시 미리보기) 제공 |
 | `git_history` | 루프 중 | 최근 커밋 의도·동시변경 파일·선택적 과거 patch 제공 |
-| `k_review_submit` | done 시도 | 구조화 결과 제출 → 검증 게이트 |
+| `f_review_submit` | done 시도 | 구조화 결과 제출 → 검증 게이트 |
 
 **자동 주입 evidence 정책** — `{{review_evidence}}`의 **크로스파일 연관은 프리뷰를 넣지 않고 경로 목록만** 준다.
 앞부분 프리뷰는 대개 그 파일의 import/헤더라 리뷰 대상이 실제 호출하는 함수를 놓치기 때문. 대신
@@ -168,7 +168,7 @@ function resolveManifestPath(label) {
 
 ### 5.2 종료(DONE) 정의
 
-`k_review_submit` 호출 **+** 커버리지 검증 통과. submit이 모델의 "done 선언"이고, 게이트가 통과시켜야만 실제 종료된다. 미달이면 같은 도구 응답이 루프를 계속 돌린다.
+`f_review_submit` 호출 **+** 커버리지 검증 통과. submit이 모델의 "done 선언"이고, 게이트가 통과시켜야만 실제 종료된다. 미달이면 같은 도구 응답이 루프를 계속 돌린다.
 
 ### 5.3 무한루프 가드
 
@@ -210,7 +210,7 @@ Current time in the real world: {{current_system_date_time}}
 
 Now please review the code changes in <current_file_diff>.
 When you need more context, use file_read / code_search / file_find / file_read_diff / related_code / git_history.
-When done with THIS file, call k_review_submit.
+When done with THIS file, call f_review_submit.
 </user_task>
 ```
 
@@ -241,15 +241,15 @@ function render(tpl, vars) {
 ## 7. 전체 워크플로우
 
 ```
-/k-codereview <commit> --files=… --exclude=… --output=…
-  ▼  [진입점: .opencode/command/k-codereview.md, $ARGUMENTS]
-① k_review_context → targets[] 정렬·룰·배경·plan 수집, state 시드(currentIndex=0)
+/f-review <commit> --files=… --exclude=… --output=…
+  ▼  [진입점: .opencode/command/f-review.md, $ARGUMENTS]
+① f_review_context → targets[] 정렬·룰·배경·plan 수집, state 시드(currentIndex=0)
   ▼
 ② system.transform → render(template, 현재파일 변수) 주입        ← 변수 치환 주입
   ┌──── 현재 파일 LOOP (네이티브 에이전트 루프) ─────────────
   │  LLM 분석
   │   ├─ 정보 필요 → ③ file_read·code_search·file_find·file_read_diff·related_code·git_history → 다시 분석 ↺
-  │   └─ 이 파일 끝 → ④ k_review_submit(findings)
+  │   └─ 이 파일 끝 → ④ f_review_submit(findings)
   │        ▼ hook: tool.execute.after (검증)
   │        ├─ 이 파일 룰 미커버 → "누락:{X} 계속" ───────────┘ (현재 파일 유지·반복)
   │        └─ 통과 → findings 저장, currentIndex++
@@ -274,13 +274,13 @@ function render(tpl, vars) {
 "tool.execute.after": async (input, output) => {
   const st = stateFor(input.sessionID);
 
-  if (input.tool === "k_review_fetch") {
+  if (input.tool === "f_review_fetch") {
     st.iterations++;
     if (st.iterations > MAX_ITER)
-      output.output += "\n\n⚠️ 탐색 한도 도달 — 지금 정보로 k_review_submit 하라.";
+      output.output += "\n\n⚠️ 탐색 한도 도달 — 지금 정보로 f_review_submit 하라.";
     return;
   }
-  if (input.tool !== "k_review_submit") return;
+  if (input.tool !== "f_review_submit") return;
 
   const missing = st.categories.filter(c => !covered(parsed, c));
   if (missing.length) {                          // DONE 거부 → 루프 지속
@@ -355,11 +355,11 @@ src/core/review/                ← 플랫폼 독립 (Cline/MCP 재사용 가능
   output.ts      # 출력 경로 해석 + 리포트 렌더·저장
 src/adapters/opencode/review/
   index.ts       # tool 3개 + system.transform + 검증/가드 hook wiring
-.opencode/command/k-codereview.md   # slash 진입점 ($ARGUMENTS)
-.opencode/agent/k-reviewer.md        # (선택) 전용 리뷰어 에이전트
+.opencode/command/f-review.md   # slash 진입점 ($ARGUMENTS)
+.opencode/agent/f-reviewer.md        # (선택) 전용 리뷰어 에이전트
 ```
 
-설정 파일: 프로젝트 루트 `.k-codereview.json` (`{ exclude, output }`, 없으면 무시).
+설정 파일: 프로젝트 루트 `.f-review.json` (`{ exclude, output }`, 없으면 무시).
 
 ---
 

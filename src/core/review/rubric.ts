@@ -125,7 +125,7 @@ export function buildRubric(
 
 /**
  * Load the framework conventions guide: a project override
- * (`.k-codereview.json` "frameworkGuide") if present, else the bundled default.
+ * (`.f-review.json` "frameworkGuide") if present, else the bundled default.
  * These rules are AUTHORITATIVE and override general best practices.
  */
 export function loadFrameworkGuide(cwd: string = process.cwd()): string {

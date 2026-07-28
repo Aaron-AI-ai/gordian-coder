@@ -24,7 +24,7 @@ function gitRepo(): string {
 
 const tmps: string[] = [];
 function tmp(): string {
-  const d = mkdtempSync(join(tmpdir(), "k-review-"));
+  const d = mkdtempSync(join(tmpdir(), "f-review-"));
   tmps.push(d);
   return d;
 }
@@ -85,10 +85,10 @@ describe("loadConfig", () => {
     expect(loadConfig(tmp())).toEqual({});
   });
 
-  it("reads exclude/output from .k-codereview.json", () => {
+  it("reads exclude/output from .f-review.json", () => {
     const d = tmp();
     writeFileSync(
-      join(d, ".k-codereview.json"),
+      join(d, ".f-review.json"),
       JSON.stringify({ exclude: ["**/*.snap"], output: "reports/" })
     );
     expect(loadConfig(d)).toEqual({ exclude: ["**/*.snap"], output: "reports/" });
@@ -96,7 +96,7 @@ describe("loadConfig", () => {
 
   it("returns {} on malformed JSON", () => {
     const d = tmp();
-    writeFileSync(join(d, ".k-codereview.json"), "{not json");
+    writeFileSync(join(d, ".f-review.json"), "{not json");
     expect(loadConfig(d)).toEqual({});
   });
 });
@@ -119,7 +119,7 @@ describe("isDefaultExcluded", () => {
 describe("collectTargets (files-only, no git)", () => {
   it("unions files and applies config + param excludes", async () => {
     const d = tmp();
-    writeFileSync(join(d, ".k-codereview.json"), JSON.stringify({ exclude: ["**/*.test.ts"] }));
+    writeFileSync(join(d, ".f-review.json"), JSON.stringify({ exclude: ["**/*.test.ts"] }));
     const targets = await collectTargets(
       { files: ["src/a.ts", "src/a.test.ts", "src/b.ts"], exclude: ["src/b.ts"] },
       d

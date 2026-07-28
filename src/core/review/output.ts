@@ -2,11 +2,11 @@
  * Output location resolution + report rendering/writing.
  *
  * Reports and manifests live in separate trees:
- *   report   → --output param > .k-codereview.json "output" > fcq/report/k-codereview/
- *   manifest → fcq/k-codereview/manifest/ (fixed)
+ *   report   → --output param > .f-review.json "output" > fcq/report/f-review/
+ *   manifest → fcq/f-review/manifest/ (fixed)
  * A directory report target gets an auto-named `review-<label>-<yyyymmdd>.md`;
  * a file target is used as-is. Writing a report archives any existing
- * `k-codereview` report folder to `k-codereview.<yyyymmdd-hhmmss>` first.
+ * `f-review` report folder to `f-review.<yyyymmdd-hhmmss>` first.
  */
 
 import { existsSync, statSync, readdirSync, readFileSync, renameSync } from "node:fs";
@@ -14,8 +14,8 @@ import { join, isAbsolute, dirname, basename } from "node:path";
 import { loadConfig } from "./context";
 import { SEVERITIES, verdict, type Finding, type Severity } from "./contract";
 
-const DEFAULT_REPORT_DIR = "fcq/report/k-codereview/";
-const DEFAULT_MANIFEST_DIR = "fcq/k-codereview/manifest/";
+const DEFAULT_REPORT_DIR = "fcq/report/f-review/";
+const DEFAULT_MANIFEST_DIR = "fcq/f-review/manifest/";
 
 function isDirSync(p: string): boolean {
   return existsSync(p) && statSync(p).isDirectory();
@@ -229,11 +229,11 @@ export async function writeReport(
 
 /**
  * Archive an existing dedicated report folder before writing a fresh report:
- * `.../k-codereview` → `.../k-codereview.<yyyymmdd-hhmmss>`. Gated on the
+ * `.../f-review` → `.../f-review.<yyyymmdd-hhmmss>`. Gated on the
  * folder name so an arbitrary `--output` directory is never renamed.
  */
 function backupReportDir(dir: string, now: Date): void {
-  if (basename(dir) === "k-codereview" && isDirSync(dir)) {
+  if (basename(dir) === "f-review" && isDirSync(dir)) {
     renameSync(dir, `${dir}.${stamp(now)}`);
   }
 }

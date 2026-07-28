@@ -170,8 +170,8 @@ describe("startReview / submitReview (full loop)", () => {
     const md = readFileSync(join(d, report), "utf8");
     expect(md).toContain("**Verdict: FAIL**");
     expect(md).toContain("## a.ts");
-    // manifest lives in its own tree (fcq/k-codereview/manifest/), not beside the report
-    const manifestDir = join(d, "fcq/k-codereview/manifest");
+    // manifest lives in its own tree (fcq/f-review/manifest/), not beside the report
+    const manifestDir = join(d, "fcq/f-review/manifest");
     expect(readdirSync(manifestDir).some((f) => f.endsWith("-targets.md"))).toBe(true);
   });
 

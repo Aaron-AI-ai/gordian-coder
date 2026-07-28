@@ -1,6 +1,6 @@
 /**
- * k-codereview core (platform-independent).
- * See docs/specs/k-codereview-spec.md.
+ * f-review core (platform-independent).
+ * See docs/specs/f-review-spec.md.
  */
 
 export * from "./contract";

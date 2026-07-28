@@ -39,9 +39,9 @@ const finding = (over: Partial<Finding> = {}): Finding => ({
 const DATE = new Date("2026-07-27T09:30:05Z"); // ymd → 20260727
 
 describe("resolveOutputPath", () => {
-  it("defaults to fcq/report/k-codereview/ with dated auto filename", () => {
+  it("defaults to fcq/report/f-review/ with dated auto filename", () => {
     expect(resolveOutputPath(undefined, "L", tmp(), DATE)).toBe(
-      "fcq/report/k-codereview/review-L-20260727.md"
+      "fcq/report/f-review/review-L-20260727.md"
     );
   });
 
@@ -55,13 +55,13 @@ describe("resolveOutputPath", () => {
 
   it("reads output from config when no param", () => {
     const d = tmp();
-    writeFileSync(join(d, ".k-codereview.json"), JSON.stringify({ output: "docs/rv/" }));
+    writeFileSync(join(d, ".f-review.json"), JSON.stringify({ output: "docs/rv/" }));
     expect(resolveOutputPath(undefined, "L", d, DATE)).toBe("docs/rv/review-L-20260727.md");
   });
 
   it("param overrides config", () => {
     const d = tmp();
-    writeFileSync(join(d, ".k-codereview.json"), JSON.stringify({ output: "docs/rv/" }));
+    writeFileSync(join(d, ".f-review.json"), JSON.stringify({ output: "docs/rv/" }));
     expect(resolveOutputPath("out.md", "L", d, DATE)).toBe("out.md");
   });
 
@@ -80,7 +80,7 @@ describe("resolveOutputPath", () => {
 
 describe("resolveManifestPath", () => {
   it("puts manifests in their own fixed tree, no date in the name", () => {
-    expect(resolveManifestPath("L")).toBe("fcq/k-codereview/manifest/review-L-targets.md");
+    expect(resolveManifestPath("L")).toBe("fcq/f-review/manifest/review-L-targets.md");
   });
 });
 
@@ -192,8 +192,8 @@ describe("baseline", () => {
 
   it("loadBaseline picks the latest report in the output dir, ignoring manifests", async () => {
     const d = tmp();
-    await writeReport("fcq/report/k-codereview/review-old.md", { "a.ts": [finding()] }, "", d);
-    writeFileSync(join(d, "fcq/report/k-codereview/review-old-targets.md"), "# Code Review Targets");
+    await writeReport("fcq/report/f-review/review-old.md", { "a.ts": [finding()] }, "", d);
+    writeFileSync(join(d, "fcq/report/f-review/review-old-targets.md"), "# Code Review Targets");
     const keys = loadBaseline(undefined, d);
     expect(keys.has(baselineKey("a.ts", "no-secret"))).toBe(true);
   });
@@ -246,9 +246,9 @@ describe("writeReport", () => {
     expect(existsSync(join(d, "nested/dir/out.md"))).toBe(true);
   });
 
-  it("archives an existing k-codereview report folder before writing anew", async () => {
+  it("archives an existing f-review report folder before writing anew", async () => {
     const d = tmp();
-    const dir = "fcq/report/k-codereview";
+    const dir = "fcq/report/f-review";
     await writeReport(join(dir, "review-A-20260726.md"), { "a.ts": [finding()] }, "A", d);
     // second review the next day: old folder is backed up, new report written fresh
     await writeReport(join(dir, "review-B-20260727.md"), { "b.ts": [finding()] }, "B", d, "en", undefined, undefined, DATE);
@@ -257,7 +257,7 @@ describe("writeReport", () => {
     expect(existsSync(join(d, `${dir}.20260727-093005`, "review-A-20260726.md"))).toBe(true); // archived
   });
 
-  it("never renames an arbitrary --output directory (only k-codereview)", async () => {
+  it("never renames an arbitrary --output directory (only f-review)", async () => {
     const d = tmp();
     await writeReport("nested/dir/first.md", { "a.ts": [finding()] }, "A", d);
     await writeReport("nested/dir/second.md", { "b.ts": [finding()] }, "B", d);

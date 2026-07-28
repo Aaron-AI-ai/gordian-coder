@@ -6,7 +6,7 @@ describe("MCP review tools", () => {
     const names = createReviewTools().map((tool) => tool.name);
     expect(names).toContain("related_code");
     expect(names).toContain("git_history");
-    expect(names.at(-1)).toBe("k_review_submit");
+    expect(names.at(-1)).toBe("f_review_submit");
   });
 
   it("keeps evidence tools inside an active review session", async () => {

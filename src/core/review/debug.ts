@@ -1,7 +1,7 @@
 /**
  * Opt-in trace logging for verifying review internals (segmentation, injected
- * evidence, per-target prompt composition). Off unless `K_REVIEW_DEBUG` is set
- * to a non-empty value; then `[k-review:*]` lines go to stderr — visible in the
+ * evidence, per-target prompt composition). Off unless `F_REVIEW_DEBUG` is set
+ * to a non-empty value; then `[f-review:*]` lines go to stderr — visible in the
  * OpenCode / MCP server log without touching the model-facing output.
  */
 
@@ -17,11 +17,11 @@ export function setReviewDebug(on: boolean): void {
 }
 
 export function reviewDebugEnabled(): boolean {
-  return configOverride || !!process.env.K_REVIEW_DEBUG;
+  return configOverride || !!process.env.F_REVIEW_DEBUG;
 }
 
 export function dbg(section: string, message: string): void {
-  if (reviewDebugEnabled()) console.error(`[k-review:${section}] ${message}`);
+  if (reviewDebugEnabled()) console.error(`[f-review:${section}] ${message}`);
 }
 
 const dumped = new Set<string>();

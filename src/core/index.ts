@@ -24,5 +24,5 @@ export {
   afterToolExecute,
 } from "./handlers";
 
-// k-codereview
+// f-review
 export * from "./review";

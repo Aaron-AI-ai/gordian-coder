@@ -55,7 +55,7 @@ Now please {{review_action}}.
 When you need more context, use file_read (wider context), code_search (symbols/usages),
 file_find (locate files), file_read_diff (other changed files), related_code
 (ranked dependencies/callers/tests), or git_history (previous changes).
-When done with THIS file, call k_review_submit.
+When done with THIS file, call f_review_submit.
 </user_task>`;
 
 export type TemplateVars = {
