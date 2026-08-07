@@ -20,6 +20,7 @@ export interface ReviewState {
   ref: string | null; // afterRef(diffRange): the version code-search/read operate on
   diffMap: Record<string, string>; // per-file diff snapshot for file_read_diff
   wholeFile: boolean; // review the full file content instead of just the diff
+  runId?: string; // set when this session reviews ONE file of a parallel run (Model A)
   systemRule: string;
   frameworkRules: string; // authoritative framework conventions (always injected)
   evidenceCache: Record<string, string>; // related-code + git-history dossier per target
@@ -34,6 +35,8 @@ export interface ReviewState {
   iterations: number;
   callLog: Record<string, Record<string, number>>; // per-file tool-call audit: file → tool → count
   recheckCount: Record<string, number>; // per-file count of final-check reworks issued (cap MAX_FINAL_RECHECKS)
+  deepPasses: number; // total review rounds per target (1 = single pass; clamped 1..5)
+  deepPassDone: Record<string, number>; // per-target completed rounds (submit gate driver)
   resumes: number; // times the idle watchdog re-drove an incomplete review (cap MAX_RESUMES)
 }
 

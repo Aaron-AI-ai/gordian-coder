@@ -19,6 +19,7 @@ import {
   collectTargets,
   loadConfig,
   buildDiffMap,
+  resolveDeepPasses,
   resolveDiffRange,
   type CommitSpec,
 } from "./context";
@@ -32,7 +33,9 @@ import {
   loadBaseline,
   defaultLabel,
   manifestTimestamp,
+  renderReport,
 } from "./output";
+import { loadRun, writeFileReview, type FileReviewResult } from "./run";
 import {
   setState,
   getState,
@@ -62,6 +65,7 @@ export const MAX_FINAL_RECHECKS = 5;
  * before submitting every file). Past this, finalize a partial report. */
 export const MAX_RESUMES = 3;
 
+
 const LANG_NAMES: Record<string, string> = { ko: "Korean", en: "English", ja: "Japanese" };
 
 export function languageName(code: string): string {
@@ -85,6 +89,85 @@ export interface StartReviewArgs {
   requirementBackground?: string;
   planGuidance?: string;
   language?: string;
+  /** Review rounds per target (default from config `deepPasses`, else 1; clamp 1..5). */
+  deepPasses?: number;
+  /** Parallel-run mode (Model A): join run `runId` and review exactly ONE file
+   * from its target list. All other inputs come from the run's shared config. */
+  runId?: string;
+}
+
+/** Run-mode session seeding: one subagent = one file of a parallel run. The
+ * review config (range/whole/rubric/language/…) comes from run.json so every
+ * subagent reviews consistently; the caller may only pick WHICH target file. */
+function startRunFileReview(
+  runId: string,
+  files: string[] | undefined,
+  cwd: string,
+  sessionId: string
+): string {
+  const meta = loadRun(runId, cwd);
+  if (!meta) return `Unknown run: ${runId}. Call f_review_plan first (or check the runId).`;
+
+  // Defense: a run subagent reviews exactly one file, and only one that the
+  // plan actually queued — it cannot widen the fan-out on its own.
+  if (files?.length !== 1) {
+    return `Run mode reviews exactly ONE file: call f_review_context with runId and files=["<one target>"].`;
+  }
+  const file = files[0].replaceAll("\\", "/").replace(/^\.\//, "");
+  if (!meta.targets.includes(file)) {
+    return `❌ ${file} is not a target of run ${runId}. Targets: ${meta.targets.join(", ")}`;
+  }
+
+  setReviewDebug(loadConfig(cwd).debug === true);
+  const ref = afterRef(meta.range);
+  const reviewTargets = meta.whole ? planSegments(cwd, ref, file) : [file];
+  dbg("run", `join runId=${runId} file=${file} targets=${reviewTargets.length}`);
+
+  const state: ReviewState = {
+    active: true,
+    cwd,
+    targets: reviewTargets, // this file only (or its segments)
+    currentIndex: 0,
+    categories: [...REQUIRED_CATEGORIES],
+    diffRange: meta.range,
+    ref,
+    diffMap: buildDiffMap(meta.range, [file], cwd),
+    wholeFile: meta.whole,
+    systemRule: buildRubric(cwd),
+    frameworkRules: loadFrameworkGuide(cwd),
+    evidenceCache: {},
+    requirementBackground: meta.requirementBackground ?? "",
+    planGuidance: meta.planGuidance ?? "",
+    findings: {},
+    output: meta.output,
+    failOn: meta.failOn,
+    baseline: new Set(), // baseline marking happens once, at finalize
+    label: meta.label,
+    language: meta.language,
+    iterations: 0,
+    callLog: {},
+    recheckCount: {},
+    deepPasses: meta.deepPasses ?? 1, // run-wide setting so every subagent iterates alike
+    deepPassDone: {},
+    resumes: 0,
+    runId,
+  };
+  setState(sessionId, state);
+
+  const seg =
+    reviewTargets.length > 1
+      ? ` It is split into ${reviewTargets.length} segments — review them in order, calling f_review_submit after each.`
+      : "";
+  const rounds =
+    state.deepPasses > 1
+      ? ` Each target goes through ${state.deepPasses} review rounds — after each submit, follow the returned round instruction and resubmit.`
+      : "";
+  return [
+    `Run ${runId}: reviewing ${file} (${meta.range ? `commit diff ${meta.range}` : "explicit files"}${meta.whole ? " · whole-file" : ""}).${seg}${rounds}`,
+    `The review checklist is injected into your instructions. Use related_code / git_history /`,
+    `file_read / code_search for deeper context, then call f_review_submit.`,
+    `Review ONLY this file. When the submit confirms completion, your task is done.`,
+  ].join("\n");
 }
 
 /** Collect targets, seed session state, write the manifest. Returns the
@@ -94,6 +177,9 @@ export async function startReview(
   cwd: string,
   sessionId: string
 ): Promise<string> {
+  // Parallel-run mode: join an existing run and review one file of it.
+  if (args.runId) return startRunFileReview(args.runId, args.files, cwd, sessionId);
+
   // Commit range takes precedence: `from..to` (to defaults to HEAD) over a
   // single `commit`. Left undefined for explicit-file reviews.
   let commit: CommitSpec | undefined;
@@ -125,7 +211,9 @@ export async function startReview(
   // and small whole-file targets are left as plain paths.
   setReviewDebug(loadConfig(cwd).debug === true); // config flag turns tracing on (env var also works)
 
-  const whole = args.whole ?? false;
+  // Files-only reviews default to whole-file: there is no commit diff, and a
+  // possibly-unchanged file would otherwise get an empty diff block reviewed.
+  const whole = args.whole ?? (commit === undefined && !!args.files?.length);
   const reviewTargets = whole ? targets.flatMap((p) => planSegments(cwd, ref, p)) : targets;
   dbg(
     "start",
@@ -186,6 +274,8 @@ export async function startReview(
     iterations: 0, // exploration budget for the current file; reset on advance
     callLog: {},
     recheckCount: {},
+    deepPasses: resolveDeepPasses(args.deepPasses, cwd), // review rounds per target (1..5)
+    deepPassDone: {},
     resumes: 0, // idle-watchdog re-drive counter
   };
   // Key by sessionId so concurrent reviews stay isolated and each subsequent
@@ -279,6 +369,52 @@ function finalCheckNotes(
   return notes;
 }
 
+/** The rework message driving one deep-review round: echoes what was just
+ * submitted and focuses the round — 2: refute/hunt, middle: edge cases,
+ * last: calibrate & polish. The resubmission REPLACES the previous findings. */
+function deepPassInstruction(
+  file: string,
+  round: number,
+  total: number,
+  findings: Finding[]
+): string {
+  const echo = findings.length
+    ? findings.map((f) => `  - [${f.severity}/${f.category}] L${f.line ?? "?"} ${f.rule}`).join("\n")
+    : "  (none)";
+  // Round focuses compose: 2 = adversarial refute, middle = deepen, last =
+  // calibrate. A round can be both (e.g. 2/2 gets refute AND calibrate).
+  const focus: string[] = [];
+  if (round === 2) {
+    focus.push(
+      `- Try to REFUTE each finding above: re-read the code (file_read / code_search) and drop any that don't hold.`,
+      `- Hunt for what round 1 missed — go category by category (security, nfr, correctness, tests, framework).`,
+      `- Verify every line anchor against the actual file.`
+    );
+  }
+  if (round > 2 && round < total) {
+    focus.push(
+      `- Deepen the analysis: edge cases, error/exception paths, boundary values, concurrency, resource leaks.`,
+      `- Follow one caller/callee you have not read yet (related_code / code_search) and check the contract holds.`
+    );
+  }
+  if (round === total) {
+    focus.push(
+      `- Calibrate each severity honestly (blocker | major | minor | nit) — no inflation, no burying.`,
+      `- Give every blocker/major a concrete \`suggestion\` (code or exact steps).`,
+      `- Merge duplicates; drop anything you cannot defend with evidence.`
+    );
+  }
+  return [
+    `🔁 Deep review round ${round}/${total} for ${file}. Your previous findings:`,
+    echo,
+    ``,
+    ...focus,
+    ``,
+    `Then call f_review_submit again with the COMPLETE, refined finding set for ${file}`,
+    `(your resubmission replaces the previous one).`,
+  ].join("\n");
+}
+
 /** Validate a submit payload, gate on category coverage, advance the loop.
  * On the last file: write the report and clear the session. */
 export async function submitReview(payload: unknown, sessionId: string): Promise<string> {
@@ -297,6 +433,16 @@ export async function submitReview(payload: unknown, sessionId: string): Promise
 
   const file = currentFile(st);
   if (!file) return "No current file under review.";
+
+  // Deep-pass gate: with deepPasses > 1, the first (deepPasses - 1) clean
+  // submissions for a target are NOT accepted — each one bounces back with a
+  // round-specific instruction to re-analyze, so the model iterates on its own
+  // findings. Bounded by deepPasses (≤ MAX_DEEP_PASSES), so it cannot loop.
+  const done = st.deepPassDone[file] ?? 0;
+  if (done < st.deepPasses - 1) {
+    st.deepPassDone[file] = done + 1;
+    return deepPassInstruction(file, done + 2, st.deepPasses, parsed.data.findings);
+  }
 
   // Per-file check before this file's findings are committed and the loop
   // advances: use the session call log to catch skipped essentials while a
@@ -324,7 +470,40 @@ export async function submitReview(payload: unknown, sessionId: string): Promise
     return `✅ ${file} reviewed (${parsed.data.findings.length} issue(s)). Next file: ${currentFile(st)}.`;
   }
 
-  return finalizeReport(st, sessionId, false);
+  // Run mode writes this file's own review under the run dir; the aggregate
+  // report is written once, by f_review_finalize — never by a subagent.
+  return st.runId ? writeRunReview(st, sessionId, false) : finalizeReport(st, sessionId, false);
+}
+
+/** Run-mode completion: persist THIS session's single-file review (md + json)
+ * into the run directory and end the session. `partial` marks a review the
+ * watchdog cut off before every segment was submitted. */
+async function writeRunReview(
+  st: ReviewState,
+  sessionId: string,
+  partial: boolean
+): Promise<string> {
+  st.active = false;
+  const file = targetPath(st.targets[0]); // single file per run session (segments share it)
+  // Merge segment-keyed findings back under the real file path.
+  const merged = Object.values(st.findings).flat();
+  const explorationCalls = Object.values(st.callLog)
+    .flatMap((byTool) => Object.values(byTool))
+    .reduce((a, b) => a + b, 0);
+  const result: FileReviewResult = {
+    file,
+    assessed: [...st.categories], // the coverage gate enforced all of them per submit
+    findings: merged,
+    explorationCalls,
+    partial,
+  };
+  const md = renderReport({ [file]: merged }, `run ${st.runId} · ${st.label}`, st.language);
+  const path = await writeFileReview(st.runId!, result, md, st.cwd);
+  clearState(sessionId);
+  const head = partial
+    ? `⚠️ ${file} partially reviewed (${Object.keys(st.findings).length}/${st.targets.length} segment(s)); partial review saved.`
+    : `✅ ${file} reviewed (${merged.length} issue(s)); review saved.`;
+  return `${head} ${path}\nThis subagent's task is COMPLETE. Do not review any other file.`;
 }
 
 /** Write the report, clear the session, and build the summary line. Shared by
@@ -387,7 +566,15 @@ export async function onSessionIdle(
         `(auto-resume ${st.resumes}/${MAX_RESUMES}).`,
     };
   }
-  return { kind: "finalized", text: await finalizeReport(st, sessionId, true) };
+  return {
+    kind: "finalized",
+    // Run mode: save what this subagent got through as a partial per-file
+    // review — finalize's coverage check will surface it. Never write the
+    // aggregate report from a subagent session.
+    text: st.runId
+      ? await writeRunReview(st, sessionId, true)
+      : await finalizeReport(st, sessionId, true),
+  };
 }
 
 /** The per-file review prompt for the target currently under review. */

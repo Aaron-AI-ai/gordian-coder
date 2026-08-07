@@ -59,7 +59,7 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
       whole: {
         type: "boolean",
         description:
-          "Review full file content instead of the diff; files over ~1000 lines are split into overlapping segments, each reviewed with its referenced same-file declarations",
+          "Review full file content instead of the diff; files over ~1000 lines are split into overlapping segments, each reviewed with its referenced same-file declarations. Defaults to true for files-only reviews (no commit).",
       },
       exclude: { type: "array", description: "Glob patterns to exclude" },
       output: { type: "string", description: "Report output file or directory" },
@@ -71,6 +71,11 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
       requirementBackground: { type: "string", description: "Why this change was made" },
       planGuidance: { type: "string", description: "Focus areas for the review" },
       language: { type: "string", description: 'Findings/report language (default "ko")' },
+      deepPasses: {
+        type: "number",
+        description:
+          "Review rounds per file/segment (1-5; default from .f-review.json `deepPasses`, else 1)",
+      },
     },
     execute: async (params) => {
       const msg = await startReview(params as StartReviewArgs, cwd, SESSION);

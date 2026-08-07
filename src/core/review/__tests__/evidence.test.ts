@@ -61,6 +61,48 @@ describe("discoverRelatedFiles", () => {
     expect(byPath.get("src/controller.ts")).toContain("createUser");
     expect(byPath.get("tests/user-service.test.ts")).toContain("test");
     expect(byPath.get("src/repository.ts")).toContain("changed together");
+    // Import evidence names the functions the file actually calls.
+    expect(byPath.get("src/repository.ts")).toContain("uses: saveUser()");
+  });
+
+  it("lists member calls on an imported Java class (bean-idiom instance included)", () => {
+    const cwd = repo();
+    writeFileSync(
+      join(cwd, "src/OrderService.java"),
+      [
+        "import com.shop.OrderRepository;",
+        "class OrderService {",
+        "  OrderRepository orderRepository;",
+        "  void place() { orderRepository.save(); OrderRepository.of(); }",
+        "}",
+      ].join("\n")
+    );
+    writeFileSync(join(cwd, "src/OrderRepository.java"), "class OrderRepository {}\n");
+    const git = (args: string[]) => Bun.spawnSync(["git", ...args], { cwd });
+    git(["add", "-A"]);
+    git(["commit", "-qm", "add order service"]);
+
+    const related = discoverRelatedFiles(cwd, "HEAD", "src/OrderService.java");
+    const reason = related
+      .find((r) => r.path === "src/OrderRepository.java")
+      ?.reasons.find((s) => s.startsWith("direct import"));
+    expect(reason).toContain("orderRepository.save()");
+    expect(reason).toContain("OrderRepository.of()");
+  });
+
+  it("skips wildcard imports instead of stem-matching the package name", () => {
+    const cwd = repo();
+    // `import com.foo.dto.*;` must not match a file whose stem is "dto".
+    mkdirSync(join(cwd, "src/dto"), { recursive: true });
+    writeFileSync(join(cwd, "src/dto.java"), "class dto {}\n");
+    writeFileSync(join(cwd, "src/Order.java"), "import com.foo.dto.*;\nclass Order {}\n");
+    const git = (args: string[]) => Bun.spawnSync(["git", ...args], { cwd });
+    git(["add", "-A"]);
+    git(["commit", "-qm", "add java files"]);
+
+    const related = discoverRelatedFiles(cwd, "HEAD", "src/Order.java");
+    const imported = related.filter((r) => r.reasons.some((s) => s.startsWith("direct import")));
+    expect(imported.map((r) => r.path)).not.toContain("src/dto.java");
   });
 
   it("renders bounded previews so a smaller model sees useful code immediately", () => {

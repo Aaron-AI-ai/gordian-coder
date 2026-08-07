@@ -14,6 +14,8 @@ export interface OpenCodeModule {
   tools: Record<string, ReturnType<typeof tool>>;
   systemTransform?: NonNullable<Hooks["experimental.chat.system.transform"]>;
   event?: NonNullable<Hooks["event"]>;
+  /** Inject agents/commands into the OpenCode config (bundled definitions). */
+  config?: NonNullable<Hooks["config"]>;
 }
 
 /** Registered module factories — the single place to add a new module. */

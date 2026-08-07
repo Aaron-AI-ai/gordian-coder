@@ -131,7 +131,54 @@ function importSpecifiers(content: string): string[] {
   for (const match of content.matchAll(quoted)) out.add(match[1]);
 
   const languageImport = /^\s*(?:import|from)\s+(?:static\s+)?([\w.]+)/gm;
-  for (const match of content.matchAll(languageImport)) out.add(match[1]);
+  for (const match of content.matchAll(languageImport)) {
+    // Wildcard import (`import com.shop.dto.*;`): the capture stops at `*`,
+    // leaving a trailing dot. There is no class name to resolve — skip it
+    // deliberately instead of stem-matching the package name ("dto").
+    if (match[1].endsWith(".")) continue;
+    out.add(match[1]);
+  }
+  return [...out];
+}
+
+/** Local names each import specifier binds: `import X, { a, b as c } from "./x"`
+ * → "./x": [X, a, c]; Java `import com.foo.Bar` → "com.foo.Bar": [Bar]. */
+function importBindings(content: string): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  const js = /import\s+(?:type\s+)?(?:([\w$]+)\s*,\s*)?(?:([\w$]+)|\{([^}]*)\})?\s*from\s*["']([^"']+)["']/g;
+  for (const m of content.matchAll(js)) {
+    const names: string[] = [];
+    if (m[1]) names.push(m[1]);
+    if (m[2]) names.push(m[2]);
+    if (m[3])
+      for (const part of m[3].split(",")) {
+        // local name: `b as c` → c, `type T` → T
+        const n = part.trim().replace(/^type\s+/, "").split(/\s+as\s+/).pop()?.trim();
+        if (n && /^[\w$]+$/.test(n)) names.push(n);
+      }
+    if (names.length) map.set(m[4], names);
+  }
+  const lang = /^\s*import\s+(?:static\s+)?([\w.]+)\s*;?\s*$/gm;
+  for (const m of content.matchAll(lang)) {
+    if (m[1].endsWith(".")) continue; // wildcard — see importSpecifiers
+    const cls = m[1].split(".").at(-1)!;
+    if (/^[A-Z]/.test(cls)) map.set(m[1], [cls]);
+  }
+  return map;
+}
+
+/** How `name` is used in content: direct calls `name(…)` and member calls
+ * `name.method(…)` — for a class, also on its lowerCamel instance
+ * (`OrderRepository` → `orderRepository.findById(…)`, the Spring bean idiom). */
+function usedCalls(content: string, name: string): string[] {
+  const out = new Set<string>();
+  const receivers = new Set([name, name[0].toLowerCase() + name.slice(1)]);
+  for (const r of receivers) {
+    for (const m of content.matchAll(new RegExp(`\\b${r}\\.(\\w+)\\s*\\(`, "g"))) {
+      out.add(`${r}.${m[1]}()`);
+    }
+  }
+  if (new RegExp(`\\b${name}\\s*\\(`).test(content)) out.add(`${name}()`);
   return [...out];
 }
 
@@ -214,9 +261,13 @@ export function discoverRelatedFiles(
     scores.set(path, item);
   };
 
+  const bindings = importBindings(content);
   for (const specifier of importSpecifiers(content)) {
+    // Which imported names the file actually calls (bounded — it is prompt text).
+    const uses = (bindings.get(specifier) ?? []).flatMap((n) => usedCalls(content, n)).slice(0, 6);
+    const detail = uses.length ? ` (uses: ${uses.join(", ")})` : "";
     for (const path of resolveImport(specifier, normalized, all)) {
-      add(path, 100, `direct import: ${specifier}`);
+      add(path, 100, `direct import: ${specifier}${detail}`);
     }
   }
 

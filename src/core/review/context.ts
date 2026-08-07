@@ -38,6 +38,7 @@ export interface ReviewConfig {
   frameworkGuide?: string; // path to a framework conventions md (overrides bundled default)
   failOn?: string; // CI gate: FAIL when any finding is at/above this severity ("blocker"|"major"|"minor"|"nit")
   debug?: boolean; // emit `[f-review:*]` trace logs (alternative to F_REVIEW_DEBUG env)
+  deepPasses?: number; // review rounds per file/segment (clamped 1..5; 1 = single pass)
 }
 
 /** Read project-root `.f-review.json`; missing/invalid → {}. */
@@ -49,6 +50,18 @@ export function loadConfig(cwd: string = process.cwd()): ReviewConfig {
   } catch {
     return {};
   }
+}
+
+/** Hard ceiling on review rounds per target (deep-pass iteration). */
+export const MAX_DEEP_PASSES = 5;
+
+/** Total review rounds per target: arg wins, else config `deepPasses`, else 1
+ * (single pass). Always clamped to [1, MAX_DEEP_PASSES] — the submit gate can
+ * never loop unbounded. */
+export function resolveDeepPasses(arg: number | undefined, cwd: string): number {
+  const v = arg ?? loadConfig(cwd).deepPasses ?? 1;
+  if (typeof v !== "number" || !Number.isFinite(v)) return 1;
+  return Math.max(1, Math.min(MAX_DEEP_PASSES, Math.trunc(v)));
 }
 
 /**

@@ -100,10 +100,16 @@ const OpenCodeAdapter: Plugin = async (input) => {
     .map((m) => m.systemTransform)
     .filter((t) => t != null);
   const moduleEvents = modules.map((m) => m.event).filter((e) => e != null);
+  const moduleConfigs = modules.map((m) => m.config).filter((c) => c != null);
 
   return {
     // Register tools from core + feature-module tools
     tool: { ...createOpenCodeTools(), ...moduleTools },
+
+    // Let modules inject bundled agents/commands into the OpenCode config
+    config: async (cfg) => {
+      for (const c of moduleConfigs) await c(cfg);
+    },
 
     // Run every module's system-prompt transform in order
     "experimental.chat.system.transform": async (hookInput, output) => {
@@ -144,10 +150,6 @@ const OpenCodeAdapter: Plugin = async (input) => {
         { ...context, sessionId: hookInput.sessionID }
       );
     },
-
-    // Hook: config loaded — placeholder, no-op for now.
-    // Use to read/react to opencode.json settings (e.g. plugin options).
-    config: async (_config) => {},
 
     // Hook: modify LLM call parameters (temperature, topP, topK, options)
     // — placeholder, no-op for now. Mutate `output` fields to override.

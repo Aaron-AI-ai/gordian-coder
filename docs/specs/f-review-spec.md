@@ -122,18 +122,27 @@ function resolveManifestPath(label) {
 
 ---
 
-## 4. 도구 (tool) 8종
+## 4. 도구 (tool) 10종
 
 | 도구 | 시점 | 역할 |
 |------|------|------|
-| `f_review_context` | 진입 1회 | 대상 파일 수집 + 룰 로드 + diff 스냅샷 + 세션 상태 초기화 |
+| `f_review_plan` | 병렬 run 진입 1회 | 대상 수집 + run 생성(`fcq/f-review/runs/<runId>/run.json`) + fan-out 지시 반환 (오케스트레이터 전용) |
+| `f_review_context` | 진입 1회 | 대상 파일 수집 + 룰 로드 + diff 스냅샷 + 세션 상태 초기화. `runId` 지정 시 run 합류: **정확히 1개 파일**만 리뷰 (설정은 run.json 공유) |
 | `file_read` | 루프 중 | 파일 after-버전 읽기(라인범위·라인번호·500줄 cap·IS_TRUNCATED) |
 | `file_read_diff` | 루프 중 | 다른 변경 파일의 diff 읽기(DiffMap 스냅샷, 다중경로) |
 | `file_find` | 루프 중 | 파일명 부분일치 검색(basename, 100건 cap) |
 | `code_search` | 루프 중 | git grep 검색(pathspec·정규식·100건 cap, 파일별 그룹핑) |
 | `related_code` | 루프 중 | import·심볼 사용처·테스트·동시변경 이력을 점수화해 연관 코드 후보(+요청 시 미리보기) 제공 |
 | `git_history` | 루프 중 | 최근 커밋 의도·동시변경 파일·선택적 과거 patch 제공 |
-| `f_review_submit` | done 시도 | 구조화 결과 제출 → 검증 게이트 |
+| `f_review_submit` | done 시도 | 구조화 결과 제출 → 검증 게이트. run 모드 완료 시 취합 리포트 대신 **개별 리뷰**(`runs/<runId>/reviews/<파일>.md`+`.json`)를 씀 |
+| `f_review_finalize` | 병렬 run 종료 1회 | 커버리지 검증(기대 vs 작성) + 개별 json 취합 → 최종 리포트 + Run Summary(누락/부분/무탐색 감사) 작성 (오케스트레이터 전용) |
+
+**병렬 run (Model A)** — `/f-review`는 기본적으로 오케스트레이터로 동작:
+`f_review_plan` → 파일당 f-reviewer 서브에이전트 1개(배치 최대 `RUN_BATCH_SIZE`=5) → `f_review_finalize`.
+공유 상태는 전부 **디스크**(run.json + reviews/)라 메모리 누적이 없다. 방어: run당 `MAX_RUN_TARGETS`=100 하드캡,
+서브에이전트는 run 타깃 밖 파일·복수 파일 거부, 개별 리뷰는 덮어쓰기(재시도 idempotent), 누락 재스폰은 1회,
+오래된 run 디렉토리는 최근 `RUNS_KEEP`=10개만 유지. 큰 파일 세그먼트는 **한 서브에이전트 안에서** 순차 처리 후
+파일당 1개 리뷰로 병합. `--sequential` 또는 runId 없는 `f_review_context` = 기존 단일 세션 순차 모드(불변).
 
 **자동 주입 evidence 정책** — `{{review_evidence}}`의 **크로스파일 연관은 프리뷰를 넣지 않고 경로 목록만** 준다.
 앞부분 프리뷰는 대개 그 파일의 import/헤더라 리뷰 대상이 실제 호출하는 함수를 놓치기 때문. 대신
@@ -353,13 +362,23 @@ src/core/review/                ← 플랫폼 독립 (Cline/MCP 재사용 가능
   segment.ts     # whole 모드 큰 파일 세그먼트 분할 + 같은 파일 내 연관 선언 주입
   state.ts       # 세션별 리뷰 상태
   output.ts      # 출력 경로 해석 + 리포트 렌더·저장
+  run.ts         # 병렬 run store: run.json·개별 리뷰(md+json)·커버리지·plan/finalize
 src/adapters/opencode/review/
-  index.ts       # tool 3개 + system.transform + 검증/가드 hook wiring
-.opencode/command/f-review.md   # slash 진입점 ($ARGUMENTS)
-.opencode/agent/f-reviewer.md        # (선택) 전용 리뷰어 에이전트
+  index.ts       # tool 10개 + system.transform + config/검증/가드 hook wiring
+  prompts.ts     # 번들 내장 /f-review command + f-reviewer agent 정의
+                 # (config 훅으로 주입; 동명의 .opencode md 파일이 있으면 그쪽 우선)
 ```
 
-설정 파일: 프로젝트 루트 `.f-review.json` (`{ exclude, output }`, 없으면 무시).
+설정 파일: 프로젝트 루트 `.f-review.json` (`{ exclude, output, language, frameworkGuide, failOn, debug, deepPasses }`, 없으면 무시).
+
+**딥패스 반복 리뷰 (`deepPasses`)** — 타깃(파일/세그먼트)당 리뷰 라운드 수. 파라미터 `deepPasses` > 설정 `deepPasses` > 기본 1,
+항상 [1, 5]로 clamp. 1이면 기존 단일 패스. N>1이면 submit 게이트가 앞의 N-1회 제출을 수락하지 않고
+**직전 findings를 echo + 라운드별 지시**와 함께 되돌린다 (재제출이 이전 제출을 대체):
+- 2라운드: 각 finding **반박 시도**(오탐 제거) + 카테고리별 누락 탐색 + 라인 앵커 검증
+- 중간 라운드: 엣지 케이스·에러 경로·경계값·동시성 심층 + 안 읽은 호출자/피호출자 추적
+- 마지막 라운드: severity 보정 + blocker/major에 구체 suggestion + 중복 병합 (2라운드제면 반박+보정 병합)
+run 모드에서는 plan 시점 값이 run.json에 저장돼 모든 서브에이전트가 동일 라운드 수로 리뷰한다.
+중간 라운드 findings는 저장되지 않고 마지막 라운드 제출만 개별 리뷰/리포트에 반영된다.
 
 ---
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -255,6 +255,26 @@ describe("writeReport", () => {
     expect(existsSync(join(d, dir, "review-A-20260726.md"))).toBe(false); // moved out
     expect(existsSync(join(d, dir, "review-B-20260727.md"))).toBe(true); // fresh
     expect(existsSync(join(d, `${dir}.20260727-093005`, "review-A-20260726.md"))).toBe(true); // archived
+  });
+
+  it("same-second rewrite picks a fresh backup suffix instead of crashing", async () => {
+    const d = tmp();
+    const dir = "fcq/report/f-review";
+    // three writes with the identical timestamp (finalize + immediate retries)
+    for (const l of ["A", "B", "C"]) {
+      await writeReport(join(dir, `review-${l}.md`), { "a.ts": [finding()] }, l, d, "en", undefined, undefined, DATE);
+    }
+    expect(existsSync(join(d, dir, "review-C.md"))).toBe(true);
+    expect(existsSync(join(d, `${dir}.20260727-093005`))).toBe(true);
+    expect(existsSync(join(d, `${dir}.20260727-093005-2`))).toBe(true);
+  });
+
+  it("appends the appendix after the report body when given", async () => {
+    const d = tmp();
+    await writeReport("out.md", { "a.ts": [finding()] }, "L", d, "en", undefined, undefined, DATE, "## Run Summary\n- ok");
+    const md = readFileSync(join(d, "out.md"), "utf8");
+    expect(md).toContain("## a.ts");
+    expect(md.indexOf("## Run Summary")).toBeGreaterThan(md.indexOf("## a.ts"));
   });
 
   it("never renames an arbitrary --output directory (only f-review)", async () => {

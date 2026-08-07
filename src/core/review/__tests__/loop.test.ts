@@ -46,6 +46,8 @@ function baseState(over: Partial<ReviewState> = {}): ReviewState {
     iterations: 0,
     callLog: {},
     recheckCount: {},
+    deepPasses: 1,
+    deepPassDone: {},
     resumes: 0,
     ...over,
   };
@@ -189,6 +191,15 @@ describe("startReview / submitReview (full loop)", () => {
     expect(prompt).toContain("<current_file>");
     expect(prompt).toContain("1|a2"); // full (line-numbered) content at HEAD
     expect(prompt).not.toContain("<current_file_diff>");
+  });
+
+  it("files-only review defaults to whole-file mode", async () => {
+    const d = gitRepo();
+    await startReview({ files: ["a.ts"] }, d, "t");
+    expect(getState("t")!.wholeFile).toBe(true);
+    // Explicit whole:false opts back into the (working-tree) diff mode.
+    await startReview({ files: ["a.ts"], whole: false }, d, "t2");
+    expect(getState("t2")!.wholeFile).toBe(false);
   });
 
   it("records tool calls per file and skips the final check when clean", async () => {

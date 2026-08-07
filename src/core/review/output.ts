@@ -210,7 +210,9 @@ export function renderReport(
   return lines.join("\n");
 }
 
-/** Write the report; Bun.write creates parent directories. Returns the path. */
+/** Write the report; Bun.write creates parent directories. Returns the path.
+ * `appendix` (optional) is extra markdown appended after the body — used by
+ * parallel runs to attach their coverage/quality summary. */
 export async function writeReport(
   path: string,
   findings: Record<string, Finding[]>,
@@ -219,11 +221,13 @@ export async function writeReport(
   language: string = "en",
   failOn?: Severity,
   baseline?: Set<string>,
-  now: Date = new Date()
+  now: Date = new Date(),
+  appendix?: string
 ): Promise<string> {
   const abs = isAbsolute(path) ? path : join(cwd, path);
   backupReportDir(dirname(abs), now);
-  await Bun.write(abs, renderReport(findings, label, language, failOn, baseline));
+  const body = renderReport(findings, label, language, failOn, baseline);
+  await Bun.write(abs, appendix ? `${body}\n${appendix}` : body);
   return path;
 }
 
@@ -234,7 +238,11 @@ export async function writeReport(
  */
 function backupReportDir(dir: string, now: Date): void {
   if (basename(dir) === "f-review" && isDirSync(dir)) {
-    renameSync(dir, `${dir}.${stamp(now)}`);
+    // Two writes in the same second (e.g. a finalize retry) would collide on
+    // the stamped name — pick the first free suffix instead of crashing.
+    let dest = `${dir}.${stamp(now)}`;
+    for (let n = 2; existsSync(dest); n++) dest = `${dir}.${stamp(now)}-${n}`;
+    renameSync(dir, dest);
   }
 }
 
