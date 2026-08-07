@@ -441,6 +441,12 @@ export async function submitReview(payload: unknown, sessionId: string): Promise
   const done = st.deepPassDone[file] ?? 0;
   if (done < st.deepPasses - 1) {
     st.deepPassDone[file] = done + 1;
+    // MAX_ITER is a per-ROUND budget, not per-file: the round instruction below
+    // explicitly orders a re-read ("REFUTE each finding: re-read the code"), so
+    // carrying a spent budget over would answer that order with "exploration
+    // limit reached — submit now". Still bounded: deepPasses ≤ MAX_DEEP_PASSES,
+    // so a file can never exceed MAX_DEEP_PASSES × MAX_ITER exploration calls.
+    st.iterations = 0;
     return deepPassInstruction(file, done + 2, st.deepPasses, parsed.data.findings);
   }
 

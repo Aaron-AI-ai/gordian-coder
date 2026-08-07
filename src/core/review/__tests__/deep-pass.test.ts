@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAX_DEEP_PASSES, resolveDeepPasses } from "../context";
 import { startReview, submitReview, guardExploration } from "../loop";
+import { MAX_ITER } from "../reader";
 import { getState, clearState } from "../state";
 import { REQUIRED_CATEGORIES } from "../contract";
 import { createRun, planReview, loadRun, readRunResults } from "../run";
@@ -93,6 +94,26 @@ describe("sequential deep-pass rounds", () => {
     const report = readFileSync(join(d, /Report: (.+)$/.exec(done)![1]), "utf8");
     expect(report).toContain("final-rule"); // last submission wins…
     expect(report).not.toContain("round1-rule"); // …and replaces earlier rounds
+  });
+
+  it("gives each round a fresh exploration budget so the round instruction is followable", async () => {
+    const d = gitRepo();
+    await startReview({ files: ["a.ts"], deepPasses: 3 }, d, "dp");
+    const st = getState("dp")!;
+
+    // Round 1 burns the whole budget.
+    for (let i = 0; i <= MAX_ITER; i++) guardExploration(st, "file_read", "");
+    expect(guardExploration(st, "file_read", "out")).toContain("Exploration limit reached");
+
+    // Round 2 orders a re-read ("REFUTE … re-read the code"), so it must not
+    // open with the limit warning that tells the model to submit instead.
+    const r2 = await submitReview(submitOf("r1"), "dp");
+    expect(r2).toContain("Deep review round 2/3");
+    expect(st.iterations).toBe(0);
+    expect(guardExploration(st, "file_read", "out")).not.toContain("Exploration limit reached");
+
+    // Per-file call log stays cumulative — it audits the file, not the round.
+    expect(st.callLog["a.ts"].file_read).toBeGreaterThan(MAX_ITER);
   });
 
   it("reads deepPasses from .f-review.json when no arg is given", async () => {

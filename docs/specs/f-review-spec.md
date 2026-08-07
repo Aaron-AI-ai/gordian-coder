@@ -182,6 +182,7 @@ function resolveManifestPath(label) {
 ### 5.3 무한루프 가드
 
 탐색 도구(file_read·code_search·file_find·file_read_diff·related_code·git_history) 호출이 `MAX_ITER` 초과 → 결과에 "지금 정보로 submit 하라" 주입 → 강제 수렴.
+예산은 타깃 전진 시점과 **딥패스 라운드 전환 시점**에 리셋된다(§12 참조).
 
 ---
 
@@ -379,6 +380,10 @@ src/adapters/opencode/review/
 - 마지막 라운드: severity 보정 + blocker/major에 구체 suggestion + 중복 병합 (2라운드제면 반박+보정 병합)
 run 모드에서는 plan 시점 값이 run.json에 저장돼 모든 서브에이전트가 동일 라운드 수로 리뷰한다.
 중간 라운드 findings는 저장되지 않고 마지막 라운드 제출만 개별 리뷰/리포트에 반영된다.
+
+`MAX_ITER` 탐색 예산은 **라운드 단위**로 리셋된다. 2라운드 이후의 지시문이 "코드를 다시 읽고 반박하라"이므로,
+소진된 예산을 이월하면 그 지시에 "탐색 한도 도달 — 지금 submit 하라"로 응답하게 되기 때문이다.
+상한은 여전히 유한하다: 파일당 최대 `MAX_DEEP_PASSES × MAX_ITER`.
 
 ---
 
