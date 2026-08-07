@@ -72,6 +72,31 @@ function normalizeRepoPath(path: string): string {
   return posix.normalize(path.replaceAll("\\", "/").replace(/^\.\//, ""));
 }
 
+/**
+ * Files touched by each of `hashes`, resolved in ONE `git show` instead of one
+ * spawn per commit. The name list is deliberately NOT filtered by the pathspec
+ * that selected these commits — the co-changed siblings ARE the signal.
+ * `%x1e` separates commits, mirroring the log format below.
+ */
+function changedFilesByCommit(cwd: string, hashes: string[]): Map<string, string[]> {
+  const byHash = new Map<string, string[]>();
+  if (!hashes.length) return byHash;
+  const out = sh(
+    ["git", "-c", "core.quotepath=false", "show", "--format=%x1e%H", "--name-only", ...hashes],
+    cwd
+  ).stdout;
+  for (const record of out.split("\x1e")) {
+    const [head, ...names] = record.split("\n");
+    const hash = head?.trim();
+    if (!hash) continue;
+    byHash.set(
+      hash,
+      names.map((path) => path.trim()).filter(Boolean)
+    );
+  }
+  return byHash;
+}
+
 function historyCommits(
   cwd: string,
   file: string,
@@ -98,31 +123,21 @@ function historyCommits(
   );
   if (log.code !== 0) return [];
 
-  return log.stdout
+  const commits = log.stdout
     .split("\x1e")
     .map((record) => record.trim())
     .filter(Boolean)
-    .flatMap((record): HistoryCommit[] => {
+    .flatMap((record): Omit<HistoryCommit, "changedFiles">[] => {
       const [hash, shortHash, date, author, subject] = record.split("\x1f");
       if (!hash || !shortHash) return [];
-      const names = sh(
-        [
-          "git",
-          "-c",
-          "core.quotepath=false",
-          "show",
-          "--format=",
-          "--name-only",
-          hash,
-        ],
-        cwd
-      ).stdout;
-      const changedFiles = names
-        .split("\n")
-        .map((path) => path.trim())
-        .filter(Boolean);
-      return [{ hash, shortHash, date, author, subject: subject ?? "", changedFiles }];
+      return [{ hash, shortHash, date, author, subject: subject ?? "" }];
     });
+
+  const byHash = changedFilesByCommit(
+    cwd,
+    commits.map((c) => c.hash)
+  );
+  return commits.map((c) => ({ ...c, changedFiles: byHash.get(c.hash) ?? [] }));
 }
 
 function importSpecifiers(content: string): string[] {

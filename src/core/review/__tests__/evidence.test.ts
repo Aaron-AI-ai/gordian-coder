@@ -122,6 +122,19 @@ describe("gitHistory", () => {
     expect(out).toContain("src/repository.ts");
   });
 
+  it("keeps each commit's co-changed files separate (one batched git show, not smeared)", () => {
+    const out = gitHistory(repo(), "src/user-service.ts", 2, false);
+    const [newest, older] = out
+      .split("\n")
+      .filter((l) => l.startsWith("  changed together:"));
+    // Newest commit touched only repository.ts alongside the file under review;
+    // controller.ts / the test came with the first commit.
+    expect(newest).toContain("src/repository.ts");
+    expect(newest).not.toContain("src/controller.ts");
+    expect(older).toContain("src/controller.ts");
+    expect(older).toContain("tests/user-service.test.ts");
+  });
+
   it("can include historical patches for deeper regression analysis", () => {
     const out = gitHistory(repo(), "src/user-service.ts", 1, true);
     expect(out).toContain("Historical patch");
