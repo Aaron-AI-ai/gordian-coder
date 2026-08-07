@@ -13,6 +13,7 @@ import {
   type ParameterDefinition,
 } from "../../core";
 import { createReviewTools } from "./review";
+import { VERSION } from "../../version";
 
 /**
  * Convert core parameter type to Zod schema
@@ -77,7 +78,7 @@ type ToolHandler = (params: Record<string, unknown>) => Promise<{
 export function createMcpServer(): McpServer {
   const server = new McpServer({
     name: "gordian-coder",
-    version: "0.1.0",
+    version: VERSION,
   });
 
   // Register all core tools + the review tools as MCP tools

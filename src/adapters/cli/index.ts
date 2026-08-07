@@ -26,8 +26,8 @@
 import { getAllTools, getTool } from "../../core";
 import type { ToolDefinition } from "../../core";
 import * as readline from "node:readline";
+import { VERSION } from "../../version";
 
-const VERSION = "0.1.0";
 const PROGRAM_NAME = "gordian-coder";
 
 // ── Protocol types ──────────────────────────────────────────────
