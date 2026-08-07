@@ -117,6 +117,17 @@ describe("isDefaultExcluded", () => {
 });
 
 describe("collectTargets (files-only, no git)", () => {
+  it("drops dot paths even when the user asked for them explicitly", async () => {
+    // Documented in the spec (§3.2): the default exclusion is not overridable,
+    // so CI/config files under a dot path are never reviewable. Silent by
+    // design — if this ever becomes an opt-in, this test is the contract.
+    const d = tmp();
+    expect(
+      await collectTargets({ files: [".github/workflows/ci.yml", "src/a.ts"] }, d)
+    ).toEqual(["src/a.ts"]);
+    expect(await collectTargets({ files: [".f-review.json"] }, d)).toEqual([]);
+  });
+
   it("unions files and applies config + param excludes", async () => {
     const d = tmp();
     writeFileSync(join(d, ".f-review.json"), JSON.stringify({ exclude: ["**/*.test.ts"] }));

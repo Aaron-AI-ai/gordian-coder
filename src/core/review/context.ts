@@ -78,9 +78,22 @@ export function resolveDiffRange(
   return `${commit}~1..${commit}`;
 }
 
-/** Always-excluded paths, regardless of user config:
+/**
+ * Always-excluded paths, regardless of user config:
  *  - any path with a segment starting with "." (.gitignore, .github/, .idea/, …)
- *  - compiled class files (*.class) */
+ *  - compiled class files (*.class)
+ *
+ * INTENTIONAL and non-overridable, including for explicitly-passed `files`:
+ * collectTargets applies this before the user's exclude globs, so
+ * `--files=.github/workflows/ci.yml` is silently dropped and CI/tool config
+ * under a dot path is never reviewed. The rubric is a source-code checklist
+ * (security / nfr / correctness / tests / framework), and the dot namespace is
+ * dominated by editor state, VCS metadata, and build caches that produce noise.
+ *
+ * Reviewing CI workflows is a real need this deliberately does not serve. If it
+ * becomes one, add an opt-in (e.g. `.f-review.json` "includeDotPaths") rather
+ * than loosening this predicate — the noise it blocks is the reason it exists.
+ */
 export function isDefaultExcluded(path: string): boolean {
   if (path.split("/").some((seg) => seg.startsWith("."))) return true;
   if (path.endsWith(".class")) return true;

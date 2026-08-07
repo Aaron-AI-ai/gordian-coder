@@ -86,6 +86,23 @@ function resolveDiffRange(commit, hasFiles) {
 - 출처: `.f-review.json` 의 `exclude` ∪ `--exclude` 파라미터 (**합집합**, 파라미터는 추가만)
 - 매칭: `Bun.Glob` (의존성 추가 없음)
 
+**기본 제외 (`isDefaultExcluded`) — 설정으로 끌 수 없음**
+
+사용자 exclude보다 **먼저** 적용되며, `files`로 명시한 경로에도 예외 없이 적용된다:
+
+| 규칙 | 예시 |
+|---|---|
+| 경로 세그먼트가 `.` 으로 시작 | `.gitignore`, `.github/workflows/ci.yml`, `.f-review.json`, `src/.hidden/x.ts` |
+| 컴파일 산출물 | `build/Foo.class` |
+
+즉 **`--files=.github/workflows/ci.yml` 은 조용히 무시된다** (경고 없음. 요청한 파일이 전부 여기 걸리면
+`No files to review (empty target set after excludes)` 만 뜬다). 리뷰 체크리스트가 소스코드 기준
+(security/nfr/correctness/tests/framework)이고, 닷 네임스페이스는 에디터 상태·VCS 메타데이터·빌드 캐시가
+대부분이라 노이즈가 되기 때문이다.
+
+> ⚠️ **CI 워크플로 리뷰는 이 설계가 의도적으로 포기한 영역이다.** 필요해지면 이 조건을 느슨하게 풀지 말고
+> opt-in 스위치(예: `.f-review.json` 의 `includeDotPaths`)를 추가할 것 — 막고 있는 노이즈가 이 규칙의 존재 이유다.
+
 ```ts
 const patterns = [...(readConfig()?.exclude ?? []), ...(input.exclude ?? [])];
 const globs = patterns.map(p => new Bun.Glob(p));
