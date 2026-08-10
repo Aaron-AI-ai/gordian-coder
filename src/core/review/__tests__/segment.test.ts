@@ -10,6 +10,7 @@ import {
   targetPath,
   targetRange,
 } from "../segment";
+import { currentFile, currentFilePath, type ReviewState } from "../state";
 
 const tmps: string[] = [];
 afterEach(() => {
@@ -33,6 +34,14 @@ describe("segment id encode/decode", () => {
   it("treats a plain path as a whole-file target", () => {
     expect(targetPath("src/a.ts")).toBe("src/a.ts");
     expect(targetRange("src/a.ts")).toBeNull();
+  });
+
+  it("currentFilePath hands filesystem/git callers the real path", () => {
+    const st = { targets: ["src/big.ts#1-500", "src/big.ts#441-940"], currentIndex: 0 } as ReviewState;
+    expect(currentFile(st)).toBe("src/big.ts#1-500"); // raw target id
+    expect(currentFilePath(st)).toBe("src/big.ts"); // what git can actually resolve
+    st.currentIndex = 2;
+    expect(currentFilePath(st)).toBeUndefined(); // exhausted queue
   });
 });
 

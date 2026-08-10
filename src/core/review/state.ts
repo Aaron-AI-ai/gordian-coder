@@ -9,6 +9,7 @@
  */
 
 import type { Category, Finding, Severity } from "./contract";
+import { targetPath } from "./segment";
 
 export interface ReviewState {
   active: boolean;
@@ -78,6 +79,17 @@ export function activeStates(): ReviewState[] {
 /** File currently under review, or undefined when the loop is exhausted. */
 export function currentFile(state: ReviewState): string | undefined {
   return state.targets[state.currentIndex];
+}
+
+/**
+ * REAL file path of the current target — a segment target (`path#start-end`)
+ * is stripped back to `path`. Anything that touches the filesystem or git
+ * (related_code, git_history, …) must use this, never the raw target id:
+ * `git log -- src/a.ts#1-500` matches nothing and returns empty evidence.
+ */
+export function currentFilePath(state: ReviewState): string | undefined {
+  const target = currentFile(state);
+  return target === undefined ? undefined : targetPath(target);
 }
 
 /** Target files other than the current one (for {{change_files}}). */

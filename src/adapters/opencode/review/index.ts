@@ -31,7 +31,7 @@ import {
   codeSearch,
   renderRelatedCode,
   gitHistory,
-  currentFile,
+  currentFilePath,
   startReview,
   submitReview,
   guardExploration,
@@ -251,7 +251,7 @@ export function createReviewModule(input: PluginInput): {
     async execute(args, ctx) {
       const st = getState(ctx.sessionID);
       if (!st?.active) return NO_ACTIVE_REVIEW;
-      const file = args.file_path ?? currentFile(st);
+      const file = args.file_path ?? currentFilePath(st);
       if (!file) return "No current file under review.";
       return guardExploration(
         st,
@@ -281,7 +281,7 @@ export function createReviewModule(input: PluginInput): {
     async execute(args, ctx) {
       const st = getState(ctx.sessionID);
       if (!st?.active) return NO_ACTIVE_REVIEW;
-      const file = args.file_path ?? currentFile(st);
+      const file = args.file_path ?? currentFilePath(st);
       if (!file) return "No current file under review.";
       return guardExploration(
         st,

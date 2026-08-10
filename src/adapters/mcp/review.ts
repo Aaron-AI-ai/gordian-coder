@@ -16,7 +16,7 @@ import {
   codeSearch,
   renderRelatedCode,
   gitHistory,
-  currentFile,
+  currentFilePath,
   startReview,
   submitReview,
   guardExploration,
@@ -201,7 +201,7 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
     execute: async (params) => {
       const st = getState(SESSION);
       if (!st?.active) return ok(NO_ACTIVE_REVIEW);
-      const file = (params.file_path as string | undefined) ?? currentFile(st);
+      const file = (params.file_path as string | undefined) ?? currentFilePath(st);
       if (!file) return ok("No current file under review.");
       return ok(
         guardExploration(
@@ -234,7 +234,7 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
     execute: async (params) => {
       const st = getState(SESSION);
       if (!st?.active) return ok(NO_ACTIVE_REVIEW);
-      const file = (params.file_path as string | undefined) ?? currentFile(st);
+      const file = (params.file_path as string | undefined) ?? currentFilePath(st);
       if (!file) return ok("No current file under review.");
       return ok(
         guardExploration(

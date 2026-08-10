@@ -117,6 +117,47 @@ describe("session guard", () => {
   });
 });
 
+describe("segment targets vs the filesystem", () => {
+  /** Repo whose reviewed file is large enough to be split into segments. */
+  function bigRepo(): string {
+    const d = mkdtempSync(join(tmpdir(), "f-oc-seg-"));
+    tmps.push(d);
+    const sh = (c: string[]) => Bun.spawnSync(c, { cwd: d });
+    sh(["git", "init", "-q"]);
+    sh(["git", "config", "user.email", "t@t"]);
+    sh(["git", "config", "user.name", "t"]);
+    writeFileSync(join(d, "dep.ts"), "export const helper = () => 1;\n");
+    writeFileSync(
+      join(d, "big.ts"),
+      `import { helper } from "./dep";\n` +
+        Array.from({ length: 1100 }, (_, i) => `export const v${i} = helper();`).join("\n") +
+        "\n"
+    );
+    sh(["git", "add", "-A"]);
+    sh(["git", "commit", "-qm", "init"]);
+    return d;
+  }
+
+  it("resolves related_code / git_history against the real path, not the segment id", async () => {
+    const { mod } = moduleFor(bigRepo());
+    await mod.tools.f_review_context.execute({ files: ["big.ts"] } as never, ctx);
+
+    const st = getState(SESSION)!;
+    expect(st.targets.length).toBeGreaterThan(1); // actually segmented
+    expect(st.targets[0]).toContain("#"); // current target IS a segment id
+
+    // Both tools default to the current target; passing the raw `big.ts#1-500`
+    // to git makes every lookup miss (no such path), silently emptying evidence.
+    const related = await mod.tools.related_code.execute({} as never, ctx);
+    expect(related).toContain("dep.ts"); // the import was actually resolved
+    expect(related).not.toContain("#");
+
+    const history = await mod.tools.git_history.execute({} as never, ctx);
+    expect(history).not.toContain("No git history found");
+    expect(history).not.toContain("#");
+  });
+});
+
 describe("system-prompt injection", () => {
   it("pushes nothing when no review is active", async () => {
     const { mod } = moduleFor(gitRepo());
