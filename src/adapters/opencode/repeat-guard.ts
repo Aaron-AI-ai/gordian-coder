@@ -1,14 +1,16 @@
 /**
- * Session-level repeat-call guard for ALL OpenCode tools (built-ins included).
+ * Session-level repeat-call guard for OpenCode tools (built-ins included).
  *
  * A small/degraded model can fall into re-issuing the exact same tool call
  * forever (the same file read over and over). The f-review tools already
  * starve such loops via guardExploration, but native tools (read/grep/glob/
- * bash) bypass it. This guard watches every call via tool.execute.before and,
- * once the SAME call (tool + args) has run REPEAT_LIMIT times in a row, the
- * after-hook replaces the tool output with a short "switch to something else"
- * notice — starving the loop of fresh tokens. Any different call resets the
- * streak, and only the LAST call per session is ever stored, so memory stays
+ * bash) can bypass it. This guard watches every call via tool.execute.before.
+ * Once the SAME read-only/exploration call has run REPEAT_LIMIT times in a row,
+ * the after-hook replaces its output with a short "switch to something else"
+ * notice, starving the loop of fresh tokens. Mutating and control tools are
+ * deliberately excluded: after they execute, their real result is part of the
+ * state transition and must reach the model. Any different call resets the
+ * streak, and only the LAST call per session is stored, so memory stays
  * O(sessions) with tiny entries, capped by MAX_SESSIONS eviction.
  */
 
@@ -36,6 +38,47 @@ interface Streak {
 
 const streaks = new Map<string, Streak>();
 
+function canonical(value: unknown): unknown {
+  if (typeof value === "string") return value.replace(/\s+/g, " ").trim();
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, item]) => [key, canonical(item)])
+    );
+  }
+  return value;
+}
+
+/**
+ * Tools whose post-execution output is safe to suppress. Keep this an explicit
+ * allowlist: unknown plugin/MCP tools and composite tools such as `batch` may
+ * mutate state even when their names sound exploratory.
+ *
+ * Review context/plan/submit/judge/finalize tools are intentionally absent.
+ * Their successful response may contain the next target or terminal report.
+ */
+const REPEAT_OUTPUT_ALLOWLIST = new Set([
+  // OpenCode read-only/exploration tools
+  "read",
+  "glob",
+  "grep",
+  "list",
+  "lsp",
+  "webfetch",
+  "websearch",
+  "codesearch",
+  "todoread",
+  // Ref-scoped f-review exploration tools
+  "file_read",
+  "file_read_diff",
+  "file_find",
+  "code_search",
+  "related_code",
+  "git_history",
+]);
+
 /** Record a tool call (call from tool.execute.before). */
 export function recordCall(sessionID: string, tool: string, args: unknown): void {
   // Hash the args so a huge payload (e.g. a write's file content) stores a few
@@ -43,9 +86,7 @@ export function recordCall(sessionID: string, tool: string, args: unknown): void
   // first: a degenerate model retries "the same" call with stray newlines or
   // padding, and those must count as repeats, not fresh calls.
   const sig = `${tool}:${Bun.hash(
-    JSON.stringify(args, (_k, v) =>
-      typeof v === "string" ? v.replace(/\s+/g, " ").trim() : v
-    ) ?? ""
+    JSON.stringify(canonical(args)) ?? ""
   ).toString()}`;
   const prev = streaks.get(sessionID);
   const count = prev?.sig === sig ? prev.count + 1 : 1;
@@ -60,6 +101,42 @@ export function recordCall(sessionID: string, tool: string, args: unknown): void
  * consecutive identical one. Stays true until a different call resets it. */
 export function isLooping(sessionID: string): boolean {
   return (streaks.get(sessionID)?.count ?? 0) >= REPEAT_LIMIT;
+}
+
+/** Whether an already-executed tool's output may be replaced by loop notice. */
+export function isRepeatOutputSuppressible(tool: string): boolean {
+  return REPEAT_OUTPUT_ALLOWLIST.has(tool);
+}
+
+/** Whether the current call is both repeating and safe to suppress. */
+export function shouldSuppressRepeatOutput(sessionID: string, tool: string): boolean {
+  return isRepeatOutputSuppressible(tool) && isLooping(sessionID);
+}
+
+/** A control tool's result may be shortened only when the core explicitly says
+ * this invocation was a no-op/idempotent replay. Fresh transition output is
+ * never eligible, preserving next-target/report instructions. */
+export function shouldSuppressIdempotentReplay(
+  sessionID: string,
+  tool: string,
+  output: string
+): boolean {
+  if (!isLooping(sessionID)) return false;
+  if (tool === "f_review_submit") {
+    return /Stale\/duplicate f_review_submit ignored|No active review/.test(output);
+  }
+  if (tool === "f_review_judge") {
+    return /already recorded|Judge INCOMPLETE|already hit the judge rework cap/.test(output);
+  }
+  if (tool === "f_review_plan") {
+    return /Duplicate f_review_plan ignored|Refusing to create another run/.test(output);
+  }
+  if (tool === "f_review_context") {
+    return /Duplicate f_review_context ignored|already has (?:a submitted|a terminal) review artifact/.test(
+      output
+    );
+  }
+  return false;
 }
 
 /**
@@ -81,9 +158,20 @@ export function escalateLoop(sessionID: string): string {
   );
 }
 
-/** Native explorers that bypass the f-review tool wrappers (and so their
- * guards) entirely. f-review tools are NOT here — they guard themselves. */
-const NATIVE_EXPLORERS = new Set(["glob", "grep", "read", "bash"]);
+/** Native read-only explorers that bypass the f-review tool wrappers (and so
+ * their guards) entirely. `bash` is deliberately absent: it may mutate state,
+ * so its already-executed result must never be replaced. f-review tools are not
+ * here because they guard themselves. */
+const NATIVE_EXPLORERS = new Set([
+  "glob",
+  "grep",
+  "read",
+  "list",
+  "lsp",
+  "webfetch",
+  "websearch",
+  "codesearch",
+]);
 
 /**
  * Count a native exploration call against the active review's guards

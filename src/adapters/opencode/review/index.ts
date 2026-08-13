@@ -23,6 +23,7 @@
 
 import type { PluginInput, Hooks } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
+import { moebiusReviewerTerminal } from "../moebius-reporter";
 import {
   REQUIRED_CATEGORIES,
   SEVERITIES,
@@ -51,10 +52,14 @@ import {
   REVIEWER_AGENT_NAME,
   REVIEWER_AGENT_DESCRIPTION,
   REVIEWER_AGENT_PROMPT,
+  REVIEWER_AGENT_PERMISSION,
   REVIEWER_AGENT_TOOLS,
   JUDGE_AGENT_NAME,
   JUDGE_AGENT_DESCRIPTION,
   JUDGE_AGENT_PROMPT,
+  JUDGE_AGENT_PERMISSION,
+  REVIEWER_AGENT_STEPS,
+  JUDGE_AGENT_STEPS,
   JUDGE_AGENT_TOOLS,
   REVIEW_COMMAND_NAME,
   REVIEW_COMMAND_DESCRIPTION,
@@ -225,7 +230,7 @@ export function createReviewModule(input: PluginInput): {
       return guardExploration(
         st,
         "file_read",
-        ruleFileContent(st, args.file_path) ??
+        ruleFileContent(st, args.file_path, args.start_line, args.end_line) ??
           fileRead(st.cwd, st.ref, args.file_path, args.start_line, args.end_line),
         args
       );
@@ -359,8 +364,9 @@ export function createReviewModule(input: PluginInput): {
 
   const f_review_submit = tool({
     description:
-      "Declare the current file reviewed. Provide `assessed` (every rubric category you evaluated) and `findings` (issues, may be empty). Coverage is gated: if a category is unassessed, you must continue.",
+      "Declare the current file reviewed. Copy CURRENT_SUBMIT_TOKEN from the latest injected prompt, then provide `assessed` and `findings`. Token identity and coverage are gated.",
     args: {
+      submitToken: z.string().min(1).describe("Exact CURRENT_SUBMIT_TOKEN from the latest prompt"),
       assessed: z.array(z.enum(REQUIRED_CATEGORIES)).describe("Categories actually evaluated"),
       findings: z
         .array(
@@ -409,7 +415,11 @@ export function createReviewModule(input: PluginInput): {
         body: { parts: [{ type: "text", text: action.text }] },
       });
     }
-    // "finalized": partial report already written; nothing to re-drive.
+    if (action?.kind === "finalized") {
+      // The watchdog finalized outside f_review_submit, so no normal tool
+      // after-hook exists to close Moebius correlation state.
+      moebiusReviewerTerminal(sessionID, action.text);
+    }
   };
 
   // Register the f-reviewer agent and /f-review command from the bundle.
@@ -419,13 +429,19 @@ export function createReviewModule(input: PluginInput): {
       mode: "subagent",
       description: REVIEWER_AGENT_DESCRIPTION,
       prompt: REVIEWER_AGENT_PROMPT,
+      permission: REVIEWER_AGENT_PERMISSION,
       tools: REVIEWER_AGENT_TOOLS,
+      steps: REVIEWER_AGENT_STEPS,
+      maxSteps: REVIEWER_AGENT_STEPS,
     };
     cfg.agent[JUDGE_AGENT_NAME] ??= {
       mode: "subagent",
       description: JUDGE_AGENT_DESCRIPTION,
       prompt: JUDGE_AGENT_PROMPT,
+      permission: JUDGE_AGENT_PERMISSION,
       tools: JUDGE_AGENT_TOOLS,
+      steps: JUDGE_AGENT_STEPS,
+      maxSteps: JUDGE_AGENT_STEPS,
     };
     (cfg.command ??= {})[REVIEW_COMMAND_NAME] ??= {
       description: REVIEW_COMMAND_DESCRIPTION,

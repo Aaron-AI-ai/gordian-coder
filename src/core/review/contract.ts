@@ -45,6 +45,9 @@ export const FindingSchema = z.object({
 export type Finding = z.infer<typeof FindingSchema>;
 
 export const SubmitSchema = z.object({
+  // Opaque identity injected for the current target/round. It prevents a
+  // repeated state-changing call from being applied to the next target.
+  submitToken: capped(100).optional(),
   // Categories the reviewer evaluated for the current file (gates termination).
   assessed: z.array(z.enum(REQUIRED_CATEGORIES)),
   // Issues found; may be empty when a category is clean. Overflow past 50 is

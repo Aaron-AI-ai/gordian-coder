@@ -7,10 +7,15 @@ import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { VERSION } from "../../version";
 import { createModules } from "./modules";
-import { moebiusAfterTool, moebiusBeforeTool } from "./moebius-reporter";
+import {
+  cleanupMoebiusSession,
+  moebiusAfterTool,
+  moebiusBeforeTool,
+} from "./moebius-reporter";
 import {
   recordCall,
-  isLooping,
+  shouldSuppressRepeatOutput,
+  shouldSuppressIdempotentReplay,
   loopNotice,
   escalateLoop,
   guardNativeCall,
@@ -129,6 +134,12 @@ const OpenCodeAdapter: Plugin = async (input) => {
     // Event handler
     event: async (hookInput) => {
       const { event } = hookInput;
+      // OpenCode's terminal lifecycle event is session.deleted and carries the
+      // session id under properties.info.id. Release per-subagent reporter
+      // correlation state even when no terminal tool result was observed.
+      if (event.type === "session.deleted") {
+        cleanupMoebiusSession(event.properties.info.id);
+      }
       await handleEvent(
         {
           type: event.type as "session.created" | "session.ended",
@@ -160,18 +171,36 @@ const OpenCodeAdapter: Plugin = async (input) => {
         hookOutput,
         { ...context, sessionId: hookInput.sessionID }
       );
-      // Native explorers (glob/grep/read/bash) bypass the f-review tool
+      // Native read-only explorers (glob/grep/read/lsp/…) bypass the f-review tool
       // wrappers — when a review is active, count them against the same
       // exploration budget / duplicate guards the f-review tools use.
       const nativeNotice = guardNativeCall(hookInput.sessionID ?? "", hookInput.tool);
       if (nativeNotice) {
         hookOutput.output = nativeNotice;
       }
-      // Identical-call loop: starve it — replace the output in place (the
-      // wrapper reuses this object, same mechanism as before-hook args).
-      if (isLooping(hookInput.sessionID ?? "")) {
-        hookOutput.output =
-          loopNotice(hookInput.sessionID ?? "") + escalateLoop(hookInput.sessionID ?? "");
+      // Identical read-only-call loop: starve it by replacing the output in
+      // place. Mutating/control tools are excluded even when repeated: once
+      // executed, their actual state-transition response must reach the model.
+      if (shouldSuppressRepeatOutput(hookInput.sessionID ?? "", hookInput.tool)) {
+        // Core exploration guards carry more specific Qwen recovery advice
+        // (notably "submit now"). Preserve it instead of replacing it with the
+        // generic session-level notice.
+        const alreadyGuarded = /Duplicate call|Exploration limit reached|Consecutive misses/.test(
+          hookOutput.output
+        );
+        if (!alreadyGuarded) {
+          hookOutput.output =
+            loopNotice(hookInput.sessionID ?? "") + escalateLoop(hookInput.sessionID ?? "");
+        }
+      }
+      if (
+        shouldSuppressIdempotentReplay(
+          hookInput.sessionID ?? "",
+          hookInput.tool,
+          hookOutput.output
+        )
+      ) {
+        hookOutput.output = `${hookOutput.output}\n${loopNotice(hookInput.sessionID ?? "")} STOP calling this control tool; its state is already terminal/unchanged.`;
       }
     },
 

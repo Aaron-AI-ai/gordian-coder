@@ -14,30 +14,65 @@ export const REVIEW_COMMAND_NAME = "f-review";
 
 export const REVIEWER_AGENT_DESCRIPTION = "Meticulous rule-based code reviewer for f-review";
 
-/** OpenCode agent `tools` maps only OVERRIDE the tools they list — anything
- * unlisted keeps its default (enabled). A confinement list must therefore deny
- * every built-in explicitly, or the "whitelist" quietly leaves bash/edit/write
- * open. */
+type PermissionAction = "allow" | "deny";
+
+/**
+ * Current OpenCode versions use permission patterns as the enforcement layer.
+ * Keep the catch-all first: OpenCode resolves the last matching permission, so
+ * the exact tool allows below override it while newly added built-ins, plugin
+ * tools, and MCP tools remain denied.
+ */
+export const REVIEWER_AGENT_PERMISSION: Record<string, PermissionAction> = {
+  "*": "deny",
+  f_review_context: "allow",
+  file_read: "allow",
+  file_read_diff: "allow",
+  file_find: "allow",
+  code_search: "allow",
+  related_code: "allow",
+  git_history: "allow",
+  f_review_submit: "allow",
+};
+
+export const JUDGE_AGENT_PERMISSION: Record<string, PermissionAction> = {
+  "*": "deny",
+  f_review_judge_context: "allow",
+  f_review_judge: "allow",
+};
+
+/** Last-resort total turn caps for small models that keep varying tool calls
+ * enough to evade exact-repeat guards. Reviewer needs room for five deep
+ * passes plus final-check recovery; judge normally finishes in two calls. */
+export const REVIEWER_AGENT_STEPS = 160;
+export const JUDGE_AGENT_STEPS = 16;
+
+/** Legacy OpenCode `tools` compatibility. `permission` above is the security
+ * boundary; the wildcard and explicit built-in denies keep older releases as
+ * confined as their legacy matching supports. */
 const BUILTINS_OFF: Record<string, boolean> = {
+  "*": false,
   bash: false,
   read: false,
   write: false,
   edit: false,
   patch: false,
+  apply_patch: false,
   grep: false,
   glob: false,
   list: false,
+  lsp: false,
   webfetch: false,
+  websearch: false,
+  codesearch: false,
+  batch: false,
+  question: false,
   todowrite: false,
   todoread: false,
   skill: false,
   task: false,
 };
 
-/** Tool whitelist: context + exploration + submit; plan/finalize/task are the
- * orchestrator's — blocking them here makes scope-widening impossible, not
- * just discouraged. Built-ins are off: a reviewer reads through the ref-scoped
- * f-review tools and must not edit files or run commands. */
+/** Legacy tool whitelist: context + exploration + submit. */
 export const REVIEWER_AGENT_TOOLS: Record<string, boolean> = {
   ...BUILTINS_OFF,
   f_review_context: true,
@@ -65,6 +100,8 @@ You review one file at a time against the injected checklist, which covers
   orchestrator owns those.
 - Never skip a category. Assess every one (including \`framework\`) and report it
   in \`f_review_submit\` via \`assessed\`, even when the category is clean.
+- Copy the exact latest \`CURRENT_SUBMIT_TOKEN\` into every \`f_review_submit\`.
+  Tokens rotate between targets and rework rounds; never reuse an older token.
 - The injected **Framework Rules are authoritative** and override general best
   practices. When generic guidance conflicts with a framework rule, follow the
   framework rule and word the suggestion accordingly.
@@ -85,10 +122,7 @@ You review one file at a time against the injected checklist, which covers
 export const JUDGE_AGENT_DESCRIPTION =
   "Independent judge that scores a submitted f-review against the quality rubric";
 
-/** Judge whitelist: exactly the two judge tools — it must not review code,
- * spawn agents, or touch the reviewer/orchestrator tools. Built-ins are off
- * too: a judge that reads the working tree scores findings against code the
- * reviewer never saw, breaking the fixed-context independence of the gate. */
+/** Legacy judge whitelist: exactly the two judge tools. */
 export const JUDGE_AGENT_TOOLS: Record<string, boolean> = {
   ...BUILTINS_OFF,
   f_review_judge_context: true,

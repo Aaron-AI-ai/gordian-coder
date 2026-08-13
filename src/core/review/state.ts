@@ -17,6 +17,9 @@ export interface ReviewState {
   cwd: string;
   targets: string[];
   currentIndex: number;
+  /** Opaque identity of the current target/round, copied into submit. Rotated
+   * after every accepted transition so replayed state-changing calls are stale. */
+  submitToken: string;
   categories: Category[];
   diffRange: string | null;
   ref: string | null; // afterRef(diffRange): the version code-search/read operate on
@@ -42,9 +45,11 @@ export interface ReviewState {
   missStreak: number; // consecutive not-found exploration results; reset on any hit and per target/round
   recheckCount: Record<string, number>; // per-file count of final-check reworks issued (cap MAX_FINAL_RECHECKS)
   failedSubmits: Record<string, number>; // per-file rejected submits (invalid/incomplete/degenerate; cap MAX_FAILED_SUBMITS)
+  staleSubmits: Record<string, number>; // stale submit-token replays per target; bounded to prevent an ignored-call loop
   lastSubmitHash: Record<string, string>; // per-file hash of the last submit the FINAL CHECK bounced — an identical resubmission means re-bouncing is pointless
   lastValidFindings: Record<string, Finding[]>; // per-file findings of the last parseable submit — salvaged if invalid submits later hit the cap
-  forcedNotes: Record<string, string>; // per-target force-accept note — propagated into the report/run result so a salvaged review is never mistaken for a clean one
+  forcedNotes: Record<string, string>; // per-target force-advance note — propagated into the report/run result so a salvaged review is never mistaken for a clean one
+  assessedByTarget: Record<string, Category[]>; // actual categories reported by the accepted/forced submit; forced coverage must not be rewritten as complete
   deepPasses: number; // total review rounds per target (1 = single pass; clamped 1..5)
   deepPassDone: Record<string, number>; // per-target completed rounds (submit gate driver)
   resumes: number; // times the idle watchdog re-drove an incomplete review (cap MAX_RESUMES)
@@ -88,6 +93,10 @@ export function activeStates(): ReviewState[] {
 /** File currently under review, or undefined when the loop is exhausted. */
 export function currentFile(state: ReviewState): string | undefined {
   return state.targets[state.currentIndex];
+}
+
+export function rotateSubmitToken(state: ReviewState): void {
+  state.submitToken = crypto.randomUUID();
 }
 
 /**

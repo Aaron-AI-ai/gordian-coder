@@ -10,6 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   DEFAULT_JUDGE_THRESHOLD,
+  JUDGE_CONTEXT_MAX_CHARS,
+  MAX_INVALID_JUDGE_SUBMISSIONS,
   MAX_JUDGE_ROUNDS,
   JUDGE_CRITERIA,
   judgeContext,
@@ -17,9 +19,22 @@ import {
   loadJudgment,
   readRunJudgments,
   submitJudge,
+  type FileJudgment,
+  type JudgeAttempt,
   type JudgeSubmitPayload,
 } from "../judge";
-import { createRun, loadRun, planReview, finalizeRun, writeFileReview, type FileReviewResult, type RunMeta } from "../run";
+import {
+  createRun,
+  loadRun,
+  planReview,
+  finalizeRun,
+  readFileReviewResult,
+  reviewSlug,
+  runDir,
+  writeFileReview,
+  type FileReviewResult,
+  type RunMeta,
+} from "../run";
 import { startReview } from "../loop";
 import { clearState, getState } from "../state";
 import { REQUIRED_CATEGORIES } from "../contract";
@@ -192,7 +207,7 @@ describe("submitJudge", () => {
     expect(msg).toContain("f-judge subagent");
   });
 
-  it("caps rework: after MAX_JUDGE_ROUNDS the review is accepted as-is", async () => {
+  it("caps rework across rewritten review revisions and terminates judge-incomplete", async () => {
     const d = gitRepo();
     const meta = await createRun(baseMeta(), d);
     await writeFileReview(meta.runId, reviewResult(), "# a", d);
@@ -200,28 +215,228 @@ describe("submitJudge", () => {
     for (let i = 1; i <= MAX_JUDGE_ROUNDS; i++) {
       const msg = await submitJudge(judgePayload(meta.runId, 10), d);
       expect(msg).toContain(`rework ${i}/${MAX_JUDGE_ROUNDS}`);
+      await writeFileReview(meta.runId, reviewResult(), `# a revision ${i + 1}`, d);
     }
     const capped = await submitJudge(judgePayload(meta.runId, 10), d);
-    expect(capped).toContain("Accept the latest review as-is");
+    expect(capped).toContain("Judge INCOMPLETE");
     expect(capped).toContain("do NOT re-spawn");
     expect(loadJudgment(meta.runId, "a.ts", d).attempts).toHaveLength(MAX_JUDGE_ROUNDS + 1);
+    expect(loadJudgment(meta.runId, "a.ts", d).terminal?.status).toBe("judge-incomplete");
   });
 
   it("HARD-enforces the cap: past it no context, verdict, or re-review is served", async () => {
     const d = gitRepo();
     const meta = await createRun(baseMeta(), d);
     await writeFileReview(meta.runId, reviewResult(), "# a", d);
-    // burn the cap: MAX_JUDGE_ROUNDS rework instructions + the cap message
-    for (let i = 0; i <= MAX_JUDGE_ROUNDS; i++) await submitJudge(judgePayload(meta.runId, 10), d);
+    // burn the cap across real rewritten artifacts
+    for (let i = 0; i <= MAX_JUDGE_ROUNDS; i++) {
+      await submitJudge(judgePayload(meta.runId, 10), d);
+      if (i < MAX_JUDGE_ROUNDS) {
+        await writeFileReview(meta.runId, reviewResult(), `# a revision ${i + 2}`, d);
+      }
+    }
 
     // an orchestrator that lost the cap message and tries again is refused everywhere:
-    expect(judgeContext(meta.runId, "a.ts", d)).toContain("rework cap");
+    expect(judgeContext(meta.runId, "a.ts", d)).toContain("Judge INCOMPLETE");
     const refused = await submitJudge(judgePayload(meta.runId, 10), d);
-    expect(refused).toContain("verdict NOT recorded");
+    expect(refused).toContain("no new attempt was added");
+    expect(refused).toContain("Judge INCOMPLETE");
     expect(loadJudgment(meta.runId, "a.ts", d).attempts).toHaveLength(MAX_JUDGE_ROUNDS + 1); // unchanged
     const rejoin = await startReview({ runId: meta.runId, files: ["a.ts"] }, d, SESSION);
-    expect(rejoin).toContain("rework cap");
+    expect(rejoin).toContain("terminal review artifact");
     expect(getState(SESSION)).toBeUndefined(); // no re-review session was seeded
+  });
+
+  it("requires exactly one judgment for every finding index, unordered", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    const review = reviewResult();
+    review.findings.push({
+      category: "security",
+      severity: "minor",
+      file: "a.ts",
+      line: 1,
+      rule: "r2",
+      message: "second issue",
+    });
+    await writeFileReview(meta.runId, review, "# a", d);
+
+    for (const indices of [[0], [0, 0], [0, 2]]) {
+      const findingJudgments = indices.map((index) => ({
+        index,
+        valid: true,
+        evidenced: true,
+        severityFit: true,
+        actionable: true,
+        note: "ok",
+      }));
+      const msg = await submitJudge(judgePayload(meta.runId, 100, { findingJudgments }), d);
+      expect(msg).toContain("must contain every index");
+      expect(loadJudgment(meta.runId, "a.ts", d).attempts).toHaveLength(0);
+      // Keep each assertion below the malformed terminal bound.
+      await writeFileReview(meta.runId, review, "# rewritten", d);
+    }
+
+    const ok = await submitJudge(
+      judgePayload(meta.runId, 100, {
+        findingJudgments: [
+          { index: 1, valid: true, evidenced: true, severityFit: true, actionable: true, note: "b" },
+          { index: 0, valid: true, evidenced: true, severityFit: true, actionable: true, note: "a" },
+        ],
+      }),
+      d
+    );
+    expect(ok).toContain("Judge PASS");
+  });
+
+  it("allows an empty findingJudgments array only for a zero-finding review", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, { ...reviewResult(), findings: [] }, "# clean", d);
+    expect(
+      await submitJudge(judgePayload(meta.runId, 100, { findingJudgments: [] }), d)
+    ).toContain("Judge PASS");
+  });
+
+  it("validates every index without truncating a review above sixty findings", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    const review = reviewResult();
+    review.findings = Array.from({ length: 61 }, (_, index) => ({
+      category: "correctness" as const,
+      severity: "minor" as const,
+      file: "a.ts",
+      line: 1,
+      rule: `r${index}`,
+      message: `issue ${index}`,
+    }));
+    await writeFileReview(meta.runId, review, "# many", d);
+    const findingJudgments = review.findings.map((_, index) => ({
+      index,
+      valid: true,
+      evidenced: true,
+      severityFit: true,
+      actionable: true,
+      note: "ok",
+    }));
+
+    expect(
+      await submitJudge(judgePayload(meta.runId, 100, { findingJudgments }), d)
+    ).toContain("Judge PASS");
+    expect(loadJudgment(meta.runId, "a.ts", d).attempts[0].findingJudgments).toHaveLength(61);
+  });
+
+  it("rejects a PASS score that contradicts failed finding checks or coverage gaps", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta({ judgeThreshold: 50 }), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+    const contradictory = judgePayload(meta.runId, 100, {
+      findingJudgments: [
+        {
+          index: 0,
+          valid: false,
+          evidenced: false,
+          severityFit: false,
+          actionable: false,
+          note: "not supported",
+        },
+      ],
+      coverageGaps: ["entire error path"],
+    });
+    expect(await submitJudge(contradictory, d)).toContain("cannot pass");
+    expect(loadJudgment(meta.runId, "a.ts", d).attempts).toHaveLength(0);
+  });
+
+  it("rejects a below-threshold score without concrete rework feedback", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+
+    const msg = await submitJudge(judgePayload(meta.runId, 10, { feedback: "   " }), d);
+    expect(msg).toContain("requires concrete non-empty rework feedback");
+    expect(loadJudgment(meta.runId, "a.ts", d).attempts).toHaveLength(0);
+  });
+
+  it("is idempotent for an unchanged review revision, even when the payload changes", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+    expect(await submitJudge(judgePayload(meta.runId, 10), d)).toContain("Judge REWORK");
+    const duplicate = await submitJudge(judgePayload(meta.runId, 100), d);
+    expect(duplicate).toContain("already recorded");
+    expect(duplicate).toContain("Judge REWORK");
+    expect(loadJudgment(meta.runId, "a.ts", d).attempts).toHaveLength(1);
+
+    await writeFileReview(meta.runId, reviewResult(), "# rewritten", d);
+    expect(await submitJudge(judgePayload(meta.runId, 100), d)).toContain("Judge PASS");
+    expect(loadJudgment(meta.runId, "a.ts", d).attempts).toHaveLength(2);
+  });
+
+  it("serializes concurrent submissions for the same review artifact", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+
+    // The first call owns the artifact gate. All competing PASS submissions
+    // must observe its persisted REWORK instead of racing the same empty file.
+    const first = submitJudge(judgePayload(meta.runId, 10), d);
+    const competing = Array.from({ length: 20 }, () =>
+      submitJudge(judgePayload(meta.runId, 100), d)
+    );
+    const messages = await Promise.all([first, ...competing]);
+
+    expect(messages.every((message) => message.includes("Judge REWORK"))).toBe(true);
+    expect(messages.filter((message) => message.includes("already recorded"))).toHaveLength(20);
+    const judgment = loadJudgment(meta.runId, "a.ts", d);
+    expect(judgment.attempts).toHaveLength(1);
+    expect(judgment.attempts[0]?.verdict).toBe("rework");
+
+    // The settled gate was released, so a rewritten artifact can be judged.
+    await writeFileReview(meta.runId, reviewResult(), "# rewritten", d);
+    expect(await submitJudge(judgePayload(meta.runId, 100), d)).toContain("Judge PASS");
+  });
+
+  it("does not reuse a stale verdict when a corrupt artifact is rewritten at revision 1", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "# first", d);
+    expect(await submitJudge(judgePayload(meta.runId, 100), d)).toContain("Judge PASS");
+
+    writeFileSync(join(runDir(meta.runId, d), "reviews", `${reviewSlug("a.ts")}.json`), "{}");
+    await writeFileReview(meta.runId, { ...reviewResult(), findings: [] }, "# rewritten", d);
+    expect(judgeContext(meta.runId, "a.ts", d)).toContain("judge round 2");
+    expect(await finalizeRun(meta.runId, d)).toContain("unjudged review");
+  });
+
+  it("advances revision past judgment history after an identical corrupt artifact rewrite", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    const review = reviewResult();
+    await writeFileReview(meta.runId, review, "# first", d);
+    expect(await submitJudge(judgePayload(meta.runId, 100), d)).toContain("Judge PASS");
+
+    writeFileSync(join(runDir(meta.runId, d), "reviews", `${reviewSlug("a.ts")}.json`), "{}");
+    await writeFileReview(meta.runId, review, "# identical rewrite", d);
+    expect(readFileReviewResult(meta.runId, "a.ts", d)?.revision).toBe(2);
+    expect(judgeContext(meta.runId, "a.ts", d)).toContain("judge round 2");
+    expect(await finalizeRun(meta.runId, d)).toContain("unjudged review");
+  });
+
+  it("bounds malformed submissions and terminates fail-closed without recording PASS", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+    const malformed = judgePayload(meta.runId, 100, { findingJudgments: [] });
+    for (let i = 1; i < MAX_INVALID_JUDGE_SUBMISSIONS; i++) {
+      const msg = await submitJudge(malformed, d);
+      expect(msg).toContain(`Retry ${i}/${MAX_INVALID_JUDGE_SUBMISSIONS}`);
+    }
+    const terminal = await submitJudge(malformed, d);
+    expect(terminal).toContain("Judge INCOMPLETE");
+    const judgment = loadJudgment(meta.runId, "a.ts", d);
+    expect(judgment.attempts).toHaveLength(0);
+    expect(judgment.terminal?.status).toBe("judge-incomplete");
+    expect(await submitJudge(judgePayload(meta.runId, 100), d)).toContain("Judge INCOMPLETE");
   });
 
   it("truncates runaway judge feedback instead of persisting a blob", async () => {
@@ -251,6 +466,126 @@ describe("judge excerpt covers finding lines past the cap", () => {
     expect(out).toContain("truncated at 2000 lines");
     expect(out).toContain("finding lines the capped excerpt above does not show");
     expect(out).toContain("line2100"); // the finding's anchor is visible to the judge
+  });
+
+  it("terminalizes a truncated zero-finding review instead of allowing a prefix-only PASS", async () => {
+    const d = gitRepo();
+    const big = Array.from({ length: 2400 }, (_, index) => `clean-line-${index + 1}`).join("\n");
+    writeFileSync(join(d, "clean-big.ts"), `${big}\n`);
+    Bun.spawnSync(["git", "add", "-A"], { cwd: d });
+    Bun.spawnSync(["git", "commit", "-qm", "large clean file"], { cwd: d });
+
+    const meta = await createRun(
+      baseMeta({ targets: ["clean-big.ts"], whole: true, range: null }),
+      d
+    );
+    await writeFileReview(
+      meta.runId,
+      { ...reviewResult("clean-big.ts"), findings: [] },
+      "# clean-big",
+      d
+    );
+
+    const out = judgeContext(meta.runId, "clean-big.ts", d);
+    expect(out.length).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_CHARS);
+    expect(out).toContain("terminal Judge INCOMPLETE");
+    expect(out).toContain("zero-finding review has no anchors");
+    expect(out).not.toContain("Judge every finding by its index");
+
+    const judgment = loadJudgment(meta.runId, "clean-big.ts", d);
+    expect(judgment.attempts).toHaveLength(0);
+    expect(judgment.terminal?.status).toBe("judge-incomplete");
+    expect(judgment.terminal?.reviewArtifactHash).toBeDefined();
+    expect(judgeContext(meta.runId, "clean-big.ts", d)).toContain("This revision is terminal");
+
+    const direct = await submitJudge(
+      judgePayload(meta.runId, 100, { file: "clean-big.ts", findingJudgments: [] }),
+      d
+    );
+    expect(direct).toContain("Judge INCOMPLETE");
+    expect(loadJudgment(meta.runId, "clean-big.ts", d).attempts).toHaveLength(0);
+  });
+
+  it("terminalizes a truncated review when any finding lacks a line anchor", async () => {
+    const d = gitRepo();
+    const big = Array.from({ length: 2400 }, (_, index) => `line-${index + 1}`).join("\n");
+    writeFileSync(join(d, "unanchored-big.ts"), `${big}\n`);
+    Bun.spawnSync(["git", "add", "-A"], { cwd: d });
+    Bun.spawnSync(["git", "commit", "-qm", "large unanchored file"], { cwd: d });
+
+    const meta = await createRun(
+      baseMeta({ targets: ["unanchored-big.ts"], whole: true, range: null }),
+      d
+    );
+    const result = reviewResult("unanchored-big.ts");
+    delete result.findings[0].line;
+    await writeFileReview(meta.runId, result, "# unanchored-big", d);
+
+    const out = judgeContext(meta.runId, "unanchored-big.ts", d);
+    expect(out.length).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_CHARS);
+    expect(out).toContain("terminal Judge INCOMPLETE");
+    expect(out).toContain("1 finding(s) have no line anchor");
+    expect(out).not.toContain("Judge every finding by its index");
+
+    const judgment = loadJudgment(meta.runId, "unanchored-big.ts", d);
+    expect(judgment.attempts).toHaveLength(0);
+    expect(judgment.terminal?.status).toBe("judge-incomplete");
+  });
+
+  it("fails closed when serialized findings cannot fit the total context budget", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta({ whole: true, range: null }), d);
+    const result = reviewResult();
+    result.findings = Array.from({ length: 8 }, (_, index) => ({
+      category: "correctness" as const,
+      severity: "major" as const,
+      file: "a.ts",
+      line: 1,
+      rule: `rule-${index}`,
+      message: `failure-${index} ${"m".repeat(2000)}`,
+      suggestion: `fix-${index} ${"s".repeat(4000)}`,
+    }));
+    await writeFileReview(meta.runId, result, "# oversized findings", d);
+
+    const out = judgeContext(meta.runId, "a.ts", d);
+    expect(out.length).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_CHARS);
+    expect(out).toContain("Judge context INCOMPLETE");
+    expect(out).toContain("serialized finding(s)");
+    expect(out).toContain("Do NOT call f_review_judge");
+    expect(out).not.toContain("Judge every finding by its index");
+
+    // Directly bypassing judgeContext must still never manufacture a PASS.
+    const terminal = await submitJudge(judgePayload(meta.runId, 100), d);
+    expect(terminal).toContain("Judge INCOMPLETE");
+    expect(loadJudgment(meta.runId, "a.ts", d).attempts).toHaveLength(0);
+    expect(loadJudgment(meta.runId, "a.ts", d).terminal?.reason).toContain(
+      "bounded judge context unavailable"
+    );
+  });
+
+  it("bounds very wide source lines and refuses to omit an anchored evidence window", async () => {
+    const d = gitRepo();
+    const wide = Array.from(
+      { length: 2200 },
+      (_, index) => `line${index + 1}-${"x".repeat(1000)}`
+    ).join("\n");
+    writeFileSync(join(d, "wide.ts"), `${wide}\n`);
+    Bun.spawnSync(["git", "add", "-A"], { cwd: d });
+    Bun.spawnSync(["git", "commit", "-qm", "wide"], { cwd: d });
+
+    const meta = await createRun(
+      baseMeta({ targets: ["wide.ts"], whole: true, range: null }),
+      d
+    );
+    const result = reviewResult("wide.ts");
+    result.findings[0].line = 2100;
+    await writeFileReview(meta.runId, result, "# wide", d);
+
+    const out = judgeContext(meta.runId, "wide.ts", d);
+    expect(out.length).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_CHARS);
+    expect(out).toContain("Judge context INCOMPLETE");
+    expect(out).toContain("merged finding window(s)");
+    expect(out).toContain("Do NOT call f_review_judge");
   });
 });
 
@@ -337,8 +672,34 @@ describe("plan/finalize integration", () => {
     const path = /Report: (.+)$/.exec(msg)![1];
     const md = readFileSync(join(d, path), "utf8");
     expect(md).toContain(`Judge: 1/3 file(s) passed (threshold ${DEFAULT_JUDGE_THRESHOLD})`);
-    expect(md).toContain("Below judge threshold (accepted as-is): b.ts (score 10)");
+    expect(md).toContain("Below judge threshold (quality incomplete): b.ts (score 10)");
     expect(md).toContain("Reviewed but never judged: c.ts");
+    expect(msg).toContain("Run terminated — INCOMPLETE");
+  });
+
+  it("invalidates a cached PASS when its persisted judgment becomes semantically invalid", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+    expect(await submitJudge(judgePayload(meta.runId, 100), d)).toContain("Judge PASS");
+    expect(await finalizeRun(meta.runId, d)).toContain("✅ Run complete");
+
+    const judgmentPath = join(
+      runDir(meta.runId, d),
+      "judgments",
+      `${reviewSlug("a.ts")}.json`
+    );
+    const judgment = JSON.parse(readFileSync(judgmentPath, "utf8")) as FileJudgment;
+    // Shape remains valid, but the current review's only finding is no longer
+    // judged. Semantic load validation must drop this attempt and invalidate
+    // the finalize cache instead of replaying its earlier PASS response.
+    judgment.attempts[0]!.findingJudgments = [];
+    writeFileSync(judgmentPath, JSON.stringify(judgment, null, 2));
+
+    const stale = await finalizeRun(meta.runId, d);
+    expect(stale).toContain("Run terminated — INCOMPLETE");
+    expect(stale).toContain("unjudged review");
+    expect(stale).not.toContain("✅ Run complete");
   });
 
   it("readRunJudgments returns every file's judgment", async () => {
@@ -376,6 +737,47 @@ describe("corrupt on-disk state", () => {
     expect(loadJudgment(meta.runId, "a.ts", d).attempts).toEqual([]);
     expect(judgeFeedbackFor(meta.runId, "a.ts", d)).toBe(""); // no crash, no feedback
     expect(readRunJudgments(meta.runId, d)).toEqual([]); // finalize input also clean
+  });
+
+  it("fails closed for shape-valid attempts that violate current review semantics", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+    expect(await submitJudge(judgePayload(meta.runId, 100), d)).toContain("Judge PASS");
+
+    const path = join(
+      runDir(meta.runId, d),
+      "judgments",
+      `${reviewSlug("a.ts")}.json`
+    );
+    const valid = JSON.parse(readFileSync(path, "utf8")) as FileJudgment;
+    const corruptions: Array<[string, (attempt: JudgeAttempt) => void]> = [
+      ["missing finding indices", (attempt) => { attempt.findingJudgments = []; }],
+      ["out-of-range score", (attempt) => { attempt.score = 101; }],
+      ["verdict/threshold mismatch", (attempt) => {
+        attempt.score = 10;
+        attempt.verdict = "pass";
+      }],
+      ["contradictory PASS finding", (attempt) => {
+        attempt.findingJudgments[0]!.valid = false;
+      }],
+      ["PASS with a coverage gap", (attempt) => {
+        attempt.coverageGaps = ["unexamined branch"];
+      }],
+    ];
+
+    for (const [label, corrupt] of corruptions) {
+      const persisted = structuredClone(valid);
+      corrupt(persisted.attempts[0]!);
+      writeFileSync(path, JSON.stringify(persisted, null, 2));
+
+      expect(loadJudgment(meta.runId, "a.ts", d).attempts, label).toHaveLength(0);
+      const runJudgment = readRunJudgments(meta.runId, d).find((entry) => entry.file === "a.ts");
+      expect(runJudgment?.attempts, label).toHaveLength(0);
+      expect(judgeContext(meta.runId, "a.ts", d), label).toContain("judge round 1");
+    }
+
+    expect(await finalizeRun(meta.runId, d)).toContain("unjudged review");
   });
 
   it("treats an unreadable review json as not-yet-submitted", async () => {

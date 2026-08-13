@@ -15,6 +15,7 @@ import { join, relative, basename } from "node:path";
 import type { Finding } from "./contract";
 
 export const FILE_READ_MAX_LINES = 500;
+export const FILE_READ_MAX_CHARS = 16_000;
 export const GREP_MAX_COUNT = 100;
 export const FILE_FIND_MAX_COUNT = 100;
 const TIMEOUT_MS = 10_000;
@@ -30,7 +31,11 @@ function sh(cmd: string[], cwd: string): { code: number; stdout: string } {
 }
 
 /** Bound output by lines and chars to keep the prompt from blowing up. */
-export function cap(s: string, maxLines = FILE_READ_MAX_LINES, maxChars = 16_000): string {
+export function cap(
+  s: string,
+  maxLines = FILE_READ_MAX_LINES,
+  maxChars = FILE_READ_MAX_CHARS
+): string {
   let truncated = false;
   let lines = s.split("\n");
   if (lines.length > maxLines) {
@@ -166,6 +171,67 @@ function grepAt(
 
 // ── ops: file_read ───────────────────────────────────────────────
 
+/**
+ * Render text that has already been loaded with the same bounded, line-numbered
+ * shape as `fileRead`. Keeping this separate lets callers expose an in-memory
+ * or working-tree value without accidentally bypassing the read limits.
+ */
+export function renderFileContent(
+  filePath: string,
+  content: string,
+  startLine = 1,
+  endLine?: number,
+  maxLines = FILE_READ_MAX_LINES,
+  maxChars = FILE_READ_MAX_CHARS
+): string {
+  // Drop a single trailing newline so a file ending in "\n" doesn't report an
+  // inflated line count and a phantom blank final line.
+  const lines = content.replace(/\n$/, "").split("\n");
+  const total = lines.length;
+  // The tool guidance suggests start=m-50, which is <=0 for hunks near the top
+  // of a file. Clamp rather than reject that useful request.
+  const start = Math.max(1, startLine ?? 1);
+  let end = endLine ?? total;
+
+  if (start > total) return `Error: start_line ${start} exceeds total lines ${total}`;
+  if (start > end) return `Error: start_line ${start} > end_line ${end}`;
+  if (end > total) end = total;
+
+  let lineTruncated = false;
+  if (end - start + 1 > maxLines) {
+    end = start + maxLines - 1;
+    lineTruncated = true;
+  }
+
+  const body = lines
+    .slice(start - 1, end)
+    .map((line, index) => `${start + index}|${line}`)
+    .join("\n");
+
+  const render = (truncated: boolean): string => {
+    const header = [
+      `File: ${filePath} (Total lines: ${total})`,
+      `IS_TRUNCATED: ${truncated}`,
+      `LINE_RANGE: ${start}-${end}`,
+    ];
+    if (truncated) {
+      const limit = Number.isFinite(maxChars)
+        ? `${maxLines} lines / ${maxChars} characters`
+        : `${maxLines} lines`;
+      header.push(`Note: output truncated at ${limit} — narrow the range.`);
+    }
+    return `${header.join("\n")}\n${body}`;
+  };
+
+  let output = render(lineTruncated);
+  if (output.length <= maxChars) return output;
+
+  output = render(true);
+  const suffix = "\n… (truncated)";
+  if (maxChars <= suffix.length) return suffix.slice(0, maxChars);
+  return `${output.slice(0, maxChars - suffix.length)}${suffix}`;
+}
+
 export function fileRead(
   cwd: string,
   ref: string | null,
@@ -182,39 +248,10 @@ export function fileRead(
       `rely on the injected evidence and move on.`
     );
 
-  // Drop a single trailing newline so a file ending in "\n" doesn't report an
-  // inflated line count and a phantom blank final line.
-  const lines = content.replace(/\n$/, "").split("\n");
-  const total = lines.length;
-  // Clamp start to >=1: the tool guidance suggests start=m-50, which is <=0
-  // for hunks near the top of a file — clamp rather than reject.
-  const start = Math.max(1, start_line ?? 1);
-  let end = end_line ?? total;
-
-  if (start > total) return `Error: start_line ${start} exceeds total lines ${total}`;
-  if (start > end) return `Error: start_line ${start} > end_line ${end}`;
-  if (end > total) end = total;
-
-  let truncated = false;
-  if (end - start + 1 > maxLines) {
-    end = start + maxLines - 1;
-    truncated = true;
-  }
-
-  const body = lines
-    .slice(start - 1, end)
-    .map((l, i) => `${start + i}|${l}`)
-    .join("\n");
-
-  const header = [
-    `File: ${file_path} (Total lines: ${total})`,
-    `IS_TRUNCATED: ${truncated}`,
-    `LINE_RANGE: ${start}-${end}`,
-  ];
-  if (truncated) {
-    header.push(`Note: output truncated at ${maxLines} lines — narrow the range.`);
-  }
-  return `${header.join("\n")}\n${body}`;
+  // Preserve the existing reader contract: callers such as the judge choose a
+  // larger line window and reason about the exact visible line range. The
+  // exported helper's default character cap is for already-loaded prompt text.
+  return renderFileContent(file_path, content, start_line, end_line, maxLines, Infinity);
 }
 
 // ── ops: file_read_diff ──────────────────────────────────────────

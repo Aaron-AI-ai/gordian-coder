@@ -222,7 +222,7 @@ describe("run-mode deep passes", () => {
     expect(results[0].findings[0].rule).toBe("polished"); // final round's set persisted
   });
 
-  it("persists a force-accept marker instead of a clean run result", async () => {
+  it("persists a force-advance marker instead of a clean run result", async () => {
     const d = gitRepo();
     const meta = await createRun(
       { targets: ["a.ts"], range: "HEAD~1..HEAD", whole: false, label: "L", language: "ko" },
@@ -231,13 +231,15 @@ describe("run-mode deep passes", () => {
     await startReview({ runId: meta.runId, files: ["a.ts"] }, d, "dp");
     for (let i = 1; i <= 5; i++) await submitReview({ garbage: true }, "dp");
     const done = await submitReview({ garbage: true }, "dp");
-    expect(done).toContain("force-accepted");
+    expect(done).toContain("force-advanced");
+    expect(done).toContain("incomplete review saved");
     const [result] = readRunResults(meta.runId, d);
     expect(result.forced).toContain("forced after repeated invalid submissions");
     expect(result.findings).toEqual([]);
     // finalize surfaces the forced file instead of announcing a clean run
     const fin = await finalizeRun(meta.runId, d);
-    expect(fin).toContain("force-accepted");
+    expect(fin).toContain("Run terminated — INCOMPLETE");
+    expect(fin).toContain("force-advanced");
     expect(fin).toContain("a.ts");
   });
 });

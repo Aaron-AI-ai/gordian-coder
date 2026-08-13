@@ -102,7 +102,12 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
         guardExploration(
           st,
           "file_read",
-          ruleFileContent(st, params.file_path as string) ??
+          ruleFileContent(
+            st,
+            params.file_path as string,
+            params.start_line as number | undefined,
+            params.end_line as number | undefined
+          ) ??
             fileRead(
               st.cwd,
               st.ref,
@@ -264,8 +269,13 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
   const f_review_submit: ToolDefinition = {
     name: "f_review_submit",
     description:
-      "Declare the current file reviewed. Provide `assessed` (every rubric category you evaluated: correctness, security, performance, maintainability, tests, framework) and `findings` (issues with category/severity/file/line/rule/message/suggestion; may be empty). Coverage is gated. The result includes the review instructions for the next file.",
+      "Declare the current file reviewed. Copy CURRENT_SUBMIT_TOKEN from the latest prompt, then provide assessed/findings. Token identity and coverage are gated; the result includes next-file instructions.",
     parameters: {
+      submitToken: {
+        type: "string",
+        description: "Exact CURRENT_SUBMIT_TOKEN from the latest review prompt",
+        required: true,
+      },
       assessed: { type: "array", description: "Categories actually evaluated", required: true },
       findings: { type: "array", description: "Issues found (may be empty)", required: true },
     },

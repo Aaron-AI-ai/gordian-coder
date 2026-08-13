@@ -43,8 +43,20 @@ import {
   manifestTimestamp,
   renderReport,
 } from "./output";
-import { loadRun, writeFileReview, type FileReviewResult } from "./run";
-import { judgeFeedbackFor, reworkCount, MAX_JUDGE_ROUNDS } from "./judge";
+import {
+  loadRun,
+  readFileReviewResult,
+  runFreshness,
+  writeFileReview,
+  type FileReviewResult,
+} from "./run";
+import {
+  judgeFeedbackFor,
+  currentReviewTerminal,
+  reworkCount,
+  reviewReworkStatus,
+  MAX_JUDGE_ROUNDS,
+} from "./judge";
 import {
   setState,
   getState,
@@ -53,9 +65,10 @@ import {
   otherFiles,
   isDone,
   activeStates,
+  rotateSubmitToken,
   type ReviewState,
 } from "./state";
-import { afterRef, fileRead, sanitizeFindingLines, MAX_ITER } from "./reader";
+import { afterRef, fileRead, renderFileContent, sanitizeFindingLines, MAX_ITER } from "./reader";
 import { buildReviewEvidence } from "./evidence";
 import { SEGMENT_THRESHOLD, inFileRelated, planSegments, targetPath, targetRange } from "./segment";
 import { dbg, dbgOnce, setReviewDebug } from "./debug";
@@ -79,6 +92,10 @@ export const MAX_RESUMES = 3;
  * looping on the same broken payload must not stall the review forever. */
 export const MAX_FAILED_SUBMITS = 5;
 
+/** Serialize context initialization per session. The same small model can emit
+ * duplicate calls concurrently; without this lock both calls pass the active
+ * check before either stores state, and the later call resets the first. */
+const contextStarts = new Map<string, Promise<string>>();
 
 const LANG_NAMES: Record<string, string> = { ko: "Korean", en: "English", ja: "Japanese" };
 
@@ -121,6 +138,19 @@ function startRunFileReview(
 ): string {
   const meta = loadRun(runId, cwd);
   if (!meta) return `Unknown run: ${runId}. Call f_review_plan first (or check the runId).`;
+  const freshness = runFreshness(meta, cwd);
+  if (freshness.criteriaStale) {
+    return (
+      `⚠️ Run ${runId} is stale because the effective review rules changed after planning. ` +
+      `Do NOT reuse its artifacts; call f_review_plan again to create a run bound to the current rules.`
+    );
+  }
+  if (freshness.sourceStale) {
+    return (
+      `⚠️ Run ${runId} is stale because its files-only source snapshot changed after planning. ` +
+      `Do NOT mix old and new file contents; call f_review_plan again to create a run bound to the current source.`
+    );
+  }
 
   // Defense: a run subagent reviews exactly one file, and only one that the
   // plan actually queued — it cannot widen the fan-out on its own.
@@ -130,6 +160,28 @@ function startRunFileReview(
   const file = files[0].replaceAll("\\", "/").replace(/^\.\//, "");
   if (!meta.targets.includes(file)) {
     return `❌ ${file} is not a target of run ${runId}. Targets: ${meta.targets.join(", ")}`;
+  }
+  const existingReview = readFileReviewResult(runId, file, cwd);
+  if (existingReview) {
+    const status = meta.judge ? reviewReworkStatus(runId, file, cwd) : "complete";
+    if (status !== "rework") {
+      if (status === "unjudged") {
+        return (
+          `ℹ️ ${file} already has a submitted review artifact in run ${runId}. ` +
+          `Do NOT overwrite it; spawn f-judge for this file next. Finalizing now would mark it INCOMPLETE.`
+        );
+      }
+      return (
+        `ℹ️ ${file} already has a terminal review artifact in run ${runId}` +
+        `${meta.judge ? ` (${status})` : ""}. Do NOT overwrite it; continue with the other files or call f_review_finalize.`
+      );
+    }
+  }
+  if (meta.judge && currentReviewTerminal(runId, file, cwd)) {
+    return (
+      `⚠️ ${file} has a terminal Judge INCOMPLETE result in run ${runId}. ` +
+      `Do NOT re-review it; continue with the other files or call f_review_finalize.`
+    );
   }
   // Judge-cap enforcement: past MAX_JUDGE_ROUNDS reworks the latest review
   // stands — an orchestrator that lost the cap message must not respawn
@@ -151,6 +203,7 @@ function startRunFileReview(
     cwd,
     targets: reviewTargets, // this file only (or its segments)
     currentIndex: 0,
+    submitToken: crypto.randomUUID(),
     categories: [...REQUIRED_CATEGORIES],
     diffRange: meta.range,
     ref,
@@ -176,9 +229,11 @@ function startRunFileReview(
     callLog: {},
     recheckCount: {},
     failedSubmits: {},
+    staleSubmits: {},
     lastSubmitHash: {},
     lastValidFindings: {},
     forcedNotes: {},
+    assessedByTarget: {},
     dupCalls: {},
     missStreak: 0,
     deepPasses: meta.deepPasses ?? 1, // run-wide setting so every subagent iterates alike
@@ -208,11 +263,20 @@ function startRunFileReview(
 
 /** Collect targets, seed session state, write the manifest. Returns the
  * message the reviewer model sees (target preview, warnings, next step). */
-export async function startReview(
+async function startReviewUnlocked(
   args: StartReviewArgs,
   cwd: string,
   sessionId: string
 ): Promise<string> {
+  const existing = getState(sessionId);
+  if (existing?.active) {
+    return (
+      `ℹ️ Duplicate f_review_context ignored; this session is already reviewing ` +
+      `${currentFile(existing) ?? "its current target"}. Continue the existing review and call ` +
+      `f_review_submit with CURRENT_SUBMIT_TOKEN=${existing.submitToken}; progress was preserved.`
+    );
+  }
+
   // Parallel-run mode: join an existing run and review one file of it.
   if (args.runId) return startRunFileReview(args.runId, args.files, cwd, sessionId);
 
@@ -282,6 +346,7 @@ export async function startReview(
     cwd,
     targets: reviewTargets, // the work queue the reviewer drains one file/segment at a time
     currentIndex: 0, // loop cursor; ++ per passed submit
+    submitToken: crypto.randomUUID(), // replay identity for the first target/round
     categories: [...REQUIRED_CATEGORIES], // copy: don't mutate the shared constant
     // diff context (git):
     diffRange: range,
@@ -312,9 +377,11 @@ export async function startReview(
     callLog: {},
     recheckCount: {},
     failedSubmits: {},
+    staleSubmits: {},
     lastSubmitHash: {},
     lastValidFindings: {},
     forcedNotes: {},
+    assessedByTarget: {},
     dupCalls: {},
     missStreak: 0,
     deepPasses: resolveDeepPasses(args.deepPasses, cwd), // review rounds per target (1..5)
@@ -378,6 +445,26 @@ export async function startReview(
   ].join("\n");
 }
 
+export function startReview(
+  args: StartReviewArgs,
+  cwd: string,
+  sessionId: string
+): Promise<string> {
+  const previous = contextStarts.get(sessionId) ?? Promise.resolve("");
+  const current = previous
+    .catch(() => "")
+    .then(() => startReviewUnlocked(args, cwd, sessionId));
+  contextStarts.set(sessionId, current);
+  const cleanup = (): void => {
+    if (contextStarts.get(sessionId) === current) contextStarts.delete(sessionId);
+  };
+  // Use a two-branch then instead of an ignored `.finally()` promise: if
+  // initialization fails, `.finally()` would create a second rejected promise
+  // and surface an unhandled rejection even when the caller handles `current`.
+  void current.then(cleanup, cleanup);
+  return current;
+}
+
 /** Max times the SAME tool call (identical args) is answered per target/round;
  * past this, the output is withheld — a looping model gets no new content. */
 export const MAX_DUP_CALLS = 2;
@@ -435,9 +522,9 @@ export function guardExploration(
   if (miss && st.missStreak >= MAX_MISS_STREAK) {
     return (
       `⚠️ ${st.missStreak} consecutive lookups found NOTHING — output withheld. What you are ` +
-      `hunting is not in this repository (likely an external framework/library symbol — see the ` +
-      `External dependencies list in the evidence). STOP searching for it, in any variation and ` +
-      `with any tool. Review with what you already have and call f_review_submit.`
+      `hunting was not resolved by the allowed targeted lookups; it may be external, generated, ` +
+      `or a local alias the resolver cannot map. STOP retrying path/name variations with any tool. ` +
+      `Review with the evidence you already have and call f_review_submit.`
     );
   }
   return out;
@@ -448,10 +535,15 @@ export function guardExploration(
  * working tree at load time — the git-ref-scoped file_read would miss
  * untracked/uncommitted rule files, silently no-op'ing the reference feature —
  * so adapters serve them from state before falling back to fileRead. */
-export function ruleFileContent(st: ReviewState, path: string): string | null {
+export function ruleFileContent(
+  st: ReviewState,
+  path: string,
+  startLine?: number,
+  endLine?: number
+): string | null {
   const norm = path.replaceAll("\\", "/").replace(/^\.\//, "");
   const rule = st.extraRules.find((r) => r.file === norm);
-  return rule ? rule.content : null;
+  return rule ? renderFileContent(norm, rule.content, startLine, endLine) : null;
 }
 
 /** One-shot pre-report check, driven by the session's tool-call log. Only
@@ -528,11 +620,14 @@ async function acceptFile(
   file: string,
   findings: Finding[],
   sessionId: string,
-  note = ""
+  note = "",
+  assessed: readonly (typeof REQUIRED_CATEGORIES)[number][] = st.categories
 ): Promise<string> {
   // A forced (salvage) accept must survive into the report/run result — the
   // chat string alone is lost when this is the last target (isDone below).
   if (note) st.forcedNotes[file] = note;
+  const forcedNote = st.forcedNotes[file] ?? "";
+  st.assessedByTarget[file] = [...new Set(assessed)];
   // Drop line numbers that point past the end of their file (hallucinated anchors).
   sanitizeFindingLines(findings, st.cwd, st.ref);
   // Dedupe exact repeats — a looping model may submit the same finding N times.
@@ -542,12 +637,16 @@ async function acceptFile(
     return seen.has(key) ? false : (seen.add(key), true);
   });
   st.currentIndex++;
+  rotateSubmitToken(st);
   st.iterations = 0; // reset the exploration budget for the next file
   st.dupCalls = {}; // the next target may legitimately repeat earlier calls
   st.missStreak = 0;
 
   if (!isDone(st)) {
-    return `✅ ${file} reviewed (${st.findings[file].length} issue(s))${note}. Next file: ${currentFile(st)}.`;
+    const response = forcedNote
+      ? `⚠️ ${file} force-advanced after bounded recovery (${st.findings[file].length} issue(s) salvaged)${forcedNote}. Next file: ${currentFile(st)}.`
+      : `✅ ${file} reviewed (${st.findings[file].length} issue(s)). Next file: ${currentFile(st)}.`;
+    return response;
   }
 
   // Run mode writes this file's own review under the run dir; the aggregate
@@ -583,12 +682,55 @@ export async function submitReview(payload: unknown, sessionId: string): Promise
     // (bounced on coverage/degenerate/final check) — never commit an empty
     // review when real findings were already on the table.
     const salvaged = st.lastValidFindings[file] ?? [];
-    return acceptFile(
+    const response = await acceptFile(
       st,
       file,
       salvaged,
       sessionId,
-      ` — forced after repeated invalid submissions${salvaged.length ? " (salvaged an earlier submit's findings)" : ""}`
+      ` — forced after repeated invalid submissions${salvaged.length ? " (salvaged an earlier submit's findings)" : ""}`,
+      []
+    );
+    return response;
+  }
+
+  if (parsed.data.submitToken !== undefined && parsed.data.submitToken !== st.submitToken) {
+    const stale = (st.staleSubmits[file] = (st.staleSubmits[file] ?? 0) + 1);
+    if (stale <= MAX_FAILED_SUBMITS) {
+      return (
+        `ℹ️ Stale/duplicate f_review_submit ignored; no state changed ` +
+        `(${stale}/${MAX_FAILED_SUBMITS}). Use CURRENT_SUBMIT_TOKEN=${st.submitToken} for ${file}.`
+      );
+    }
+    return acceptFile(
+      st,
+      file,
+      st.lastValidFindings[file] ?? [],
+      sessionId,
+      " — forced after repeated stale submit-token replays",
+      []
+    );
+  }
+
+  // A valid current-token submit proves the model recovered from any stale
+  // replay. Count only a consecutive stale loop, not occasional one-step lag
+  // across legitimate deep-pass/final-check token rotations.
+  st.staleSubmits[file] = 0;
+
+  const realFile = targetPath(file);
+  const wrongFile = parsed.data.findings.find((finding) => finding.file !== realFile);
+  if (wrongFile) {
+    const bounce = reject(
+      `❌ Finding file mismatch: current target ${JSON.stringify(file)} requires every finding.file ` +
+        `to be the real path ${JSON.stringify(realFile)}, received ${JSON.stringify(wrongFile.file)}.`
+    );
+    if (bounce) return bounce;
+    return acceptFile(
+      st,
+      file,
+      st.lastValidFindings[file] ?? [],
+      sessionId,
+      " — forced after repeated finding-file mismatches",
+      []
     );
   }
 
@@ -597,7 +739,8 @@ export async function submitReview(payload: unknown, sessionId: string): Promise
   // is pointless, so accept instead. Only the final check arms this (see below):
   // deep-pass rounds each give a DIFFERENT instruction, and an identical
   // resubmission there is honest convergence, not a loop.
-  const hash = Bun.hash(JSON.stringify(parsed.data)).toString();
+  const { submitToken: _submitToken, ...semanticSubmit } = parsed.data;
+  const hash = Bun.hash(JSON.stringify(semanticSubmit)).toString();
   const repeat = st.lastSubmitHash[file] === hash;
 
   // Degenerate-output guard: drop findings whose prose is runaway repetition or
@@ -618,18 +761,36 @@ export async function submitReview(payload: unknown, sessionId: string): Promise
         `Rewrite them in ${languageName(st.language)} and resubmit the full set for ${file}.`
     );
     if (bounce) return bounce;
+    // The bounded escape continues with only the non-degenerate subset, but it
+    // is not a clean quality pass: persist the degraded marker through final
+    // acceptance so an empty salvaged set can never produce a findings-only PASS.
+    st.forcedNotes[file] = " — forced after repeated degenerate outputs (invalid findings dropped)";
   }
 
   const missing = coverage(parsed.data.assessed, st.categories);
   if (missing.length) {
-    return (
+    const response = await (
       reject(
         `❌ Incomplete — categories not assessed: ${missing.join(
           ", "
         )}. Keep analyzing this file, then resubmit.`
-      ) ?? acceptFile(st, file, findings, sessionId, " — forced with incomplete coverage")
+      ) ??
+        acceptFile(
+          st,
+          file,
+          findings,
+          sessionId,
+          " — forced with incomplete coverage",
+          parsed.data.assessed
+        )
     );
+    return response;
   }
+
+  // A complete, non-degenerate submission proves recovery from earlier schema,
+  // file, or coverage mistakes. Bound consecutive malformed output without
+  // penalizing one corrected mistake in each legitimate review round.
+  if (!degenerate.length) st.failedSubmits[file] = 0;
 
   // Deep-pass gate: with deepPasses > 1, the first (deepPasses - 1) clean
   // submissions for a target are NOT accepted — each one bounces back with a
@@ -640,6 +801,7 @@ export async function submitReview(payload: unknown, sessionId: string): Promise
   const done = st.deepPassDone[file] ?? 0;
   if (done < st.deepPasses - 1) {
     st.deepPassDone[file] = done + 1;
+    rotateSubmitToken(st);
     // MAX_ITER is a per-ROUND budget, not per-file: the round instruction below
     // explicitly orders a re-read ("REFUTE each finding: re-read the code"), so
     // carrying a spent budget over would answer that order with "exploration
@@ -660,6 +822,7 @@ export async function submitReview(payload: unknown, sessionId: string): Promise
   const notes = finalCheckNotes(st, file, findings);
   if (!repeat && notes.length && tries < MAX_FINAL_RECHECKS) {
     st.recheckCount[file] = tries + 1;
+    rotateSubmitToken(st);
     st.lastSubmitHash[file] = hash; // arm the repeat detector: same payload again → accept
     // The notes order re-verification ("verify with file_read", write concrete
     // suggestions) — like the deep-pass bounce, give the round a fresh budget
@@ -675,7 +838,7 @@ export async function submitReview(payload: unknown, sessionId: string): Promise
     ].join("\n");
   }
 
-  return acceptFile(st, file, findings, sessionId);
+  return acceptFile(st, file, findings, sessionId, "", parsed.data.assessed);
 }
 
 /** Run-mode completion: persist THIS session's single-file review (md + json)
@@ -686,31 +849,48 @@ async function writeRunReview(
   sessionId: string,
   partial: boolean
 ): Promise<string> {
-  st.active = false;
   const file = targetPath(st.targets[0]); // single file per run session (segments share it)
   // Merge segment-keyed findings back under the real file path.
   const merged = Object.values(st.findings).flat();
   const explorationCalls = Object.values(st.callLog)
     .flatMap((byTool) => Object.values(byTool))
     .reduce((a, b) => a + b, 0);
-  // A force-accepted (salvage) target must not persist as a clean, complete
+  // A force-advanced (salvage) target must not persist as a clean, complete
   // review — carry the note into the run result so finalize can surface it.
-  const forced = st.targets.map((t) => st.forcedNotes[t]).filter(Boolean).join(";");
+  const forced = st.targets.map((t) => st.forcedNotes[t]).filter(Boolean).join(";").slice(0, 4000);
+  const assessed = [
+    ...new Set(st.targets.flatMap((target) => st.assessedByTarget[target] ?? [])),
+  ];
   const result: FileReviewResult = {
     file,
-    assessed: [...st.categories], // full coverage unless `forced` says otherwise
+    assessed,
     findings: merged,
     explorationCalls,
     partial,
+    coverageComplete: !partial && !forced,
     ...(forced ? { forced } : {}),
   };
-  const md = renderReport({ [file]: merged }, `run ${st.runId} · ${st.label}`, st.language);
+  const quality = partial || forced
+    ? [
+        "",
+        "## Review Quality",
+        "",
+        "- Status: **INCOMPLETE**",
+        ...(partial
+          ? [`- Only ${Object.keys(st.findings).length}/${st.targets.length} segment(s) completed.`]
+          : []),
+        ...(forced ? [`- Bounded recovery force-advanced one or more targets:${forced}`] : []),
+        "",
+      ].join("\n")
+    : "";
+  const md = `${renderReport({ [file]: merged }, `run ${st.runId} · ${st.label}`, st.language)}${quality}`;
   const path = await writeFileReview(st.runId!, result, md, st.cwd);
+  st.active = false;
   clearState(sessionId);
   const head = partial
     ? `⚠️ ${file} partially reviewed (${Object.keys(st.findings).length}/${st.targets.length} segment(s)); partial review saved.`
     : forced
-      ? `⚠️ ${file} force-accepted (${merged.length} issue(s))${forced}; review saved with a forced marker.`
+      ? `⚠️ ${file} force-advanced after bounded recovery (${merged.length} issue(s) salvaged)${forced}; incomplete review saved with a forced marker.`
       : `✅ ${file} reviewed (${merged.length} issue(s)); review saved.`;
   return `${head} ${path}\nThis subagent's task is COMPLETE. Do not review any other file.`;
 }
@@ -723,7 +903,6 @@ async function finalizeReport(
   sessionId: string,
   partial: boolean
 ): Promise<string> {
-  st.active = false;
   const path = resolveOutputPath(st.output, st.label, st.cwd);
   // Findings are keyed per target (a large file's segments each have their own
   // key); merge them back under the real file path so the report groups by file.
@@ -731,15 +910,65 @@ async function finalizeReport(
   for (const [target, fs] of Object.entries(st.findings)) {
     (report[targetPath(target)] ??= []).push(...fs);
   }
-  await writeReport(path, report, st.label, st.cwd, st.language, st.failOn, st.baseline);
-  clearState(sessionId);
   const all = Object.values(st.findings).flat();
+  const forcedTargets = Object.keys(st.forcedNotes);
+  const degraded = partial || forcedTargets.length > 0;
+  const qualityReasons = [
+    ...(partial
+      ? [`Only ${Object.keys(st.findings).length}/${st.targets.length} target(s) produced an artifact.`]
+      : []),
+    ...(forcedTargets.length
+      ? [
+          `${forcedTargets.length} target(s) were force-advanced after repeated rejected submissions: ${forcedTargets.join(", ")}.`,
+          ...forcedTargets
+            .slice(0, 20)
+            .map(
+              (target) =>
+                `${target}: ${st.forcedNotes[target].replace(/^\s*[—-]\s*/, "")}.`
+            ),
+        ]
+      : []),
+  ];
+  const qualityAppendix = degraded
+    ? [
+        "## Review Quality",
+        "",
+        "- Status: **INCOMPLETE**",
+        ...qualityReasons.map((reason) => `- ${reason}`),
+        ...(st.failOn
+          ? [
+              `- **Verdict: FAIL** — review quality is incomplete; \`failOn=${st.failOn}\` cannot pass on salvaged/partial coverage.`,
+            ]
+          : []),
+        "",
+      ].join("\n")
+    : undefined;
+  // A partial/forced terminal result must never render a findings-only PASS in
+  // the persisted artifact. The quality appendix above carries the fail-closed
+  // result while the bounded loop still clears its state and terminates.
+  await writeReport(
+    path,
+    report,
+    st.label,
+    st.cwd,
+    st.language,
+    degraded ? undefined : st.failOn,
+    st.baseline,
+    new Date(),
+    qualityAppendix
+  );
+  st.active = false;
+  clearState(sessionId);
   let gate = "";
   if (st.failOn) {
-    const v = verdict(all, st.failOn);
-    gate = v.pass
-      ? ` Verdict: PASS (failOn: ${st.failOn}).`
-      : ` Verdict: FAIL — ${v.failing} finding(s) at/above ${st.failOn}.`;
+    if (degraded) {
+      gate = ` Verdict: FAIL — review incomplete (failOn: ${st.failOn}).`;
+    } else {
+      const v = verdict(all, st.failOn);
+      gate = v.pass
+        ? ` Verdict: PASS (failOn: ${st.failOn}).`
+        : ` Verdict: FAIL — ${v.failing} finding(s) at/above ${st.failOn}.`;
+    }
   }
   // Informational: reviewed targets that used no exploration calls (auto-evidence
   // only). Scoped to reviewed targets so a partial report doesn't flag the ones
@@ -751,14 +980,15 @@ async function finalizeReport(
     : "";
   // Force-accepted targets (salvage path) — a clean-looking count must not
   // hide that some files never passed a real submit.
-  const forcedTargets = Object.keys(st.forcedNotes);
   const forcedWarn = forcedTargets.length
-    ? ` ⚠️ ${forcedTargets.length} target(s) force-accepted after repeated rejected submits: ${forcedTargets.slice(0, 5).join(", ")}${forcedTargets.length > 5 ? ", …" : ""}.`
+    ? ` ⚠️ ${forcedTargets.length} target(s) force-advanced after repeated rejected submits: ${forcedTargets.slice(0, 5).join(", ")}${forcedTargets.length > 5 ? ", …" : ""}.`
     : "";
   const fileCount = Object.keys(report).length; // distinct real files (segments merged)
   const head = partial
     ? `⚠️ Review incomplete — ${reviewed.length}/${st.targets.length} target(s) reviewed after ${MAX_RESUMES} auto-resumes; partial report written.`
-    : `✅ Review complete — ${fileCount} file(s), ${all.length} issue(s).`;
+    : forcedTargets.length
+      ? `⚠️ Review incomplete — bounded recovery force-advanced ${forcedTargets.length} target(s); ${fileCount} file(s), ${all.length} issue(s) salvaged.`
+      : `✅ Review complete — ${fileCount} file(s), ${all.length} issue(s).`;
   return `${head}${gate}${audit}${forcedWarn} Report: ${path}`;
 }
 
@@ -845,7 +1075,10 @@ export function reviewPromptFor(st: ReviewState): string | null {
       ...(related ? ["--- same-file related (segment) ---", related] : []),
     ].join("\n")
   );
-  return prompt;
+  return (
+    `${prompt}\n\nCURRENT_SUBMIT_TOKEN: ${st.submitToken}\n` +
+    `Copy this exact value into f_review_submit.submitToken. It changes after each target/review round; never reuse an earlier token.`
+  );
 }
 
 /** Instruction pinning the findings/report language. */

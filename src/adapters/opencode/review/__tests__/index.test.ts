@@ -16,8 +16,10 @@ import type { PluginInput } from "@opencode-ai/plugin";
 import { createReviewModule } from "../index";
 import {
   REVIEWER_AGENT_NAME,
+  REVIEWER_AGENT_PERMISSION,
   REVIEWER_AGENT_TOOLS,
   JUDGE_AGENT_NAME,
+  JUDGE_AGENT_PERMISSION,
   JUDGE_AGENT_TOOLS,
   REVIEW_COMMAND_NAME,
 } from "../prompts";
@@ -142,6 +144,33 @@ describe("session guard", () => {
     );
     expect(out).toContain("Layers must not skip.");
   });
+
+  it("applies file_read ranges and caps to working-tree reference rules", async () => {
+    const d = gitRepo();
+    mkdirSync(join(d, "review", "rules"), { recursive: true });
+    writeFileSync(
+      join(d, "review", "rules", "large.md"),
+      `---\nmode: reference\n---\n${Array.from({ length: 600 }, (_, i) => `rule ${i + 1}`).join("\n")}`
+    );
+    const { mod } = moduleFor(d);
+    await mod.tools.f_review_context.execute({ files: ["a.ts"] } as never, ctx);
+
+    const ranged = await mod.tools.file_read.execute(
+      { file_path: "review/rules/large.md", start_line: 20, end_line: 22 } as never,
+      ctx
+    );
+    expect(ranged).toContain("LINE_RANGE: 20-22");
+    expect(ranged).toContain("20|rule 20");
+    expect(ranged).not.toContain("23|rule 23");
+
+    const capped = await mod.tools.file_read.execute(
+      { file_path: "review/rules/large.md" } as never,
+      ctx
+    );
+    expect(capped).toContain("IS_TRUNCATED: true");
+    expect(capped).toContain("LINE_RANGE: 1-500");
+    expect(capped).not.toContain("501|rule 501");
+  });
 });
 
 describe("segment targets vs the filesystem", () => {
@@ -257,6 +286,11 @@ describe("agent/command config injection", () => {
 
     expect(cfg.agent[REVIEWER_AGENT_NAME]).toMatchObject({ mode: "subagent" });
     expect(cfg.agent[JUDGE_AGENT_NAME]).toMatchObject({ mode: "subagent" });
+    expect(cfg.agent[REVIEWER_AGENT_NAME]).toHaveProperty(
+      "permission",
+      REVIEWER_AGENT_PERMISSION
+    );
+    expect(cfg.agent[JUDGE_AGENT_NAME]).toHaveProperty("permission", JUDGE_AGENT_PERMISSION);
     expect(cfg.command[REVIEW_COMMAND_NAME]).toHaveProperty("template");
   });
 
@@ -270,19 +304,24 @@ describe("agent/command config injection", () => {
     expect(cfg.command[REVIEW_COMMAND_NAME]).toBeDefined(); // the missing one still fills in
   });
 
-  // OpenCode `tools` maps only override LISTED tools — an unlisted built-in
-  // stays enabled. Confinement therefore requires explicit denies for every
-  // built-in, not just for the f-review tools.
+  // Kept explicitly in the legacy tools map in addition to the permission
+  // wildcard, for compatibility with older OpenCode releases.
   const OPENCODE_BUILTINS = [
     "bash",
     "read",
     "write",
     "edit",
     "patch",
+    "apply_patch",
     "grep",
     "glob",
     "list",
+    "lsp",
     "webfetch",
+    "websearch",
+    "codesearch",
+    "batch",
+    "question",
     "todowrite",
     "todoread",
     "skill",
@@ -300,6 +339,33 @@ describe("agent/command config injection", () => {
     for (const t of OPENCODE_BUILTINS) expect(REVIEWER_AGENT_TOOLS[t]).toBe(false);
   });
 
+  it("default-denies current and future tools, then allows only reviewer tools", () => {
+    expect(Object.keys(REVIEWER_AGENT_PERMISSION)[0]).toBe("*");
+    expect(REVIEWER_AGENT_PERMISSION["*"]).toBe("deny");
+    expect(
+      Object.entries(REVIEWER_AGENT_PERMISSION)
+        .filter(([, action]) => action === "allow")
+        .map(([name]) => name)
+        .sort()
+    ).toEqual(
+      [
+        "code_search",
+        "f_review_context",
+        "f_review_submit",
+        "file_find",
+        "file_read",
+        "file_read_diff",
+        "git_history",
+        "related_code",
+      ].sort()
+    );
+    // These are intentionally unlisted and therefore hit the catch-all. The
+    // same is true for arbitrary plugin and MCP tool names.
+    for (const name of ["lsp", "websearch", "codesearch", "batch", "acme_mcp_lookup"]) {
+      expect(REVIEWER_AGENT_PERMISSION[name]).toBeUndefined();
+    }
+  });
+
   it("confines the judge agent to exactly the two judge tools", () => {
     expect(JUDGE_AGENT_TOOLS.f_review_judge_context).toBe(true);
     expect(JUDGE_AGENT_TOOLS.f_review_judge).toBe(true);
@@ -310,6 +376,15 @@ describe("agent/command config injection", () => {
     }
     // Explicit denies must exist for the built-ins — unlisted means enabled.
     for (const t of OPENCODE_BUILTINS) expect(JUDGE_AGENT_TOOLS[t]).toBe(false);
+  });
+
+  it("default-denies every unknown judge tool", () => {
+    expect(Object.keys(JUDGE_AGENT_PERMISSION)[0]).toBe("*");
+    expect(JUDGE_AGENT_PERMISSION).toEqual({
+      "*": "deny",
+      f_review_judge_context: "allow",
+      f_review_judge: "allow",
+    });
   });
 });
 

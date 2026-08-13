@@ -8,8 +8,10 @@ import {
   fileReadDiff,
   fileFind,
   codeSearch,
+  FILE_READ_MAX_CHARS,
   FILE_READ_MAX_LINES,
   fileLineCount,
+  renderFileContent,
   sanitizeFindingLines,
 } from "../reader";
 import type { Finding } from "../contract";
@@ -138,6 +140,46 @@ describe("fileRead (workspace mode)", () => {
     expect(out).toContain("Total lines: 2");
     expect(out).toContain("LINE_RANGE: 1-2");
     expect(out).not.toContain("3|");
+  });
+
+  it("preserves a caller-selected large line window without a character-only cap", () => {
+    const d = tmp();
+    writeFileSync(
+      join(d, "large-window.ts"),
+      Array.from({ length: 2_000 }, (_, index) => `${index + 1}-${"x".repeat(20)}`).join("\n")
+    );
+    const out = fileRead(d, null, "large-window.ts", 1, undefined, 2_000);
+    expect(out.length).toBeGreaterThan(FILE_READ_MAX_CHARS);
+    expect(out).toContain("IS_TRUNCATED: false");
+    expect(out).toContain("LINE_RANGE: 1-2000");
+    expect(out).toContain("2000|2000-");
+  });
+});
+
+describe("renderFileContent", () => {
+  it("renders an already-loaded text range with file_read line numbering", () => {
+    const out = renderFileContent("rules/guide.md", "one\ntwo\nthree\nfour", 2, 3);
+    expect(out).toContain("File: rules/guide.md (Total lines: 4)");
+    expect(out).toContain("LINE_RANGE: 2-3");
+    expect(out).toContain("2|two");
+    expect(out).toContain("3|three");
+    expect(out).not.toContain("4|four");
+  });
+
+  it("enforces the 500-line default cap without reading from disk", () => {
+    const content = Array.from({ length: 600 }, (_, index) => `line ${index + 1}`).join("\n");
+    const out = renderFileContent("rules/large.md", content);
+    expect(out).toContain("IS_TRUNCATED: true");
+    expect(out).toContain(`LINE_RANGE: 1-${FILE_READ_MAX_LINES}`);
+    expect(out).toContain("500|line 500");
+    expect(out).not.toContain("501|line 501");
+  });
+
+  it("enforces the 16k character default cap", () => {
+    const out = renderFileContent("rules/wide.md", "x".repeat(FILE_READ_MAX_CHARS * 2));
+    expect(out.length).toBeLessThanOrEqual(FILE_READ_MAX_CHARS);
+    expect(out).toContain("IS_TRUNCATED: true");
+    expect(out).toEndWith("… (truncated)");
   });
 });
 

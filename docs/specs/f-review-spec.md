@@ -139,7 +139,7 @@ function resolveManifestPath(label) {
 
 ---
 
-## 4. 도구 (tool) 10종
+## 4. 도구 (tool) 12종
 
 | 도구 | 시점 | 역할 |
 |------|------|------|
@@ -152,13 +152,18 @@ function resolveManifestPath(label) {
 | `related_code` | 루프 중 | import·심볼 사용처·테스트·동시변경 이력을 점수화해 연관 코드 후보(+요청 시 미리보기) 제공 |
 | `git_history` | 루프 중 | 최근 커밋 의도·동시변경 파일·선택적 과거 patch 제공 |
 | `f_review_submit` | done 시도 | 구조화 결과 제출 → 검증 게이트. run 모드 완료 시 취합 리포트 대신 **개별 리뷰**(`runs/<runId>/reviews/<파일>.md`+`.json`)를 씀 |
+| `f_review_judge_context` | judge 진입 | 고정된 변경 excerpt·제출 findings·판정 기준을 반환. 전체 판정 근거가 bounded context에 들어가지 않으면 artifact-bound `INCOMPLETE`로 종료 |
+| `f_review_judge` | judge 제출 | 모든 finding index의 판정과 coverage를 검증하고 threshold로 PASS/REWORK를 결정. malformed/rework 반복은 유한 상한 뒤 `INCOMPLETE` |
 | `f_review_finalize` | 병렬 run 종료 1회 | 커버리지 검증(기대 vs 작성) + 개별 json 취합 → 최종 리포트 + Run Summary(누락/부분/무탐색 감사) 작성 (오케스트레이터 전용) |
 
 **병렬 run (Model A)** — `/f-review`는 기본적으로 오케스트레이터로 동작:
 `f_review_plan` → 파일당 f-reviewer 서브에이전트 1개(배치 최대 `RUN_BATCH_SIZE`=5) → `f_review_finalize`.
 공유 상태는 전부 **디스크**(run.json + reviews/)라 메모리 누적이 없다. 방어: run당 `MAX_RUN_TARGETS`=100 하드캡,
 서브에이전트는 run 타깃 밖 파일·복수 파일 거부, 개별 리뷰는 덮어쓰기(재시도 idempotent), 누락 재스폰은 1회,
-오래된 run 디렉토리는 최근 `RUNS_KEEP`=10개만 유지. 큰 파일 세그먼트는 **한 서브에이전트 안에서** 순차 처리 후
+완료된 run 디렉토리는 최근 `RUNS_KEEP`=10개만 유지한다. 미완료 run은 최대 10개로 제한하고,
+최근 artifact/judgment 활동 후 24시간 동안 보호하며 그보다 오래 멈춘 run만 abandoned로 정리한다. 동일 plan의 fingerprint는
+프로세스 간 lock으로 원자적으로 claim하여 동시 재호출도 기존 미완료 run 하나만 재사용한다. plan은 diff ref를 commit SHA로 고정하고,
+files-only 소스와 유효 룰의 hash를 저장하므로 작업 시작·종료 시점에 스냅샷이 달라지면 성공으로 finalize하지 않는다. 큰 파일 세그먼트는 **한 서브에이전트 안에서** 순차 처리 후
 파일당 1개 리뷰로 병합. `--sequential` 또는 runId 없는 `f_review_context` = 기존 단일 세션 순차 모드(불변).
 
 **자동 주입 evidence 정책** — `{{review_evidence}}`의 **크로스파일 연관은 프리뷰를 넣지 않고 경로 목록만** 준다.
@@ -167,12 +172,20 @@ function resolveManifestPath(label) {
 붙여, 모델이 **리뷰 중인 세그먼트/diff가 실제 참조하는 심볼**을 grep으로 집어오게 한다(세그먼트 맞춤이 자동으로 성립).
 같은 파일 내부 연관 선언은 `segment.ts`가 세그먼트 단위로 직접 주입한다. (프리뷰 자체는 on-demand `related_code`에는 남아 있음.)
 
+import resolver가 저장소 파일로 연결하지 못한 specifier는 **미해결(unresolved)** 로만 표시한다. TS/JS path alias·barrel index,
+Python package, Java source-root/static import처럼 저장소 내부인데 휴리스틱이 놓치는 경우가 있으므로 이를 곧바로
+"외부 의존성"이라고 단정하거나 `NEVER search`를 지시하지 않는다. 확실한 내부 후보는 resolver가 evidence에 연결하고,
+남은 항목은 짧은 targeted lookup만 허용한 뒤 일반 탐색 예산으로 수렴시킨다.
+
 **공통 `FileReader(cwd + ref)`** 추상화로 3모드를 한 곳에서 처리:
 - `ref === null` → **workspace** 모드 (working tree / untracked)
 - `ref`가 git ref → **ref** 모드 (해당 commit/range 끝 시점 파일을 `git show`/`ls-tree`/`git grep <ref>`로 읽음)
 - 비-git 디렉터리 → fs walk / `git grep --no-index` 폴백
 
 `ref` = `afterRef(diffRange)` ("A..B" → "B", 단일 ref → 그대로, null → workspace).
+
+`mode: reference` 프로젝트 룰은 working-tree 스냅샷에서 제공하되 일반 `file_read`와 동일한 line slicing,
+라인 번호, 500줄/16KB cap을 적용한다. reference라는 이유로 원문 전체를 컨텍스트에 주입하지 않는다.
 
 ---
 
@@ -202,9 +215,20 @@ function resolveManifestPath(label) {
 동일 인자 반복 호출은 `MAX_DUP_CALLS`회까지만 응답한다.
 예산(iterations·중복 호출 장부)은 타깃 전진 시점, **딥패스 라운드 전환 시점**, 그리고 **최종 점검(final check) 바운스 시점**에 리셋된다(§12 참조) — 바운스 지시문이 재검증(재읽기)을 요구하기 때문이다.
 
-**세션 레벨 동일-호출 가드 (어댑터, repeat-guard)**: OpenCode의 `tool.execute.before/after` 훅에서 **모든 도구**(네이티브 read/grep/bash 포함)의 동일 호출(도구+인자, 공백 정규화) 연속 반복을 감시한다. `REPEAT_LIMIT`(3) 연속이면 출력을 보류하고 "다른 행동을 하라" notice로 교체한다. `HARD_LIMIT`(6) 도달 시 **격상**: 활성 리뷰 세션이면 탐색 예산을 소진 상태로 만들어(위 MAX_ITER 가드가 즉시 발동) 어떤 탐색 도구를 불러도 강제 수렴 메시지가 나가고, 유일한 출구는 `f_review_submit`이 된다 — submit이 예산을 리셋하므로 복구는 자동이다. 라운드 단위 예산 리셋이 퇴화 모델의 루프 활주로를 늘리지 않게 하는 안전핀.
+**세션 레벨 동일-호출 가드 (어댑터, repeat-guard)**: OpenCode의 `tool.execute.before/after` 훅에서 모든 도구의 동일 호출(도구+정규화한 인자) 연속 반복을 감시한다. `REPEAT_LIMIT`(3) 연속이면 **명시적으로 조회성인 도구에 한해서만** 출력을 보류하고 "다른 행동을 하라" notice로 교체한다. `bash`와 알 수 없는 플러그인 도구는 상태를 바꿀 수 있으므로 조회성 목록에 넣지 않는다. `f_review_submit`/`f_review_judge`/plan/context/finalize처럼 상태를 바꾸는 도구도 실행 후 결과를 절대 가리지 않는다. 상태는 이미 전진했는데 다음 파일·리포트 경로 응답만 숨기면 동일 payload가 새 상태에 재적용될 수 있기 때문이다. 코어의 bounded terminal/idempotency와 OpenCode agent `steps` 상한이 이 경로의 최종 안전핀이다.
 
-**네이티브 탐색 도구도 같은 예산을 쓴다**: 리뷰 활성 세션에서 네이티브 `glob`/`grep`/`read`/`bash` 호출은 after-hook에서 `guardExploration`을 통과한다 — `MAX_ITER` 예산 소모 + 동일 인자 반복(`MAX_DUP_CALLS`, **비연속 반복 포함**) 차단. 출력 문자열은 검사하지 않으므로 miss-streak은 f-review 탐색 도구 전용으로 유지된다(네이티브 빈-결과 문구 판별은 보류).
+`HARD_LIMIT`(6) 도달 시 **격상**: 활성 리뷰 세션이면 탐색 예산을 소진 상태로 만들어(위 MAX_ITER 가드가 즉시 발동) 어떤 탐색 도구를 불러도 강제 수렴 메시지가 나가고, 유일한 생산적 출구는 `f_review_submit`이 된다. 라운드 단위 예산 리셋이 퇴화 모델의 루프 활주로를 늘리지 않게 하는 안전핀이다.
+
+**네이티브 탐색 도구도 같은 예산을 쓴다**: 리뷰 활성 세션에서 네이티브 `glob`/`grep`/`read`/`list`/`lsp`/웹 검색 도구 호출은 after-hook에서 `guardExploration`을 통과한다 — `MAX_ITER` 예산 소모 + 동일 인자 반복(`MAX_DUP_CALLS`, **비연속 반복 포함**) 차단. `bash`는 상태 변경 가능성이 있어 사후 출력을 가리거나 조회 예산으로 오분류하지 않는다(번들 reviewer/judge에서는 기본 거부). 출력 문자열은 검사하지 않으므로 miss-streak은 f-review 탐색 도구 전용으로 유지된다.
+
+**강제 전진은 성공이 아니다**: schema-invalid/coverage-missing 제출이 상한을 넘으면 findings를 가능한 만큼 salvage하고 다음 대상으로 전진해 세션은 반드시 끝낸다. 단, 이 terminal escape는 품질 상태를 `INCOMPLETE`로 남긴다. 최종 응답과 영속 리포트는 `Review complete`/`PASS`를 출력하지 않으며, `failOn` CI 게이트는 fail-closed 한다. 강제 전진 artifact는 존재하므로 missing 재실행 목록에는 넣지 않는다.
+
+OpenCode/MCP 도구 계약에서 `f_review_context`가 발급하는 `submitToken`은 필수이며 현재 타깃·라운드에만 유효하다. 이전 응답을 그대로 재생한 stale submit은
+상태를 전진시키지 않으며, 올바른 토큰 제출 또는 bounded terminal 경로로만 수렴한다. Judge도 모든 finding index를
+`0..N-1` 정확히 한 번씩 판정해야 하고, 저장된 리뷰·판정 JSON을 Zod와 교차 필드 규칙으로 다시 검증한다. 고정된
+judge 컨텍스트 안에 변경 전체와 필요한 finding evidence를 담을 수 없으면 부분 문맥으로 PASS하지 않고 terminal `INCOMPLETE`로 fail-close 한다.
+
+**OpenCode 에이전트 권한**: f-reviewer/f-judge는 agent `permission`의 `"*": "deny"`에서 시작해 필요한 f-review 도구만 명시적으로 허용한다. 새 built-in, 플러그인, MCP 도구가 설치되어도 reviewer의 ref/탐색 예산이나 judge의 고정 컨텍스트를 우회할 수 없어야 한다.
 
 ---
 

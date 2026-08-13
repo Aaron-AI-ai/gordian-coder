@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test";
 import {
   recordCall,
   isLooping,
+  isRepeatOutputSuppressible,
+  shouldSuppressRepeatOutput,
+  shouldSuppressIdempotentReplay,
   loopNotice,
   escalateLoop,
   guardNativeCall,
@@ -21,6 +24,7 @@ function reviewState(): ReviewState {
     iterations: 0,
     targets: [],
     currentIndex: 0,
+    submitToken: "test-token",
     callLog: {},
     dupCalls: {},
     missStreak: 0,
@@ -71,6 +75,81 @@ describe("repeat-guard", () => {
     expect(isLooping("s-ind-1")).toBe(true);
     expect(isLooping("s-ind-2")).toBe(true);
     expect(isLooping("s-ind-3")).toBe(false);
+  });
+
+  test("suppresses only an explicit read-only/exploration allowlist", () => {
+    const s = "s-output-policy";
+    for (let i = 0; i < REPEAT_LIMIT; i++) {
+      recordCall(s, "f_review_submit", { findings: [] });
+    }
+    expect(isLooping(s)).toBe(true);
+    expect(isRepeatOutputSuppressible("f_review_submit")).toBe(false);
+    expect(shouldSuppressRepeatOutput(s, "f_review_submit")).toBe(false);
+
+    for (const control of [
+      "f_review_judge",
+      "f_review_plan",
+      "f_review_context",
+      "f_review_judge_context",
+      "f_review_finalize",
+      "bash",
+      "batch",
+      "unknown_plugin_tool",
+    ]) {
+      expect(isRepeatOutputSuppressible(control)).toBe(false);
+    }
+
+    for (let i = 0; i < REPEAT_LIMIT; i++) recordCall(s, "file_read", { file_path: "a.ts" });
+    expect(shouldSuppressRepeatOutput(s, "file_read")).toBe(true);
+    for (const explorer of ["read", "glob", "grep", "lsp", "code_search", "git_history"]) {
+      expect(isRepeatOutputSuppressible(explorer)).toBe(true);
+    }
+  });
+
+  test("suppresses control output only after core reports an idempotent replay", () => {
+    const s = "s-control-replay";
+    for (let i = 0; i < REPEAT_LIMIT; i++) recordCall(s, "f_review_submit", { same: true });
+    expect(shouldSuppressIdempotentReplay(s, "f_review_submit", "✅ Review complete")).toBe(false);
+    expect(
+      shouldSuppressIdempotentReplay(
+        s,
+        "f_review_submit",
+        "ℹ️ Stale/duplicate f_review_submit ignored"
+      )
+    ).toBe(true);
+
+    const planSession = "s-plan-replay";
+    for (let i = 0; i < REPEAT_LIMIT; i++) {
+      recordCall(planSession, "f_review_plan", { files: ["a.ts"] });
+    }
+    expect(
+      shouldSuppressIdempotentReplay(
+        planSession,
+        "f_review_plan",
+        "ℹ️ Duplicate f_review_plan ignored; resume unfinished run r1"
+      )
+    ).toBe(true);
+
+    const contextSession = "s-context-replay";
+    for (let i = 0; i < REPEAT_LIMIT; i++) {
+      recordCall(contextSession, "f_review_context", { files: ["a.ts"] });
+    }
+    expect(
+      shouldSuppressIdempotentReplay(
+        contextSession,
+        "f_review_context",
+        "ℹ️ Duplicate f_review_context ignored; progress was preserved"
+      )
+    ).toBe(true);
+  });
+
+  test("does not treat bash as a native read-only explorer", () => {
+    const s = "s-native-bash";
+    setState(s, reviewState());
+    recordCall(s, "bash", { command: "touch changed" });
+    expect(guardNativeCall(s, "bash")).toBe("");
+    expect(getState(s)!.iterations).toBe(0);
+    clearState(s);
   });
 
   test("hard loop with an active review exhausts the exploration budget and names the exit", () => {

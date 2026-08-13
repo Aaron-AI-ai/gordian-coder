@@ -17,6 +17,7 @@ const PREVIEW_CHARS = 1_600;
 const SOURCE_EXTENSIONS = [
   ".ts",
   ".tsx",
+  ".d.ts",
   ".js",
   ".jsx",
   ".mjs",
@@ -70,6 +71,85 @@ function summarizePaths(paths: string[], max = 12): string {
 
 function normalizeRepoPath(path: string): string {
   return posix.normalize(path.replaceAll("\\", "/").replace(/^\.\//, ""));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Parse the JSON-with-comments/trailing-commas commonly used by tsconfig. */
+function parseJsonObject(content: string): Record<string, unknown> | null {
+  let withoutComments = "";
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < content.length; i++) {
+    const char = content[i];
+    const next = content[i + 1];
+    if (inString) {
+      withoutComments += char;
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      withoutComments += char;
+    } else if (char === "/" && next === "/") {
+      while (i + 1 < content.length && content[i + 1] !== "\n") i++;
+    } else if (char === "/" && next === "*") {
+      i += 2;
+      while (i < content.length && !(content[i] === "*" && content[i + 1] === "/")) {
+        if (content[i] === "\n") withoutComments += "\n";
+        i++;
+      }
+      i++;
+    } else {
+      withoutComments += char;
+    }
+  }
+
+  let normalized = "";
+  inString = false;
+  escaped = false;
+  for (let i = 0; i < withoutComments.length; i++) {
+    const char = withoutComments[i];
+    if (inString) {
+      normalized += char;
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      normalized += char;
+      continue;
+    }
+    if (char === ",") {
+      let lookahead = i + 1;
+      while (/\s/.test(withoutComments[lookahead] ?? "")) lookahead++;
+      if (withoutComments[lookahead] === "}" || withoutComments[lookahead] === "]") continue;
+    }
+    normalized += char;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(normalized);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function readJsonObject(
+  cwd: string,
+  ref: string | null,
+  path: string
+): Record<string, unknown> | null {
+  const content = readFileAt(cwd, ref, path);
+  return content === null ? null : parseJsonObject(content);
 }
 
 /**
@@ -140,18 +220,26 @@ function historyCommits(
   return commits.map((c) => ({ ...c, changedFiles: byHash.get(c.hash) ?? [] }));
 }
 
-function importSpecifiers(content: string): string[] {
+function importSpecifiers(content: string, file: string): string[] {
   const out = new Set<string>();
   const quoted = /(?:\bfrom\s*|\brequire\s*\(|\bimport\s*\()\s*["']([^"']+)["']/g;
   for (const match of content.matchAll(quoted)) out.add(match[1]);
 
-  const languageImport = /^\s*(?:import|from)\s+(?:static\s+)?([\w.]+)/gm;
-  for (const match of content.matchAll(languageImport)) {
-    // Wildcard import (`import com.shop.dto.*;`): the capture stops at `*`,
-    // leaving a trailing dot. There is no class name to resolve — skip it
-    // deliberately instead of stem-matching the package name ("dto").
-    if (match[1].endsWith(".")) continue;
-    out.add(match[1]);
+  const extension = extname(file).toLowerCase();
+  if ([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"].includes(extension)) {
+    const sideEffectImport = /^\s*import\s*["']([^"']+)["']/gm;
+    for (const match of content.matchAll(sideEffectImport)) out.add(match[1]);
+  } else if (extension === ".py") {
+    const pythonImport = /^\s*(?:from\s+([.\w]+)\s+import\b|import\s+([.\w]+))/gm;
+    for (const match of content.matchAll(pythonImport)) {
+      const specifier = match[1] ?? match[2];
+      if (specifier && !/^\.+$/.test(specifier)) out.add(specifier);
+    }
+  } else if ([".java", ".kt", ".kts"].includes(extension)) {
+    const languageImport = /^\s*import\s+(?:static\s+)?([\w.]+)(?:\.\*)?\s*;?\s*$/gm;
+    for (const match of content.matchAll(languageImport)) {
+      if (!match[0].includes(".*")) out.add(match[1]);
+    }
   }
   return [...out];
 }
@@ -197,26 +285,213 @@ function usedCalls(content: string, name: string): string[] {
   return [...out];
 }
 
-function resolveImport(specifier: string, fromFile: string, all: Set<string>): string[] {
-  const candidates: string[] = [];
-  if (specifier.startsWith(".")) {
-    const base = normalizeRepoPath(posix.join(posix.dirname(fromFile), specifier));
-    candidates.push(base);
-    if (!extname(base)) {
-      for (const ext of SOURCE_EXTENSIONS) {
-        candidates.push(`${base}${ext}`, `${base}/index${ext}`);
+function moduleCandidates(base: string, all: Set<string>): string[] {
+  const normalized = normalizeRepoPath(base).replace(/\/$/, "");
+  const candidates = new Set<string>();
+  if (all.has(normalized)) candidates.add(normalized);
+
+  if (!extname(normalized)) {
+    for (const extension of SOURCE_EXTENSIONS) {
+      const file = `${normalized}${extension}`;
+      const index = `${normalized}/index${extension}`;
+      if (all.has(file)) candidates.add(file);
+      if (all.has(index)) candidates.add(index);
+    }
+  } else if (/\.(?:m?js|cjs|jsx)$/.test(normalized)) {
+    // TypeScript NodeNext projects commonly write the emitted `.js` extension
+    // in source imports even though the repository contains a `.ts`/`.tsx` file.
+    const stem = normalized.replace(/\.(?:m?js|cjs|jsx)$/, "");
+    for (const extension of [".ts", ".tsx", ".d.ts"]) {
+      const file = `${stem}${extension}`;
+      if (all.has(file)) candidates.add(file);
+    }
+  }
+  return [...candidates];
+}
+
+function pathIsWithin(directory: string, file: string): boolean {
+  return directory === "." || file === directory || file.startsWith(`${directory}/`);
+}
+
+function matchPathPattern(pattern: string, specifier: string): string[] | null {
+  if (!pattern.includes("*")) return pattern === specifier ? [] : null;
+  const expression = pattern
+    .split("*")
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("(.*)");
+  const match = new RegExp(`^${expression}$`).exec(specifier);
+  return match ? match.slice(1) : null;
+}
+
+function applyPathCaptures(target: string, captures: string[]): string {
+  let index = 0;
+  return target.replace(/\*/g, () => captures[index++] ?? captures.at(-1) ?? "");
+}
+
+function jsConfigCandidates(
+  cwd: string,
+  ref: string | null,
+  specifier: string,
+  fromFile: string,
+  all: Set<string>
+): string[] {
+  const candidates = new Set<string>();
+  const configs = [...all]
+    .filter((path) => /(?:^|\/)(?:tsconfig|jsconfig)\.json$/.test(path))
+    .filter((path) => pathIsWithin(posix.dirname(path), fromFile))
+    .sort((a, b) => posix.dirname(b).split("/").length - posix.dirname(a).split("/").length)
+    .slice(0, 12);
+
+  for (const configPath of configs) {
+    const config = readJsonObject(cwd, ref, configPath);
+    const compilerOptions = config && isRecord(config.compilerOptions) ? config.compilerOptions : null;
+    if (!compilerOptions) continue;
+    const configDir = posix.dirname(configPath);
+    const baseUrl =
+      typeof compilerOptions.baseUrl === "string"
+        ? normalizeRepoPath(posix.join(configDir, compilerOptions.baseUrl))
+        : configDir;
+
+    if (isRecord(compilerOptions.paths)) {
+      for (const [pattern, rawTargets] of Object.entries(compilerOptions.paths)) {
+        const captures = matchPathPattern(pattern, specifier);
+        if (captures === null || !Array.isArray(rawTargets)) continue;
+        for (const rawTarget of rawTargets) {
+          if (typeof rawTarget !== "string") continue;
+          const target = applyPathCaptures(rawTarget, captures);
+          for (const path of moduleCandidates(posix.join(baseUrl, target), all)) {
+            candidates.add(path);
+          }
+        }
       }
     }
-  } else {
-    const simple = specifier.split(/[./]/).filter(Boolean).at(-1)?.toLowerCase();
-    if (simple) {
-      for (const path of all) {
-        const stem = posix.basename(path, extname(path)).toLowerCase();
-        if (stem === simple) candidates.push(path);
+
+    // `baseUrl` itself permits non-relative imports even without a `paths` map.
+    if (typeof compilerOptions.baseUrl === "string") {
+      for (const path of moduleCandidates(posix.join(baseUrl, specifier), all)) {
+        candidates.add(path);
       }
     }
   }
-  return [...new Set(candidates.filter((path) => all.has(path)))];
+  return [...candidates];
+}
+
+function packageEntryCandidates(
+  cwd: string,
+  ref: string | null,
+  specifier: string,
+  all: Set<string>
+): string[] {
+  const candidates = new Set<string>();
+  const manifests = [...all].filter((path) => posix.basename(path) === "package.json").slice(0, 80);
+  for (const manifestPath of manifests) {
+    const manifest = readJsonObject(cwd, ref, manifestPath);
+    if (!manifest || typeof manifest.name !== "string") continue;
+    const packageName = manifest.name;
+    if (specifier !== packageName && !specifier.startsWith(`${packageName}/`)) continue;
+
+    const packageDir = posix.dirname(manifestPath);
+    const subpath = specifier === packageName ? "" : specifier.slice(packageName.length + 1);
+    const bases = subpath
+      ? [posix.join(packageDir, subpath), posix.join(packageDir, "src", subpath)]
+      : [posix.join(packageDir, "src/index"), posix.join(packageDir, "index")];
+    if (!subpath) {
+      for (const field of [manifest.source, manifest.module, manifest.main, manifest.types]) {
+        if (typeof field === "string") bases.unshift(posix.join(packageDir, field));
+      }
+    }
+    for (const base of bases) {
+      for (const path of moduleCandidates(base, all)) candidates.add(path);
+    }
+  }
+  return [...candidates];
+}
+
+function pythonCandidates(specifier: string, fromFile: string, all: Set<string>): string[] {
+  const candidates = new Set<string>();
+  const leadingDots = /^\.+/.exec(specifier)?.[0].length ?? 0;
+  const modulePath = specifier.slice(leadingDots).replaceAll(".", "/");
+  const roots = new Set<string>();
+
+  if (leadingDots) {
+    let base = posix.dirname(fromFile);
+    for (let i = 1; i < leadingDots; i++) base = posix.dirname(base);
+    roots.add(base);
+  } else {
+    roots.add(".");
+    for (const conventional of ["src", "lib"]) {
+      if ([...all].some((path) => path.startsWith(`${conventional}/`))) roots.add(conventional);
+    }
+
+    // The parent of the outermost package containing the importing file is a
+    // Python import root (for example `src` in `src/shop/service.py`).
+    let packageDir = posix.dirname(fromFile);
+    while (all.has(posix.join(packageDir, "__init__.py"))) {
+      roots.add(posix.dirname(packageDir));
+      packageDir = posix.dirname(packageDir);
+    }
+  }
+
+  for (const root of roots) {
+    const base = normalizeRepoPath(posix.join(root, modulePath));
+    for (const path of [`${base}.py`, `${base}/__init__.py`]) {
+      if (all.has(path)) candidates.add(path);
+    }
+  }
+  return [...candidates];
+}
+
+function javaCandidates(specifier: string, all: Set<string>): string[] {
+  const candidates = new Set<string>();
+  const parts = specifier.split(".").filter(Boolean);
+
+  // Progressively remove a possible static member (`Util.create` → `Util`) and
+  // match the remaining fully qualified class beneath any Java source root.
+  for (let end = parts.length; end > 0 && candidates.size === 0; end--) {
+    const suffix = `${parts.slice(0, end).join("/")}.java`;
+    for (const path of all) {
+      if (path === suffix || path.endsWith(`/${suffix}`)) candidates.add(path);
+    }
+  }
+
+  // Some small/legacy repositories omit package-shaped source directories.
+  // An exact class basename is still useful evidence, but only for a segment
+  // that looks like a Java type (not a lowercase package or static method).
+  if (!candidates.size) {
+    const className = [...parts].reverse().find((part) => /^[A-Z]/.test(part));
+    if (className) {
+      for (const path of all) {
+        if (posix.basename(path) === `${className}.java`) candidates.add(path);
+      }
+    }
+  }
+  return [...candidates];
+}
+
+function resolveImport(
+  cwd: string,
+  ref: string | null,
+  specifier: string,
+  fromFile: string,
+  all: Set<string>
+): string[] {
+  const extension = extname(fromFile).toLowerCase();
+  if (extension === ".py") return pythonCandidates(specifier, fromFile, all);
+  if ([".java", ".kt", ".kts"].includes(extension)) return javaCandidates(specifier, all);
+
+  if (specifier.startsWith(".")) {
+    return moduleCandidates(posix.join(posix.dirname(fromFile), specifier), all);
+  }
+
+  if ([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"].includes(extension)) {
+    return [
+      ...new Set([
+        ...jsConfigCandidates(cwd, ref, specifier, fromFile, all),
+        ...packageEntryCandidates(cwd, ref, specifier, all),
+      ]),
+    ];
+  }
+  return [];
 }
 
 function declaredSymbols(content: string): string[] {
@@ -277,11 +552,11 @@ export function discoverRelatedFiles(
   };
 
   const bindings = importBindings(content);
-  for (const specifier of importSpecifiers(content)) {
+  for (const specifier of importSpecifiers(content, normalized)) {
     // Which imported names the file actually calls (bounded — it is prompt text).
     const uses = (bindings.get(specifier) ?? []).flatMap((n) => usedCalls(content, n)).slice(0, 6);
     const detail = uses.length ? ` (uses: ${uses.join(", ")})` : "";
-    for (const path of resolveImport(specifier, normalized, all)) {
+    for (const path of resolveImport(cwd, ref, specifier, normalized, all)) {
       add(path, 100, `direct import: ${specifier}${detail}`);
     }
   }
@@ -387,17 +662,16 @@ export function gitHistory(
   return capText(lines.join("\n"), includePatch ? 16_000 : 5_000);
 }
 
-/** Import specifiers of `file` that resolve to NOTHING in this repository —
- * external framework/library classes. Surfaced up front so the reviewer never
- * burns its exploration budget hunting for code that cannot be found here.
- * JDK imports (java.* / javax.*) are dropped as noise; capped for prompt size. */
+/** Import specifiers that the conservative resolver could not map to a file.
+ * They may be third-party dependencies, generated sources, or local aliases
+ * the resolver does not understand. JDK imports are dropped as noise. */
 export function unresolvedImports(cwd: string, ref: string | null, file: string): string[] {
   const normalized = normalizeRepoPath(file);
   const all = new Set(listFilesAt(cwd, ref).map(normalizeRepoPath));
   const content = readFileAt(cwd, ref, normalized) ?? "";
-  return importSpecifiers(content)
+  return importSpecifiers(content, normalized)
     .filter((s) => !/^javax?\./.test(s))
-    .filter((s) => resolveImport(s, normalized, all).length === 0)
+    .filter((s) => resolveImport(cwd, ref, s, normalized, all).length === 0)
     .slice(0, 20);
 }
 
@@ -410,7 +684,7 @@ export function unresolvedImports(cwd: string, ref: string | null, file: string)
  * code_search lands the real definition, and it naturally scopes to whatever
  * segment/diff is being reviewed. */
 export function buildReviewEvidence(cwd: string, ref: string | null, file: string): string {
-  const external = unresolvedImports(cwd, ref, file);
+  const unresolved = unresolvedImports(cwd, ref, file);
   return capText(
     [
       "## Related code",
@@ -419,15 +693,14 @@ export function buildReviewEvidence(cwd: string, ref: string | null, file: strin
       "These are project files the code under review imports / co-changes with. " +
         "For any function or symbol it calls from them, run code_search(<symbol>) or " +
         "file_read on the file above to pull the real definition — do not assume behavior.",
-      ...(external.length
+      ...(unresolved.length
         ? [
             "",
-            "## External dependencies (NOT in this repository)",
-            ...external.map((s) => `- ${s}`),
-            "These imports resolve to nothing in this repo — they are external framework/library " +
-              "classes. NEVER search for them (code_search / file_find / glob will find nothing, " +
-              "under any name or path variation). Judge their usage against the Framework Rules " +
-              "and the evidence above.",
+            "## Unresolved imports (not confirmed external)",
+            ...unresolved.map((s) => `- ${s}`),
+            "The conservative resolver could not map these imports to repository files. If their " +
+              "behavior matters, make one targeted code_search(<symbol>) or file_find lookup, then " +
+              "move on rather than retrying path variations.",
           ]
         : []),
       "",

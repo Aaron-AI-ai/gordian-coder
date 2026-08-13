@@ -20,6 +20,7 @@ import {
   onSessionIdle,
   MAX_RESUMES,
   MAX_MISS_STREAK,
+  MAX_FAILED_SUBMITS,
   NO_ACTIVE_REVIEW,
 } from "../loop";
 import { REQUIRED_CATEGORIES } from "../contract";
@@ -30,6 +31,7 @@ function baseState(over: Partial<ReviewState> = {}): ReviewState {
     cwd: ".",
     targets: ["a.ts", "b.ts"],
     currentIndex: 0,
+    submitToken: "test-token",
     categories: ["security"],
     diffRange: null,
     ref: null,
@@ -51,9 +53,11 @@ function baseState(over: Partial<ReviewState> = {}): ReviewState {
     missStreak: 0,
     recheckCount: {},
     failedSubmits: {},
+    staleSubmits: {},
     lastSubmitHash: {},
     lastValidFindings: {},
     forcedNotes: {},
+    assessedByTarget: {},
     deepPasses: 1,
     deepPassDone: {},
     resumes: 0,
@@ -203,6 +207,32 @@ describe("startReview / submitReview (full loop)", () => {
     expect(prompt).not.toContain("<current_file_diff>");
   });
 
+  it("preserves progress when f_review_context is repeated in the same session", async () => {
+    const d = gitRepo();
+    await startReview({}, d, "t");
+    const before = getState("t")!;
+    before.currentIndex = 1;
+    before.iterations = 7;
+    const token = before.submitToken;
+
+    const duplicate = await startReview({ files: ["a.ts"] }, d, "t");
+    expect(duplicate).toContain("Duplicate f_review_context ignored");
+    expect(duplicate).toContain(`CURRENT_SUBMIT_TOKEN=${token}`);
+    expect(getState("t")!.currentIndex).toBe(1);
+    expect(getState("t")!.iterations).toBe(7);
+  });
+
+  it("serializes concurrent context calls so the first session state is not overwritten", async () => {
+    const d = gitRepo();
+    const [first, duplicate] = await Promise.all([
+      startReview({ files: ["a.ts"] }, d, "t"),
+      startReview({ files: ["b.ts"] }, d, "t"),
+    ]);
+    expect(first).toContain("Queued 1 target(s)");
+    expect(duplicate).toContain("Duplicate f_review_context ignored");
+    expect(getState("t")!.targets).toEqual(["a.ts"]);
+  });
+
   it("files-only review defaults to whole-file mode", async () => {
     const d = gitRepo();
     await startReview({ files: ["a.ts"] }, d, "t");
@@ -312,7 +342,7 @@ describe("startReview / submitReview (full loop)", () => {
     expect(getState("t")!.findings["a.ts"]).toEqual([]);
   });
 
-  it("caps coverage-missing submissions, then force-accepts the findings it has", async () => {
+  it("caps coverage-missing submissions, then force-advances with the findings it has", async () => {
     const d = gitRepo();
     await startReview({}, d, "t");
     const partial = {
@@ -327,6 +357,23 @@ describe("startReview / submitReview (full loop)", () => {
     const forced = await submitReview(partial, "t");
     expect(forced).toContain("forced with incomplete coverage");
     expect(getState("t")!.findings["a.ts"]).toHaveLength(1);
+  });
+
+  it("counts malformed submits consecutively and resets after recovery", async () => {
+    const d = gitRepo();
+    await startReview({ files: ["a.ts"], deepPasses: 3 }, d, "t");
+
+    for (let round = 0; round < 2; round++) {
+      expect(await submitReview({ garbage: true }, "t")).toContain("rejected submit 1/5");
+      const st = getState("t")!;
+      guardExploration(st, "file_read", "");
+      const recovered = await submitReview(
+        { assessed: [...REQUIRED_CATEGORIES], findings: [] },
+        "t"
+      );
+      expect(recovered).toContain(`Deep review round ${round + 2}/3`);
+      expect(getState("t")!.failedSubmits["a.ts"]).toBe(0);
+    }
   });
 
   it("bounces degenerate findings (wrong script / looping text), then drops them at the cap", async () => {
@@ -398,14 +445,23 @@ describe("startReview / submitReview (full loop)", () => {
     expect(getState("t")!.findings["a.ts"]).toHaveLength(1); // earlier findings kept, not []
   });
 
-  it("warns in the completion message when a target was force-accepted", async () => {
+  it("terminates but never reports completion/PASS when a target was force-advanced", async () => {
     const d = gitRepo();
-    await startReview({ files: ["a.ts"] }, d, "t"); // single target → forced accept finalizes
+    await startReview({ files: ["a.ts"], failOn: "major" }, d, "t"); // single target → forced terminal result
     for (let i = 1; i <= 5; i++) await submitReview({ garbage: true }, "t");
     const done = await submitReview({ garbage: true }, "t");
-    expect(done).toContain("Review complete");
-    expect(done).toContain("force-accepted");
+    expect(done).toContain("Review incomplete");
+    expect(done).toContain("Verdict: FAIL");
+    expect(done).not.toContain("Verdict: PASS");
+    expect(done).not.toContain("✅ Review complete");
+    expect(done).toContain("force-advanced");
     expect(done).toContain("a.ts");
+
+    const report = /Report: (.+)$/.exec(done)![1];
+    const md = readFileSync(join(d, report), "utf8");
+    expect(md).toContain("Status: **INCOMPLETE**");
+    expect(md).toContain("**Verdict: FAIL**");
+    expect(md).not.toContain("**Verdict: PASS**");
   });
 
   it("accepts a byte-identical resubmission instead of bouncing it again", async () => {
@@ -416,6 +472,95 @@ describe("startReview / submitReview (full loop)", () => {
     // the model loops: same payload again → pointless to bounce, accept and move on
     const accepted = await submitReview(fullSubmit("a.ts", 1), "t");
     expect(accepted).toContain("Next file: b.ts");
+  });
+
+  it("ignores a replay carrying the previous target's submit token", async () => {
+    const d = gitRepo();
+    await startReview({}, d, "t");
+    const first = getState("t")!;
+    const payload = {
+      submitToken: first.submitToken,
+      assessed: [...REQUIRED_CATEGORIES],
+      findings: [],
+    };
+    guardExploration(first, "file_read", "");
+    expect(await submitReview(payload, "t")).toContain("Next file: b.ts");
+
+    const replay = await submitReview(payload, "t");
+    expect(replay).toContain("Stale/duplicate f_review_submit ignored");
+    expect(getState("t")!.currentIndex).toBe(1);
+    expect(getState("t")!.findings["b.ts"]).toBeUndefined();
+  });
+
+  it("resets the stale-token streak after the model recovers", async () => {
+    const d = gitRepo();
+    await startReview({ files: ["a.ts"], deepPasses: 3 }, d, "t");
+    const st = getState("t")!;
+    const staleToken = st.submitToken;
+    guardExploration(st, "file_read", "");
+    expect(
+      await submitReview(
+        { submitToken: staleToken, assessed: [...REQUIRED_CATEGORIES], findings: [] },
+        "t"
+      )
+    ).toContain("Deep review round 2/3");
+
+    expect(
+      await submitReview(
+        { submitToken: staleToken, assessed: [...REQUIRED_CATEGORIES], findings: [] },
+        "t"
+      )
+    ).toContain("Stale/duplicate");
+    const current = getState("t")!;
+    expect(current.staleSubmits["a.ts"]).toBe(1);
+
+    guardExploration(current, "file_read", "");
+    expect(
+      await submitReview(
+        {
+          submitToken: current.submitToken,
+          assessed: [...REQUIRED_CATEGORIES],
+          findings: [],
+        },
+        "t"
+      )
+    ).toContain("Deep review round 3/3");
+    expect(getState("t")!.staleSubmits["a.ts"]).toBe(0);
+  });
+
+  it("terminates repeated stale-token replay as forced INCOMPLETE", async () => {
+    const d = gitRepo();
+    await startReview({ files: ["a.ts"], deepPasses: 2, failOn: "major" }, d, "t");
+    const first = getState("t")!;
+    const staleToken = first.submitToken;
+    guardExploration(first, "file_read", "");
+    expect(
+      await submitReview(
+        { submitToken: staleToken, assessed: [...REQUIRED_CATEGORIES], findings: [] },
+        "t"
+      )
+    ).toContain("Deep review round 2/2");
+
+    for (let i = 1; i <= MAX_FAILED_SUBMITS; i++) {
+      const ignored = await submitReview(
+        { submitToken: staleToken, assessed: [...REQUIRED_CATEGORIES], findings: [] },
+        "t"
+      );
+      expect(ignored).toContain("Stale/duplicate f_review_submit ignored");
+    }
+    const terminal = await submitReview(
+      { submitToken: staleToken, assessed: [...REQUIRED_CATEGORIES], findings: [] },
+      "t"
+    );
+    expect(terminal).toContain("Review incomplete");
+    expect(terminal).toContain("Verdict: FAIL");
+    expect(terminal).not.toContain("Verdict: PASS");
+    expect(terminal).not.toContain("✅ Review complete");
+    const report = /Report: (.+)$/.exec(terminal)![1];
+    expect(readFileSync(join(d, report), "utf8")).toContain(
+      "repeated stale submit-token replays"
+    );
+    expect(getState("t")).toBeUndefined();
   });
 
   it("dedupes exact-duplicate findings on accept", async () => {

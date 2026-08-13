@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   MAX_RUN_TARGETS,
+  MAX_UNFINISHED_RUNS,
+  UNFINISHED_RUN_TTL_MS,
   RUN_BATCH_SIZE,
   RUNS_DIR,
   createRun,
@@ -12,6 +14,7 @@ import {
   planReview,
   pruneRuns,
   readRunResults,
+  reviewCriteriaIdentity,
   reviewSlug,
   runCoverage,
   runDir,
@@ -97,6 +100,19 @@ describe("run store primitives", () => {
     expect(loadRun(m2.runId, d)?.targets).toEqual(["b.ts"]);
   });
 
+  it("claims unique run ids for concurrent creators", async () => {
+    const d = dir();
+    const runs = await Promise.all(
+      Array.from({ length: 20 }, (_, index) =>
+        createRun({ ...baseMeta(["a.ts"]), planGuidance: `parallel-${index}` }, d)
+      )
+    );
+    expect(new Set(runs.map((run) => run.runId)).size).toBe(runs.length);
+    for (const run of runs) {
+      expect(loadRun(run.runId, d)?.planGuidance).toBe(run.planGuidance);
+    }
+  });
+
   it("loadRun rejects unknown and path-escaping runIds", () => {
     const d = dir();
     expect(loadRun("nope", d)).toBeNull();
@@ -105,9 +121,10 @@ describe("run store primitives", () => {
   });
 
   it("reviewSlug is filesystem-safe and distinct per path", () => {
-    expect(reviewSlug("src/core/a.ts")).toBe("src__core__a.ts");
-    expect(reviewSlug("src\\win.ts")).toBe("src__win.ts");
-    expect(reviewSlug("weird name?.ts")).toBe("weird_name_.ts");
+    expect(reviewSlug("src/core/a.ts")).toStartWith("src__core__a.ts--");
+    expect(reviewSlug("src\\win.ts")).toStartWith("src__win.ts--");
+    expect(reviewSlug("weird name?.ts")).toStartWith("weird_name_.ts--");
+    expect(reviewSlug("a/b.ts")).not.toBe(reviewSlug("a__b.ts"));
   });
 
   it("writeFileReview + readRunResults round-trip; overwrite is idempotent", async () => {
@@ -118,7 +135,12 @@ describe("run store primitives", () => {
     const results = readRunResults(meta.runId, d);
     expect(results).toHaveLength(1); // overwritten, not duplicated
     expect(results[0].explorationCalls).toBe(9);
-    const md = readFileSync(join(runDir(meta.runId, d), "reviews", "src__a.ts.md"), "utf8");
+    expect(results[0].revision).toBe(2);
+    expect(results[0].coverageComplete).toBe(true);
+    const md = readFileSync(
+      join(runDir(meta.runId, d), "reviews", `${reviewSlug("src/a.ts")}.md`),
+      "utf8"
+    );
     expect(md).toBe("# md v2");
   });
 
@@ -130,6 +152,26 @@ describe("run store primitives", () => {
     expect(readRunResults(meta.runId, d)).toHaveLength(1);
   });
 
+  it("readRunResults rejects valid JSON with a corrupt shape or wrong artifact filename", async () => {
+    const d = dir();
+    const meta = await createRun(baseMeta(["a.ts"]), d);
+    const reviews = join(runDir(meta.runId, d), "reviews");
+    mkdirSync(reviews, { recursive: true });
+    writeFileSync(join(reviews, "a.ts.json"), "{}");
+    writeFileSync(join(reviews, "renamed.json"), JSON.stringify(result("a.ts")));
+    expect(readRunResults(meta.runId, d)).toEqual([]);
+    expect(runCoverage(meta, readRunResults(meta.runId, d)).missing).toEqual(["a.ts"]);
+  });
+
+  it("rejects a finding whose embedded file does not match its review artifact", async () => {
+    const d = dir();
+    const meta = await createRun(baseMeta(["a.ts"]), d);
+    const bad = result("a.ts");
+    bad.findings[0].file = "other.ts";
+    expect(writeFileReview(meta.runId, bad, "# bad", d)).rejects.toThrow("does not match");
+    expect(readRunResults(meta.runId, d)).toEqual([]);
+  });
+
   it("runCoverage reports reviewed vs missing", async () => {
     const d = dir();
     const meta = await createRun(baseMeta(["a.ts", "b.ts", "c.ts"]), d);
@@ -139,19 +181,69 @@ describe("run store primitives", () => {
     expect(cov.missing).toEqual(["b.ts", "c.ts"]);
   });
 
-  it("pruneRuns keeps only the newest N run dirs", async () => {
+  it("pruneRuns keeps unfinished runs and only the newest N terminal runs", async () => {
     const d = dir();
     const ids: string[] = [];
     for (let i = 0; i < 4; i++) {
-      const m = await createRun({ ...baseMeta(["a.ts"]), label: `r${i}` }, d);
+      const m = await createRun(
+        { ...baseMeta(["a.ts"]), label: `r${i}`, output: join(d, `report-${i}.md`) },
+        d
+      );
       ids.push(m.runId);
+      await writeFileReview(m.runId, result("a.ts"), "# a", d);
+      await finalizeRun(m.runId, d);
       // Distinct mtimes so newest-first ordering is deterministic.
       const when = new Date(Date.now() - (4 - i) * 60_000);
       utimesSync(runDir(m.runId, d), when, when);
     }
+    const unfinished = await createRun(
+      { ...baseMeta(["a.ts"]), label: "unfinished", output: join(d, "unfinished.md") },
+      d
+    );
+    await finalizeRun(unfinished.runId, d);
+    const cachePath = join(runDir(unfinished.runId, d), "finalize.json");
+    const cache = JSON.parse(readFileSync(cachePath, "utf8"));
+    writeFileSync(cachePath, JSON.stringify({ ...cache, terminal: true }));
+    const old = new Date(Date.now() - 24 * 60 * 60_000);
+    utimesSync(runDir(unfinished.runId, d), old, old);
+
     const removed = pruneRuns(d, 2);
     expect(removed.sort()).toEqual([ids[0], ids[1]].sort());
     expect(existsSync(runDir(ids[3], d))).toBe(true);
+    expect(existsSync(runDir(unfinished.runId, d))).toBe(true);
+  });
+
+  it("prunes abandoned unfinished runs after the TTL", async () => {
+    const d = dir();
+    const stale = await createRun(baseMeta(["a.ts"]), d);
+    const old = new Date(Date.now() - UNFINISHED_RUN_TTL_MS - 1000);
+    writeFileSync(
+      join(runDir(stale.runId, d), "run.json"),
+      JSON.stringify({
+        ...stale,
+        createdAt: old.toISOString(),
+      })
+    );
+    utimesSync(join(runDir(stale.runId, d), "run.json"), old, old);
+    utimesSync(runDir(stale.runId, d), old, old);
+    expect(pruneRuns(d)).toContain(stale.runId);
+    expect(existsSync(runDir(stale.runId, d))).toBe(false);
+  });
+
+  it("keeps an old unfinished run when a review artifact was written recently", async () => {
+    const d = dir();
+    const stale = await createRun(baseMeta(["a.ts"]), d);
+    const old = new Date(Date.now() - UNFINISHED_RUN_TTL_MS - 1000);
+    writeFileSync(
+      join(runDir(stale.runId, d), "run.json"),
+      JSON.stringify({ ...stale, createdAt: old.toISOString() })
+    );
+    utimesSync(join(runDir(stale.runId, d), "run.json"), old, old);
+    utimesSync(runDir(stale.runId, d), old, old);
+
+    await writeFileReview(stale.runId, result("a.ts"), "# recent work", d);
+    expect(pruneRuns(d)).not.toContain(stale.runId);
+    expect(existsSync(runDir(stale.runId, d))).toBe(true);
   });
 });
 
@@ -165,6 +257,94 @@ describe("planReview", () => {
     expect(msg).toContain("f_review_finalize");
     const runId = /Run created: (\S+)/.exec(msg)![1];
     expect(loadRun(runId, d)?.targets).toEqual(["a.ts", "b.ts"]);
+  });
+
+  it("reuses an identical unfinished plan instead of spawning another fan-out", async () => {
+    const d = gitRepo();
+    const first = await planReview({}, d);
+    const runId = /Run created: (\S+)/.exec(first)![1];
+    const second = await planReview({}, d);
+    expect(second).toContain("Duplicate f_review_plan ignored");
+    expect(second).toContain(`resume unfinished run ${runId}`);
+    expect(readdirSync(join(d, RUNS_DIR)).filter((name) => name !== ".claims")).toHaveLength(1);
+  });
+
+  it("atomically reuses one run for concurrent identical plans across processes", async () => {
+    const d = gitRepo();
+    const modulePath = join(import.meta.dir, "..", "run.ts");
+    const script =
+      `import { planReview } from ${JSON.stringify(modulePath)};` +
+      `process.stdout.write(await planReview({}, ${JSON.stringify(d)}));`;
+    const workers = Array.from({ length: 8 }, () =>
+      Bun.spawn([process.execPath, "-e", script], { cwd: d, stdout: "pipe", stderr: "pipe" })
+    );
+    const messages = await Promise.all(
+      workers.map(async (worker) => {
+        const output = await new Response(worker.stdout).text();
+        expect(await worker.exited).toBe(0);
+        return output;
+      })
+    );
+    const created = messages.filter((message) => message.startsWith("Run created:"));
+    expect(created).toHaveLength(1);
+    const runId = /Run created: (\S+)/.exec(created[0])![1];
+    for (const duplicate of messages.filter((message) => message !== created[0])) {
+      expect(duplicate).toContain("Duplicate f_review_plan ignored");
+      expect(duplicate).toContain(`resume unfinished run ${runId}`);
+    }
+    expect(readdirSync(join(d, RUNS_DIR)).filter((name) => name !== ".claims")).toEqual([
+      runId,
+    ]);
+  });
+
+  it("creates a new run when HEAD moves even if the changed file list is identical", async () => {
+    const d = gitRepo();
+    const first = await planReview({}, d);
+    const firstId = /Run created: (\S+)/.exec(first)![1];
+    const firstRange = loadRun(firstId, d)!.range;
+
+    writeFileSync(join(d, "a.ts"), "a3\n");
+    writeFileSync(join(d, "b.ts"), "b3\n");
+    Bun.spawnSync(["git", "add", "-A"], { cwd: d });
+    Bun.spawnSync(["git", "commit", "-qm", "next"], { cwd: d });
+
+    const second = await planReview({}, d);
+    expect(second).toContain("Run created:");
+    expect(second).not.toContain("Duplicate f_review_plan ignored");
+    const secondId = /Run created: (\S+)/.exec(second)![1];
+    expect(secondId).not.toBe(firstId);
+    expect(loadRun(secondId, d)!.range).not.toBe(firstRange);
+  });
+
+  it("creates a new run when effective project review rules change", async () => {
+    const d = gitRepo();
+    mkdirSync(join(d, "review", "rules"), { recursive: true });
+    writeFileSync(join(d, "review", "rules", "local.md"), "# Local\n\nfirst rule\n");
+    const first = await planReview({}, d);
+
+    writeFileSync(join(d, "review", "rules", "local.md"), "# Local\n\nsecond rule\n");
+    const second = await planReview({}, d);
+    expect(second).toContain("Run created:");
+    expect(second).not.toContain("Duplicate f_review_plan ignored");
+    expect(/Run created: (\S+)/.exec(second)![1]).not.toBe(/Run created: (\S+)/.exec(first)![1]);
+  });
+
+  it("bounds distinct unfinished plans without deleting an active run", async () => {
+    const d = gitRepo();
+    const ids: string[] = [];
+    for (let i = 0; i < MAX_UNFINISHED_RUNS; i++) {
+      const meta = await createRun(
+        { ...baseMeta(["a.ts", "b.ts"]), planGuidance: `variant-${i}` },
+        d
+      );
+      ids.push(meta.runId);
+    }
+    const refused = await planReview({ planGuidance: "one-too-many" }, d);
+    expect(refused).toContain("Refusing to create another run");
+    expect(readdirSync(join(d, RUNS_DIR)).filter((name) => name !== ".claims")).toHaveLength(
+      MAX_UNFINISHED_RUNS
+    );
+    expect(existsSync(runDir(ids[0], d))).toBe(true);
   });
 
   it("defaults files-only runs to whole-file mode", async () => {
@@ -218,6 +398,29 @@ describe("run-mode session (startReview/submitReview with runId)", () => {
     expect(getState("rs")?.targets).toEqual(["a.ts"]);
   });
 
+  it("rejects joining a run after its effective review rules changed", async () => {
+    const d = gitRepo();
+    const msg = await planReview({ files: ["a.ts"] }, d);
+    const runId = /Run created: (\S+)/.exec(msg)![1];
+    mkdirSync(join(d, "review", "rules"), { recursive: true });
+    writeFileSync(join(d, "review", "rules", "new.md"), "# Newly authoritative rule\n");
+
+    const stale = await startReview({ runId, files: ["a.ts"] }, d, "rs");
+    expect(stale).toContain("effective review rules changed");
+    expect(getState("rs")).toBeUndefined();
+  });
+
+  it("rejects joining a files-only run after its source snapshot changed", async () => {
+    const d = gitRepo();
+    const msg = await planReview({ files: ["a.ts"] }, d);
+    const runId = /Run created: (\S+)/.exec(msg)![1];
+    writeFileSync(join(d, "a.ts"), "changed after planning\n");
+
+    const stale = await startReview({ runId, files: ["a.ts"] }, d, "rs");
+    expect(stale).toContain("files-only source snapshot changed");
+    expect(getState("rs")).toBeUndefined();
+  });
+
   it("rejects zero or multiple files, non-target files, and unknown runs", async () => {
     const d = gitRepo();
     const meta = await createRun(baseMeta(["a.ts"]), d);
@@ -246,7 +449,10 @@ describe("run-mode session (startReview/submitReview with runId)", () => {
     expect(results[0].file).toBe("a.ts");
     expect(results[0].partial).toBe(false);
     expect(results[0].explorationCalls).toBe(1);
-    const md = readFileSync(join(runDir(meta.runId, d), "reviews", "a.ts.md"), "utf8");
+    const md = readFileSync(
+      join(runDir(meta.runId, d), "reviews", `${reviewSlug("a.ts")}.md`),
+      "utf8"
+    );
     expect(md).toContain("## a.ts");
     // Aggregate report dir untouched by the subagent:
     expect(existsSync(join(d, "fcq/report/f-review"))).toBe(false);
@@ -330,6 +536,42 @@ describe("finalizeRun", () => {
     expect(md).toContain("Reviewed without exploration calls");
   });
 
+  it("keeps bounded-recovery and partial artifacts terminal but quality-incomplete", async () => {
+    const d = gitRepo();
+    const meta = await createRun({ ...baseMeta(["a.ts", "b.ts"]), failOn: "major" }, d);
+    await writeFileReview(
+      meta.runId,
+      result("a.ts", {
+        findings: [],
+        forced: "forced after repeated invalid submissions",
+        coverageComplete: false,
+      }),
+      "# a",
+      d
+    );
+    await writeFileReview(
+      meta.runId,
+      result("b.ts", { findings: [], partial: true, coverageComplete: false }),
+      "# b",
+      d
+    );
+
+    const msg = await finalizeRun(meta.runId, d);
+    expect(msg).toContain("Run terminated — INCOMPLETE");
+    expect(msg).toContain("Verdict: FAIL");
+    expect(msg).not.toContain("missing:");
+    expect(msg).not.toContain("Re-spawn");
+    expect(msg).not.toContain("Verdict: PASS");
+    expect(msg).not.toContain("✅ Run complete");
+    expect(msg).toContain("force-advanced by bounded recovery");
+
+    const path = /Report: (.+)$/.exec(msg)![1];
+    const md = readFileSync(join(d, path), "utf8");
+    expect(md).toContain("QUALITY INCOMPLETE");
+    expect(md).toContain("Verdict: **FAIL** — quality incomplete");
+    expect(md).not.toContain("Verdict: PASS");
+  });
+
   it("baseline is snapshotted at plan time — a finalize retry never marks this run's findings as pre-existing", async () => {
     const d = gitRepo();
     // A prior report exists with rule "old-rule" on a.ts.
@@ -380,5 +622,84 @@ describe("finalizeRun", () => {
     expect(msg).toContain("✅ Run complete — 1 file(s), 1 issue(s)");
     const md = readFileSync(join(d, /Report: (.+)$/.exec(msg)![1]), "utf8");
     expect(md).not.toContain("evil.ts");
+  });
+
+  it("returns a cached finalize response without rewriting/archiving the report", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(["a.ts"]), d);
+    await writeFileReview(meta.runId, result("a.ts"), "# a", d);
+
+    const first = await finalizeRun(meta.runId, d);
+    const reportPath = join(d, /Report: (.+)$/.exec(first)![1]);
+    const firstMtime = statSync(reportPath).mtimeMs;
+    const second = await finalizeRun(meta.runId, d);
+    expect(second).toBe(first);
+    expect(statSync(reportPath).mtimeMs).toBe(firstMtime);
+  });
+
+  it("reuses the finalize cache when output is an absolute path", async () => {
+    const d = gitRepo();
+    const reportPath = join(d, "absolute-report.md");
+    const meta = await createRun({ ...baseMeta(["a.ts"]), output: reportPath }, d);
+    await writeFileReview(meta.runId, result("a.ts"), "# a", d);
+
+    const first = await finalizeRun(meta.runId, d);
+    const firstMtime = statSync(reportPath).mtimeMs;
+    const second = await finalizeRun(meta.runId, d);
+    expect(second).toBe(first);
+    expect(statSync(reportPath).mtimeMs).toBe(firstMtime);
+  });
+
+  it("invalidates the finalize cache when an output-affecting run option changes", async () => {
+    const d = gitRepo();
+    const reportPath = join(d, "gate.md");
+    const meta = await createRun(
+      { ...baseMeta(["a.ts"]), failOn: "major", output: reportPath },
+      d
+    );
+    await writeFileReview(meta.runId, result("a.ts"), "# a", d);
+    expect(await finalizeRun(meta.runId, d)).toContain("Verdict: FAIL");
+
+    writeFileSync(
+      join(runDir(meta.runId, d), "run.json"),
+      JSON.stringify({ ...meta, failOn: "blocker" })
+    );
+    expect(await finalizeRun(meta.runId, d)).toContain("Verdict: PASS");
+  });
+
+  it("invalidates a cached complete result when effective review rules change", async () => {
+    const d = gitRepo();
+    const reportPath = join(d, "criteria.md");
+    const meta = await createRun(
+      {
+        ...baseMeta(["a.ts"]),
+        output: reportPath,
+        criteriaIdentity: reviewCriteriaIdentity(d),
+      },
+      d
+    );
+    await writeFileReview(meta.runId, result("a.ts"), "# a", d);
+    expect(await finalizeRun(meta.runId, d)).toContain("✅ Run complete");
+
+    mkdirSync(join(d, "review", "rules"), { recursive: true });
+    writeFileSync(join(d, "review", "rules", "new.md"), "# New rule\n");
+    const stale = await finalizeRun(meta.runId, d);
+    expect(stale).toContain("INCOMPLETE");
+    expect(stale).toContain("effective review rules changed after planning");
+    expect(stale).not.toContain("✅ Run complete");
+  });
+
+  it("invalidates a cached complete files-only run when its source changes", async () => {
+    const d = gitRepo();
+    const plan = await planReview({ files: ["a.ts"] }, d);
+    const runId = /Run created: (\S+)/.exec(plan)![1];
+    await writeFileReview(runId, result("a.ts", { findings: [] }), "# clean", d);
+    expect(await finalizeRun(runId, d)).toContain("✅ Run complete");
+
+    writeFileSync(join(d, "a.ts"), "changed after review\n");
+    const stale = await finalizeRun(runId, d);
+    expect(stale).toContain("INCOMPLETE");
+    expect(stale).toContain("review source files changed after planning");
+    expect(stale).not.toContain("✅ Run complete");
   });
 });
