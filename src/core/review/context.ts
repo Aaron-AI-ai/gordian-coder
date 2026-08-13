@@ -13,6 +13,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { z } from "zod";
+import { MAX_ITER } from "./reader";
 
 export const CommitSpec = z.union([
   z.string(), // single ref ("HEAD", "<sha>") or range ("A..B")
@@ -31,25 +32,41 @@ export const ReviewInputSchema = z.object({
 });
 export type ReviewInput = z.infer<typeof ReviewInputSchema>;
 
-export interface ReviewConfig {
-  exclude?: string[];
-  output?: string;
-  language?: string; // report/findings language, e.g. "ko" (default), "en"
-  frameworkGuide?: string; // path to a framework conventions md (overrides bundled default)
-  failOn?: string; // CI gate: FAIL when any finding is at/above this severity ("blocker"|"major"|"minor"|"nit")
-  debug?: boolean; // emit `[f-review:*]` trace logs (alternative to F_REVIEW_DEBUG env)
-  deepPasses?: number; // review rounds per file/segment (clamped 1..5; 1 = single pass)
-}
+// Config is external, hand-written JSON — validate at runtime (CLAUDE.md rule).
+// A wrong-typed field degrades to "unset" (per-field .catch) instead of
+// crashing the review (e.g. `"rulesDir": 5` reaching path.join) or silently
+// dropping the whole file.
+const field = <T extends z.ZodType>(t: T) => t.optional().catch(undefined);
+export const ReviewConfigSchema = z.object({
+  exclude: field(z.array(z.string())),
+  output: field(z.string()),
+  language: field(z.string()), // report/findings language, e.g. "ko" (default), "en"
+  frameworkGuide: field(z.string()), // path to a framework conventions md (overrides bundled default)
+  failOn: field(z.string()), // CI gate: FAIL when any finding is at/above this severity ("blocker"|"major"|"minor"|"nit")
+  debug: field(z.boolean()), // emit `[f-review:*]` trace logs (alternative to F_REVIEW_DEBUG env)
+  deepPasses: field(z.number()), // review rounds per file/segment (clamped 1..5; 1 = single pass)
+  maxIter: field(z.number()), // exploration tool calls per round before forced convergence (default MAX_ITER)
+  rulesDir: field(z.string()), // project rules directory, relative to root (default "review/rules")
+  judge: field(z.boolean()), // run mode: judge each file's review with an independent agent
+  judgeThreshold: field(z.number()), // judge pass score 0..100 (default 70)
+});
+export type ReviewConfig = z.infer<typeof ReviewConfigSchema>;
 
-/** Read project-root `.f-review.json`; missing/invalid → {}. */
+/** Read `.f-review.json` from the project root, else `fcq/config/`; missing →
+ * try the next location; unparseable/non-object → also fall through (an
+ * invalid root file must not shadow a valid fallback); nothing valid → {}. */
 export function loadConfig(cwd: string = process.cwd()): ReviewConfig {
-  const p = join(cwd, ".f-review.json");
-  if (!existsSync(p)) return {};
-  try {
-    return JSON.parse(readFileSync(p, "utf8")) as ReviewConfig;
-  } catch {
-    return {};
+  for (const rel of [".f-review.json", "fcq/config/.f-review.json"]) {
+    const p = join(cwd, rel);
+    if (!existsSync(p)) continue;
+    try {
+      const parsed = ReviewConfigSchema.safeParse(JSON.parse(readFileSync(p, "utf8")));
+      if (parsed.success) return parsed.data;
+    } catch {
+      /* unparseable JSON — fall through to the next location */
+    }
   }
+  return {};
 }
 
 /** Hard ceiling on review rounds per target (deep-pass iteration). */
@@ -62,6 +79,14 @@ export function resolveDeepPasses(arg: number | undefined, cwd: string): number 
   const v = arg ?? loadConfig(cwd).deepPasses ?? 1;
   if (typeof v !== "number" || !Number.isFinite(v)) return 1;
   return Math.max(1, Math.min(MAX_DEEP_PASSES, Math.trunc(v)));
+}
+
+/** Exploration budget per round: config `maxIter`, else MAX_ITER. Clamped to
+ * >=1 — 0 would withhold every exploration result from the first call. */
+export function resolveMaxIter(cwd: string): number {
+  const v = loadConfig(cwd).maxIter;
+  if (typeof v !== "number" || !Number.isFinite(v)) return MAX_ITER;
+  return Math.max(1, Math.trunc(v));
 }
 
 /**
@@ -87,7 +112,7 @@ export function resolveDiffRange(
  * collectTargets applies this before the user's exclude globs, so
  * `--files=.github/workflows/ci.yml` is silently dropped and CI/tool config
  * under a dot path is never reviewed. The rubric is a source-code checklist
- * (security / nfr / correctness / tests / framework), and the dot namespace is
+ * (correctness / security / performance / maintainability / tests / framework), and the dot namespace is
  * dominated by editor state, VCS metadata, and build caches that produce noise.
  *
  * Reviewing CI workflows is a real need this deliberately does not serve. If it

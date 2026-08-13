@@ -13,6 +13,8 @@
  *   - related_code     : rank dependencies, callers, tests, and co-change files
  *   - git_history      : inspect commits, co-changes, and historical patches
  *   - f_review_submit  : declare done for a file → coverage gate → advance/finish
+ *   - f_review_judge_context : judge input for one file's submitted review (run mode)
+ *   - f_review_judge   : record a judge verdict → accept or rework instruction
  *   - system.transform : inject the per-file review template each turn
  *
  * The loop itself lives in core (core/review/loop.ts); this file only adapts
@@ -41,12 +43,19 @@ import {
   NO_ACTIVE_REVIEW,
   planReview,
   finalizeRun,
+  judgeContext,
+  submitJudge,
+  ruleFileContent,
 } from "../../../core/review";
 import {
   REVIEWER_AGENT_NAME,
   REVIEWER_AGENT_DESCRIPTION,
   REVIEWER_AGENT_PROMPT,
   REVIEWER_AGENT_TOOLS,
+  JUDGE_AGENT_NAME,
+  JUDGE_AGENT_DESCRIPTION,
+  JUDGE_AGENT_PROMPT,
+  JUDGE_AGENT_TOOLS,
   REVIEW_COMMAND_NAME,
   REVIEW_COMMAND_DESCRIPTION,
   REVIEW_COMMAND_TEMPLATE,
@@ -134,9 +143,58 @@ export function createReviewModule(input: PluginInput): {
         .describe(
           "Review rounds per file/segment for every subagent (1-5; default from .f-review.json `deepPasses`, else 1)"
         ),
+      judge: z
+        .boolean()
+        .optional()
+        .describe(
+          "Judge gate: after each file's review, an independent f-judge subagent scores it; below-threshold reviews are re-reviewed with feedback (default from .f-review.json `judge`)"
+        ),
     },
     async execute(args) {
       return planReview(args, cwd);
+    },
+  });
+
+  const f_review_judge_context = tool({
+    description:
+      "Judge-agent entry point (run mode): returns the change under review, the submitted findings, and the scoring criteria for one file of a run. Call before f_review_judge.",
+    args: {
+      runId: z.string().min(1).describe("The runId of the reviewed run"),
+      file: z.string().min(1).describe("The reviewed file to judge"),
+    },
+    async execute(args) {
+      return judgeContext(args.runId, args.file, cwd);
+    },
+  });
+
+  const f_review_judge = tool({
+    description:
+      "Submit a judge verdict for one file's review. The pass/rework verdict is derived from the score threshold; the result tells the orchestrator whether to accept the review or re-spawn the reviewer with feedback (rework cap enforced).",
+    args: {
+      runId: z.string().min(1),
+      file: z.string().min(1),
+      findingJudgments: z
+        .array(
+          z.object({
+            index: z.number().int().min(0).describe("Finding index in the submitted review"),
+            valid: z.boolean().describe("Matches the actual code (survived refutation)"),
+            evidenced: z.boolean().describe("Concrete failure scenario given"),
+            severityFit: z.boolean().describe("Severity neither inflated nor buried"),
+            actionable: z.boolean().describe("Suggestion applicable (blocker/major)"),
+            note: z.string().describe("One-line justification"),
+          })
+        )
+        .describe("One judgment per submitted finding"),
+      coverageGaps: z
+        .array(z.string())
+        .describe("Significant change areas the review never examined (empty if none)"),
+      score: z.number().min(0).max(100).describe("Review quality score 0-100"),
+      feedback: z
+        .string()
+        .describe("Concrete, numbered rework instructions (required when below threshold)"),
+    },
+    async execute(args) {
+      return submitJudge(args, cwd);
     },
   });
 
@@ -162,10 +220,14 @@ export function createReviewModule(input: PluginInput): {
     async execute(args, ctx) {
       const st = getState(ctx.sessionID);
       if (!st?.active) return NO_ACTIVE_REVIEW;
+      // Reference-mode rule files are served from state: they live in the
+      // working tree, which the ref-scoped fileRead may not see.
       return guardExploration(
         st,
         "file_read",
-        fileRead(st.cwd, st.ref, args.file_path, args.start_line, args.end_line)
+        ruleFileContent(st, args.file_path) ??
+          fileRead(st.cwd, st.ref, args.file_path, args.start_line, args.end_line),
+        args
       );
     },
   });
@@ -179,7 +241,7 @@ export function createReviewModule(input: PluginInput): {
     async execute(args, ctx) {
       const st = getState(ctx.sessionID);
       if (!st?.active) return NO_ACTIVE_REVIEW;
-      return guardExploration(st, "file_read_diff", fileReadDiff(st.diffMap, args.path_array));
+      return guardExploration(st, "file_read_diff", fileReadDiff(st.diffMap, args.path_array), args);
     },
   });
 
@@ -196,7 +258,8 @@ export function createReviewModule(input: PluginInput): {
       return guardExploration(
         st,
         "file_find",
-        fileFind(st.cwd, st.ref, args.query_name, args.case_sensitive)
+        fileFind(st.cwd, st.ref, args.query_name, args.case_sensitive),
+        args
       );
     },
   });
@@ -229,7 +292,8 @@ export function createReviewModule(input: PluginInput): {
           args.file_patterns,
           args.case_sensitive,
           args.use_perl_regexp
-        )
+        ),
+        args
       );
     },
   });
@@ -262,7 +326,8 @@ export function createReviewModule(input: PluginInput): {
           file,
           args.max_results,
           args.include_preview ?? true
-        )
+        ),
+        args
       );
     },
   });
@@ -286,7 +351,8 @@ export function createReviewModule(input: PluginInput): {
       return guardExploration(
         st,
         "git_history",
-        gitHistory(st.cwd, file, args.max_commits, args.include_patch, st.ref)
+        gitHistory(st.cwd, file, args.max_commits, args.include_patch, st.ref),
+        args
       );
     },
   });
@@ -355,6 +421,12 @@ export function createReviewModule(input: PluginInput): {
       prompt: REVIEWER_AGENT_PROMPT,
       tools: REVIEWER_AGENT_TOOLS,
     };
+    cfg.agent[JUDGE_AGENT_NAME] ??= {
+      mode: "subagent",
+      description: JUDGE_AGENT_DESCRIPTION,
+      prompt: JUDGE_AGENT_PROMPT,
+      tools: JUDGE_AGENT_TOOLS,
+    };
     (cfg.command ??= {})[REVIEW_COMMAND_NAME] ??= {
       description: REVIEW_COMMAND_DESCRIPTION,
       template: REVIEW_COMMAND_TEMPLATE,
@@ -373,6 +445,8 @@ export function createReviewModule(input: PluginInput): {
       git_history,
       f_review_submit,
       f_review_finalize,
+      f_review_judge_context,
+      f_review_judge,
     },
     systemTransform,
     event,

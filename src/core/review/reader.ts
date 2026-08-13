@@ -20,7 +20,7 @@ export const FILE_FIND_MAX_COUNT = 100;
 const TIMEOUT_MS = 10_000;
 
 /** Max exploration tool calls before the loop is forced to converge. */
-export const MAX_ITER = 40;
+export const MAX_ITER = 20;
 
 // ── low-level ────────────────────────────────────────────────────
 
@@ -175,7 +175,12 @@ export function fileRead(
   maxLines = FILE_READ_MAX_LINES
 ): string {
   const content = readFileAt(cwd, ref, file_path);
-  if (content === null) return `Error: file not found: ${file_path}`;
+  if (content === null)
+    return (
+      `Error: file not found: ${file_path}. It is not in this repository at the reviewed ref — ` +
+      `do NOT retry path variations. If it belongs to an external library or framework, ` +
+      `rely on the injected evidence and move on.`
+    );
 
   // Drop a single trailing newline so a file ending in "\n" doesn't report an
   // inflated line count and a phantom blank final line.
@@ -246,7 +251,11 @@ export function fileFind(
     if (name.includes(needle)) hits.push(f);
     if (hits.length >= FILE_FIND_MAX_COUNT) break;
   }
-  if (hits.length === 0) return "// The file was not found.";
+  if (hits.length === 0)
+    return (
+      `// No file matches "${query_name}" in this repository. Do NOT retry variations of ` +
+      `this name — an external library/framework file cannot be found here; move on.`
+    );
   return hits.join("\n");
 }
 
@@ -277,7 +286,12 @@ export function codeSearch(
     total++;
   }
 
-  if (total === 0) return `No matches for: ${search_text}`;
+  if (total === 0)
+    return (
+      `No matches for: ${search_text}. The symbol is not in this repository at the reviewed ` +
+      `ref (it may come from an external dependency). Do NOT repeat this search or minor ` +
+      `variations of it — continue the review with what you have.`
+    );
 
   const out: string[] = [];
   for (const [path, matches] of byFile) {

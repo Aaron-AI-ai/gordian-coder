@@ -181,7 +181,7 @@ describe("fileFind (non-git walk)", () => {
 
   it("respects case_sensitive", () => {
     const d = fixture();
-    expect(fileFind(d, null, "user", true)).toBe("// The file was not found.");
+    expect(fileFind(d, null, "user", true)).toContain("No file matches");
     expect(fileFind(d, null, "User", true)).toContain("UserService.ts");
   });
 
@@ -192,7 +192,7 @@ describe("fileFind (non-git walk)", () => {
   });
 
   it("reports not found", () => {
-    expect(fileFind(tmp(), null, "zzz")).toBe("// The file was not found.");
+    expect(fileFind(tmp(), null, "zzz")).toContain("No file matches");
   });
 });
 

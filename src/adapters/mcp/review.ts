@@ -23,6 +23,7 @@ import {
   reviewPromptFor,
   languageInstructionFor,
   NO_ACTIVE_REVIEW,
+  ruleFileContent,
   type StartReviewArgs,
 } from "../../core/review";
 
@@ -95,17 +96,21 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
     execute: async (params) => {
       const st = getState(SESSION);
       if (!st?.active) return ok(NO_ACTIVE_REVIEW);
+      // Reference-mode rule files are served from state: they live in the
+      // working tree, which the ref-scoped fileRead may not see.
       return ok(
         guardExploration(
           st,
           "file_read",
-          fileRead(
-            st.cwd,
-            st.ref,
-            params.file_path as string,
-            params.start_line as number | undefined,
-            params.end_line as number | undefined
-          )
+          ruleFileContent(st, params.file_path as string) ??
+            fileRead(
+              st.cwd,
+              st.ref,
+              params.file_path as string,
+              params.start_line as number | undefined,
+              params.end_line as number | undefined
+            ),
+          params
         )
       );
     },
@@ -122,7 +127,7 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
       const st = getState(SESSION);
       if (!st?.active) return ok(NO_ACTIVE_REVIEW);
       return ok(
-        guardExploration(st, "file_read_diff", fileReadDiff(st.diffMap, (params.path_array as string[]) ?? []))
+        guardExploration(st, "file_read_diff", fileReadDiff(st.diffMap, (params.path_array as string[]) ?? []), params)
       );
     },
   };
@@ -141,7 +146,8 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
         guardExploration(
           st,
           "file_find",
-          fileFind(st.cwd, st.ref, params.query_name as string, params.case_sensitive as boolean)
+          fileFind(st.cwd, st.ref, params.query_name as string, params.case_sensitive as boolean),
+          params
         )
       );
     },
@@ -177,7 +183,8 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
             (params.file_patterns as string[]) ?? [],
             params.case_sensitive as boolean,
             params.use_perl_regexp as boolean
-          )
+          ),
+          params
         )
       );
     },
@@ -213,7 +220,8 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
             file,
             params.max_results as number | undefined,
             (params.include_preview as boolean | undefined) ?? true
-          )
+          ),
+          params
         )
       );
     },
@@ -246,7 +254,8 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
             params.max_commits as number | undefined,
             (params.include_patch as boolean | undefined) ?? false,
             st.ref
-          )
+          ),
+          params
         )
       );
     },
@@ -255,7 +264,7 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
   const f_review_submit: ToolDefinition = {
     name: "f_review_submit",
     description:
-      "Declare the current file reviewed. Provide `assessed` (every rubric category you evaluated: security, nfr, correctness, tests, framework) and `findings` (issues with category/severity/file/line/rule/message/suggestion; may be empty). Coverage is gated. The result includes the review instructions for the next file.",
+      "Declare the current file reviewed. Provide `assessed` (every rubric category you evaluated: correctness, security, performance, maintainability, tests, framework) and `findings` (issues with category/severity/file/line/rule/message/suggestion; may be empty). Coverage is gated. The result includes the review instructions for the next file.",
     parameters: {
       assessed: { type: "array", description: "Categories actually evaluated", required: true },
       findings: { type: "array", description: "Issues found (may be empty)", required: true },

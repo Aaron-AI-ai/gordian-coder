@@ -387,6 +387,20 @@ export function gitHistory(
   return capText(lines.join("\n"), includePatch ? 16_000 : 5_000);
 }
 
+/** Import specifiers of `file` that resolve to NOTHING in this repository —
+ * external framework/library classes. Surfaced up front so the reviewer never
+ * burns its exploration budget hunting for code that cannot be found here.
+ * JDK imports (java.* / javax.*) are dropped as noise; capped for prompt size. */
+export function unresolvedImports(cwd: string, ref: string | null, file: string): string[] {
+  const normalized = normalizeRepoPath(file);
+  const all = new Set(listFilesAt(cwd, ref).map(normalizeRepoPath));
+  const content = readFileAt(cwd, ref, normalized) ?? "";
+  return importSpecifiers(content)
+    .filter((s) => !/^javax?\./.test(s))
+    .filter((s) => resolveImport(s, normalized, all).length === 0)
+    .slice(0, 20);
+}
+
 /** Compact dossier automatically injected for each current review file.
  *
  * Cross-file related code is surfaced as a ranked PATH LIST only (no source
@@ -396,6 +410,7 @@ export function gitHistory(
  * code_search lands the real definition, and it naturally scopes to whatever
  * segment/diff is being reviewed. */
 export function buildReviewEvidence(cwd: string, ref: string | null, file: string): string {
+  const external = unresolvedImports(cwd, ref, file);
   return capText(
     [
       "## Related code",
@@ -404,6 +419,17 @@ export function buildReviewEvidence(cwd: string, ref: string | null, file: strin
       "These are project files the code under review imports / co-changes with. " +
         "For any function or symbol it calls from them, run code_search(<symbol>) or " +
         "file_read on the file above to pull the real definition — do not assume behavior.",
+      ...(external.length
+        ? [
+            "",
+            "## External dependencies (NOT in this repository)",
+            ...external.map((s) => `- ${s}`),
+            "These imports resolve to nothing in this repo — they are external framework/library " +
+              "classes. NEVER search for them (code_search / file_find / glob will find nothing, " +
+              "under any name or path variation). Judge their usage against the Framework Rules " +
+              "and the evidence above.",
+          ]
+        : []),
       "",
       "## Git history",
       gitHistory(cwd, file, 5, false, ref),

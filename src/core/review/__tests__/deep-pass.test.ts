@@ -7,7 +7,7 @@ import { startReview, submitReview, guardExploration } from "../loop";
 import { MAX_ITER } from "../reader";
 import { getState, clearState } from "../state";
 import { REQUIRED_CATEGORIES } from "../contract";
-import { createRun, planReview, loadRun, readRunResults } from "../run";
+import { createRun, planReview, loadRun, readRunResults, finalizeRun } from "../run";
 
 const tmps: string[] = [];
 afterEach(() => {
@@ -101,6 +101,13 @@ describe("sequential deep-pass rounds", () => {
     await startReview({ files: ["a.ts"], deepPasses: 3 }, d, "dp");
     const st = getState("dp")!;
 
+    // The duplicate-call ledger fills up in round 1 …
+    guardExploration(st, "file_read", "o", { file_path: "a.ts" });
+    guardExploration(st, "file_read", "o", { file_path: "a.ts" });
+    expect(guardExploration(st, "file_read", "o", { file_path: "a.ts" })).toContain(
+      "Duplicate call"
+    );
+
     // Round 1 burns the whole budget.
     for (let i = 0; i <= MAX_ITER; i++) guardExploration(st, "file_read", "");
     expect(guardExploration(st, "file_read", "out")).toContain("Exploration limit reached");
@@ -111,6 +118,8 @@ describe("sequential deep-pass rounds", () => {
     expect(r2).toContain("Deep review round 2/3");
     expect(st.iterations).toBe(0);
     expect(guardExploration(st, "file_read", "out")).not.toContain("Exploration limit reached");
+    // … and is cleared per round, so the ordered re-read is answered normally.
+    expect(guardExploration(st, "file_read", "o", { file_path: "a.ts" })).toBe("o");
 
     // Per-file call log stays cumulative — it audits the file, not the round.
     expect(st.callLog["a.ts"].file_read).toBeGreaterThan(MAX_ITER);
@@ -142,6 +151,25 @@ describe("sequential deep-pass rounds", () => {
 
     const r2 = await submitReview(submitOf("r1"), "dp");
     expect(r2).toContain("round 2/2");
+  });
+
+  it("an identical resubmission still consumes rounds and gets one final check", async () => {
+    const d = gitRepo();
+    await startReview({ files: ["a.ts"], deepPasses: 3 }, d, "dp");
+    // no exploration + major w/o suggestion → the final check has notes
+    const same = {
+      assessed: [...REQUIRED_CATEGORIES],
+      findings: [
+        { category: "correctness", severity: "major", file: "a.ts", line: 1, rule: "r", message: "m" },
+      ],
+    };
+    expect(await submitReview(same, "dp")).toContain("Deep review round 2/3");
+    // honest convergence: nothing to change → round 3 still runs (--deep=3 means 3)
+    expect(await submitReview(same, "dp")).toContain("Deep review round 3/3");
+    // after the last round the final check still gets its bounce …
+    expect(await submitReview(same, "dp")).toContain("Final check");
+    // … and only repeating the payload the final check bounced is accepted
+    expect(await submitReview(same, "dp")).toContain("✅ Review complete");
   });
 
   it("deepPasses=1 (default) keeps the single-pass behavior", async () => {
@@ -192,5 +220,24 @@ describe("run-mode deep passes", () => {
     const results = readRunResults(meta.runId, d);
     expect(results).toHaveLength(1);
     expect(results[0].findings[0].rule).toBe("polished"); // final round's set persisted
+  });
+
+  it("persists a force-accept marker instead of a clean run result", async () => {
+    const d = gitRepo();
+    const meta = await createRun(
+      { targets: ["a.ts"], range: "HEAD~1..HEAD", whole: false, label: "L", language: "ko" },
+      d
+    );
+    await startReview({ runId: meta.runId, files: ["a.ts"] }, d, "dp");
+    for (let i = 1; i <= 5; i++) await submitReview({ garbage: true }, "dp");
+    const done = await submitReview({ garbage: true }, "dp");
+    expect(done).toContain("force-accepted");
+    const [result] = readRunResults(meta.runId, d);
+    expect(result.forced).toContain("forced after repeated invalid submissions");
+    expect(result.findings).toEqual([]);
+    // finalize surfaces the forced file instead of announcing a clean run
+    const fin = await finalizeRun(meta.runId, d);
+    expect(fin).toContain("force-accepted");
+    expect(fin).toContain("a.ts");
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,10 +7,12 @@ import {
   applyExclude,
   isDefaultExcluded,
   loadConfig,
+  resolveMaxIter,
   collectTargets,
   buildDiffMap,
   ReviewInputSchema,
 } from "../context";
+import { MAX_ITER } from "../reader";
 
 function gitRepo(): string {
   const d = mkdtempSync(join(tmpdir(), "k-git-"));
@@ -98,6 +100,50 @@ describe("loadConfig", () => {
     const d = tmp();
     writeFileSync(join(d, ".f-review.json"), "{not json");
     expect(loadConfig(d)).toEqual({});
+  });
+
+  it("falls back to fcq/config/.f-review.json; root wins when both exist", () => {
+    const d = tmp();
+    mkdirSync(join(d, "fcq", "config"), { recursive: true });
+    writeFileSync(join(d, "fcq", "config", ".f-review.json"), '{"language": "en"}');
+    expect(loadConfig(d)).toEqual({ language: "en" });
+    writeFileSync(join(d, ".f-review.json"), '{"language": "ko"}');
+    expect(loadConfig(d)).toEqual({ language: "ko" });
+  });
+
+  it("degrades a wrong-typed field to unset instead of crashing or dropping the file", () => {
+    const d = tmp();
+    // "rulesDir": 5 previously reached path.join and threw on every review
+    writeFileSync(join(d, ".f-review.json"), '{"rulesDir": 5, "language": "en"}');
+    const cfg = loadConfig(d);
+    expect(cfg.rulesDir).toBeUndefined();
+    expect(cfg.language).toBe("en"); // valid siblings survive
+  });
+
+  it("an unparseable root config falls through to the fcq fallback", () => {
+    const d = tmp();
+    mkdirSync(join(d, "fcq", "config"), { recursive: true });
+    writeFileSync(join(d, "fcq", "config", ".f-review.json"), '{"language": "en"}');
+    writeFileSync(join(d, ".f-review.json"), "{not json");
+    expect(loadConfig(d)).toEqual({ language: "en" });
+  });
+});
+
+describe("resolveMaxIter", () => {
+  it("defaults to MAX_ITER without config", () => {
+    expect(resolveMaxIter(tmp())).toBe(MAX_ITER);
+  });
+
+  it("reads maxIter from .f-review.json, clamped to >=1 and truncated", () => {
+    const d = tmp();
+    writeFileSync(join(d, ".f-review.json"), '{"maxIter": 10}');
+    expect(resolveMaxIter(d)).toBe(10);
+    writeFileSync(join(d, ".f-review.json"), '{"maxIter": 0}');
+    expect(resolveMaxIter(d)).toBe(1);
+    writeFileSync(join(d, ".f-review.json"), '{"maxIter": 7.9}');
+    expect(resolveMaxIter(d)).toBe(7);
+    writeFileSync(join(d, ".f-review.json"), '{"maxIter": "lots"}');
+    expect(resolveMaxIter(d)).toBe(MAX_ITER);
   });
 });
 

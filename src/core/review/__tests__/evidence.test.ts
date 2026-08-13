@@ -157,4 +157,29 @@ describe("buildReviewEvidence", () => {
     expect(out).toContain("code_search(<symbol>)"); // recipe telling the model to grep
     expect(out).not.toContain("Related code preview"); // no first-lines preview auto-injected
   });
+
+  it("lists unresolved imports as external, never-search dependencies", () => {
+    const cwd = repo();
+    const git = (args: string[]) => Bun.spawnSync(["git", ...args], { cwd });
+    writeFileSync(
+      join(cwd, "src/Svc.java"),
+      [
+        "import java.util.List;", // JDK — filtered out as noise
+        "import kr.co.koscom.pb.framework.site.ext.exception.PBOnlineException;", // external
+        "public class Svc {}",
+      ].join("\n")
+    );
+    git(["add", "-A"]);
+    git(["commit", "-qm", "add java service"]);
+
+    const out = buildReviewEvidence(cwd, "HEAD", "src/Svc.java");
+    expect(out).toContain("External dependencies (NOT in this repository)");
+    expect(out).toContain("PBOnlineException");
+    expect(out).toContain("NEVER search for them");
+    expect(out).not.toContain("java.util.List");
+    // A file whose imports all resolve gets no external section at all.
+    expect(buildReviewEvidence(cwd, "HEAD", "src/controller.ts")).not.toContain(
+      "External dependencies"
+    );
+  });
 });

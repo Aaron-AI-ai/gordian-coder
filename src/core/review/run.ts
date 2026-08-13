@@ -31,6 +31,7 @@ import {
   type CommitSpec,
 } from "./context";
 import { defaultLabel, loadBaseline, resolveOutputPath, writeReport } from "./output";
+import { DEFAULT_JUDGE_THRESHOLD, readRunJudgments } from "./judge";
 
 export const RUNS_DIR = "fcq/f-review/runs";
 /** Hard cap on targets per run — refuse larger fan-outs (split the range instead). */
@@ -54,6 +55,11 @@ export interface RunMeta {
   planGuidance?: string;
   /** Review rounds per target, shared by every subagent (clamped 1..5). */
   deepPasses?: number;
+  /** Judge gate: each file's review is evaluated by an independent judge agent
+   * after submit; below-threshold reviews are re-reviewed with feedback. */
+  judge?: boolean;
+  /** Judge pass score (0..100, default DEFAULT_JUDGE_THRESHOLD). */
+  judgeThreshold?: number;
   /** Baseline finding keys snapshotted at PLAN time (like sequential mode does
    * at start). Finalize must not re-read the report dir: a finalize retry would
    * otherwise see its own partial report and mislabel this run's findings as
@@ -68,6 +74,7 @@ export interface FileReviewResult {
   findings: Finding[];
   explorationCalls: number;
   partial: boolean; // true when the subagent was cut off before finishing every segment
+  forced?: string; // force-accept note(s): the loop salvage-advanced this file — NOT a clean, fully-assessed review
 }
 
 export function runDir(runId: string, cwd: string): string {
@@ -187,6 +194,7 @@ export interface PlanReviewArgs {
   planGuidance?: string;
   language?: string;
   deepPasses?: number; // review rounds per target (arg > config `deepPasses` > 1; clamp 1..5)
+  judge?: boolean; // judge gate (arg > config `judge` > off)
 }
 
 /** Collect targets, create the run, and return the fan-out instructions the
@@ -228,6 +236,11 @@ export async function planReview(args: PlanReviewArgs, cwd: string): Promise<str
       requirementBackground: args.requirementBackground,
       planGuidance: args.planGuidance,
       deepPasses: resolveDeepPasses(args.deepPasses, cwd),
+      judge: args.judge ?? config.judge === true,
+      judgeThreshold:
+        typeof config.judgeThreshold === "number"
+          ? Math.max(0, Math.min(100, config.judgeThreshold))
+          : undefined,
       baseline: [...loadBaseline(args.output, cwd)],
     },
     cwd
@@ -238,16 +251,27 @@ export async function planReview(args: PlanReviewArgs, cwd: string): Promise<str
   // List every target: the orchestrator dispatches from this text, so a
   // truncated list would silently drop files onto the single finalize retry.
   const list = targets.map((t) => `  - ${t}`);
+  const judgeSteps = meta.judge
+    ? [
+        `3. JUDGE GATE — after EACH f-reviewer subagent finishes, spawn ONE f-judge subagent with this prompt:`,
+        `   "Call f_review_judge_context with runId=\"${meta.runId}\" and file=\"<file>\", evaluate that review, then call f_review_judge."`,
+        `4. Follow the message f_review_judge returns EXACTLY: it either accepts the file, or tells you to re-spawn the f-reviewer for that file (judge feedback is injected automatically) and judge again. The rework cap is enforced by the tool — never re-spawn beyond what it instructs.`,
+        `5. When every file is accepted, call f_review_finalize with runId="${meta.runId}".`,
+        `6. If finalize reports missing files, re-spawn subagents for ONLY those files ONCE (judging each again), then finalize again.`,
+      ]
+    : [
+        `3. When every file has been dispatched, call f_review_finalize with runId="${meta.runId}".`,
+        `4. If finalize reports missing files, re-spawn subagents for ONLY those files ONCE, then finalize again.`,
+      ];
   return [
-    `Run created: ${meta.runId} — ${targets.length} file(s), mode: ${meta.range ? `commit diff (${meta.range})` : "explicit files"}${meta.whole ? " · whole-file" : ""}${(meta.deepPasses ?? 1) > 1 ? ` · ${meta.deepPasses} review rounds/target` : ""}${meta.failOn ? ` · gate: failOn=${meta.failOn}` : ""}.`,
+    `Run created: ${meta.runId} — ${targets.length} file(s), mode: ${meta.range ? `commit diff (${meta.range})` : "explicit files"}${meta.whole ? " · whole-file" : ""}${(meta.deepPasses ?? 1) > 1 ? ` · ${meta.deepPasses} review rounds/target` : ""}${meta.failOn ? ` · gate: failOn=${meta.failOn}` : ""}${meta.judge ? ` · judge gate on` : ""}.`,
     ...list,
     "",
     `Fan-out instructions (follow exactly):`,
     `1. For EACH file above, spawn ONE f-reviewer subagent with this prompt:`,
     `   "Call f_review_context with runId=\"${meta.runId}\" and files=[\"<file>\"], review that single file, and call f_review_submit. Review no other files."`,
     `2. Spawn at most ${RUN_BATCH_SIZE} subagents at a time; wait for a batch to finish before the next.`,
-    `3. When every file has been dispatched, call f_review_finalize with runId="${meta.runId}".`,
-    `4. If finalize reports missing files, re-spawn subagents for ONLY those files ONCE, then finalize again.`,
+    ...judgeSteps,
   ].join("\n");
 }
 
@@ -267,7 +291,35 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
 
   const all = Object.values(findings).flat();
   const partials = results.filter((r) => r.partial).map((r) => r.file);
+  const forced = results.filter((r) => r.forced).map((r) => r.file);
   const unexplored = results.filter((r) => !r.explorationCalls).map((r) => r.file);
+
+  // Judge outcomes (judge-gated runs): latest verdict per reviewed file.
+  const judgeLines: string[] = [];
+  if (meta.judge) {
+    const threshold = meta.judgeThreshold ?? DEFAULT_JUDGE_THRESHOLD;
+    const judgments = readRunJudgments(runId, cwd);
+    const latest = new Map(judgments.map((j) => [j.file, j.attempts.at(-1)]));
+    const passed = reviewed.filter((f) => latest.get(f)?.verdict === "pass");
+    const failed = reviewed.filter((f) => {
+      const a = latest.get(f);
+      return a && a.verdict === "rework";
+    });
+    const unjudged = reviewed.filter((f) => !latest.get(f));
+    judgeLines.push(
+      `- Judge: ${passed.length}/${reviewed.length} file(s) passed (threshold ${threshold})`
+    );
+    if (failed.length) {
+      judgeLines.push(
+        // "after rework" would be a lie for a file whose last verdict is rework
+        // but that was never re-reviewed — say only what the data shows.
+        `- ⚠️ Below judge threshold (accepted as-is): ${failed
+          .map((f) => `${f} (score ${latest.get(f)?.score})`)
+          .join(", ")}`
+      );
+    }
+    if (unjudged.length) judgeLines.push(`- ⚠️ Reviewed but never judged: ${unjudged.join(", ")}`);
+  }
 
   // Run-quality appendix rendered under the standard report body.
   const summary = [
@@ -276,9 +328,13 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
     `- Run: ${runId} (${meta.range ? `commit diff ${meta.range}` : "explicit files"}${meta.whole ? " · whole-file" : ""})`,
     `- Coverage: ${reviewed.length}/${meta.targets.length} file(s) reviewed${missing.length ? ` — **INCOMPLETE**, missing: ${missing.join(", ")}` : " — complete"}`,
     ...(partials.length ? [`- ⚠️ Partial reviews (subagent cut off early): ${partials.join(", ")}`] : []),
+    ...(forced.length
+      ? [`- ⚠️ Force-accepted after repeated rejected submits (findings salvaged or empty): ${forced.join(", ")}`]
+      : []),
     ...(unexplored.length
       ? [`- ⚠️ Reviewed without exploration calls (evidence only): ${unexplored.join(", ")}`]
       : []),
+    ...judgeLines,
     `- Per-file reviews: ${join(RUNS_DIR, runId, "reviews")}/`,
     "",
   ].join("\n");
@@ -294,12 +350,15 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
       ? ` Verdict: PASS (failOn: ${meta.failOn}).`
       : ` Verdict: FAIL — ${v.failing} finding(s) at/above ${meta.failOn}.`;
   }
+  const forcedWarn = forced.length
+    ? ` ⚠️ ${forced.length} file(s) force-accepted after repeated rejected submits: ${forced.join(", ")}.`
+    : "";
   if (missing.length) {
     return (
       `⚠️ INCOMPLETE — ${reviewed.length}/${meta.targets.length} file(s) reviewed; missing: ${missing.join(", ")}.` +
-      `${gate} Partial report: ${path}\n` +
+      `${gate}${forcedWarn} Partial report: ${path}\n` +
       `Re-spawn ONE f-reviewer subagent per missing file (same runId), then call f_review_finalize again. Do this at most once.`
     );
   }
-  return `✅ Run complete — ${reviewed.length} file(s), ${all.length} issue(s).${gate} Report: ${path}`;
+  return `✅ Run complete — ${reviewed.length} file(s), ${all.length} issue(s).${gate}${forcedWarn} Report: ${path}`;
 }

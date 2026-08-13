@@ -97,7 +97,7 @@ function resolveDiffRange(commit, hasFiles) {
 
 즉 **`--files=.github/workflows/ci.yml` 은 조용히 무시된다** (경고 없음. 요청한 파일이 전부 여기 걸리면
 `No files to review (empty target set after excludes)` 만 뜬다). 리뷰 체크리스트가 소스코드 기준
-(security/nfr/correctness/tests/framework)이고, 닷 네임스페이스는 에디터 상태·VCS 메타데이터·빌드 캐시가
+(correctness/security/performance/maintainability/tests/framework)이고, 닷 네임스페이스는 에디터 상태·VCS 메타데이터·빌드 캐시가
 대부분이라 노이즈가 되기 때문이다.
 
 > ⚠️ **CI 워크플로 리뷰는 이 설계가 의도적으로 포기한 영역이다.** 필요해지면 이 조건을 느슨하게 풀지 말고
@@ -198,8 +198,13 @@ function resolveManifestPath(label) {
 
 ### 5.3 무한루프 가드
 
-탐색 도구(file_read·code_search·file_find·file_read_diff·related_code·git_history) 호출이 `MAX_ITER` 초과 → 결과에 "지금 정보로 submit 하라" 주입 → 강제 수렴.
-예산은 타깃 전진 시점과 **딥패스 라운드 전환 시점**에 리셋된다(§12 참조).
+탐색 도구(file_read·code_search·file_find·file_read_diff·related_code·git_history) 호출이 `MAX_ITER` 초과 → 결과를 **보류**하고 "지금 정보로 submit 하라"만 반환 → 강제 수렴.
+동일 인자 반복 호출은 `MAX_DUP_CALLS`회까지만 응답한다.
+예산(iterations·중복 호출 장부)은 타깃 전진 시점, **딥패스 라운드 전환 시점**, 그리고 **최종 점검(final check) 바운스 시점**에 리셋된다(§12 참조) — 바운스 지시문이 재검증(재읽기)을 요구하기 때문이다.
+
+**세션 레벨 동일-호출 가드 (어댑터, repeat-guard)**: OpenCode의 `tool.execute.before/after` 훅에서 **모든 도구**(네이티브 read/grep/bash 포함)의 동일 호출(도구+인자, 공백 정규화) 연속 반복을 감시한다. `REPEAT_LIMIT`(3) 연속이면 출력을 보류하고 "다른 행동을 하라" notice로 교체한다. `HARD_LIMIT`(6) 도달 시 **격상**: 활성 리뷰 세션이면 탐색 예산을 소진 상태로 만들어(위 MAX_ITER 가드가 즉시 발동) 어떤 탐색 도구를 불러도 강제 수렴 메시지가 나가고, 유일한 출구는 `f_review_submit`이 된다 — submit이 예산을 리셋하므로 복구는 자동이다. 라운드 단위 예산 리셋이 퇴화 모델의 루프 활주로를 늘리지 않게 하는 안전핀.
+
+**네이티브 탐색 도구도 같은 예산을 쓴다**: 리뷰 활성 세션에서 네이티브 `glob`/`grep`/`read`/`bash` 호출은 after-hook에서 `guardExploration`을 통과한다 — `MAX_ITER` 예산 소모 + 동일 인자 반복(`MAX_DUP_CALLS`, **비연속 반복 포함**) 차단. 출력 문자열은 검사하지 않으므로 miss-streak은 f-review 탐색 도구 전용으로 유지된다(네이티브 빈-결과 문구 판별은 보류).
 
 ---
 
@@ -330,7 +335,7 @@ function render(tpl, vars) {
 ### submit 스키마 (커버리지 강제의 핵심)
 
 ```ts
-const REQUIRED_CATEGORIES = ["security","nfr","correctness","tests"] as const;
+const REQUIRED_CATEGORIES = ["correctness","security","performance","maintainability","tests"] as const;
 
 const FindingSchema = z.object({
   category: z.enum(REQUIRED_CATEGORIES),
@@ -387,7 +392,9 @@ src/adapters/opencode/review/
                  # (config 훅으로 주입; 동명의 .opencode md 파일이 있으면 그쪽 우선)
 ```
 
-설정 파일: 프로젝트 루트 `.f-review.json` (`{ exclude, output, language, frameworkGuide, failOn, debug, deepPasses }`, 없으면 무시).
+설정 파일: 프로젝트 루트 `.f-review.json`, 없으면 `fcq/config/.f-review.json`
+(`{ exclude, output, language, frameworkGuide, failOn, debug, deepPasses, maxIter, rulesDir, judge, judgeThreshold }`).
+Zod로 검증하며 타입이 틀린 필드는 unset으로 강등된다(파일 전체를 버리지 않음); 루트 파일이 파싱 불가면 fcq 폴백을 시도한다.
 
 **딥패스 반복 리뷰 (`deepPasses`)** — 타깃(파일/세그먼트)당 리뷰 라운드 수. 파라미터 `deepPasses` > 설정 `deepPasses` > 기본 1,
 항상 [1, 5]로 clamp. 1이면 기존 단일 패스. N>1이면 submit 게이트가 앞의 N-1회 제출을 수락하지 않고
@@ -398,9 +405,18 @@ src/adapters/opencode/review/
 run 모드에서는 plan 시점 값이 run.json에 저장돼 모든 서브에이전트가 동일 라운드 수로 리뷰한다.
 중간 라운드 findings는 저장되지 않고 마지막 라운드 제출만 개별 리뷰/리포트에 반영된다.
 
-`MAX_ITER` 탐색 예산은 **라운드 단위**로 리셋된다. 2라운드 이후의 지시문이 "코드를 다시 읽고 반박하라"이므로,
-소진된 예산을 이월하면 그 지시에 "탐색 한도 도달 — 지금 submit 하라"로 응답하게 되기 때문이다.
-상한은 여전히 유한하다: 파일당 최대 `MAX_DEEP_PASSES × MAX_ITER`.
+**탐색 예산 (`maxIter`)** — 라운드당 탐색 도구 호출 상한. 설정 `maxIter` > 기본 `MAX_ITER`(20), 최소 1로 clamp.
+리뷰 시작 시 상태에 고정되므로 세션 도중 설정 변경은 다음 리뷰부터 반영된다. 소형 모델은 낮게(예: 10) 잡아
+배회 대신 조기 수렴을 유도할 수 있다.
+
+`MAX_ITER` 탐색 예산은 **라운드 단위**로 리셋된다(딥패스 라운드와 최종 점검 바운스 모두). 2라운드 이후의 지시문이
+"코드를 다시 읽고 반박하라"이므로, 소진된 예산을 이월하면 그 지시에 "탐색 한도 도달 — 지금 submit 하라"로
+응답하게 되기 때문이다. 상한은 여전히 유한하다: 파일당 최대 `(MAX_DEEP_PASSES + MAX_FINAL_RECHECKS) × MAX_ITER`.
+
+**동일 페이로드 재제출(repeat)**: 딥패스 라운드는 라운드마다 지시가 다르므로 byte-identical 재제출도
+라운드를 정상 소진한다(성실한 수렴 ≠ 루프). 최종 점검만 repeat 감지를 무장한다 — 최종 점검이 바운스한
+페이로드가 그대로 재제출되면(같은 지적에 같은 응답) 재바운스가 무의미하므로 수락한다.
+즉 최종 점검은 항상 최소 1회 실행된다.
 
 ---
 

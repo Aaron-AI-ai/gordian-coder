@@ -55,6 +55,11 @@ Now please {{review_action}}.
 When you need more context, use file_read (wider context), code_search (symbols/usages),
 file_find (locate files), file_read_diff (other changed files), related_code
 (ranked dependencies/callers/tests), or git_history (previous changes).
+These are the ONLY tools you may explore with. NEVER use the host's built-in
+file tools (Read / Grep / Glob / bash / …): they read the working tree instead
+of the reviewed ref and bypass the exploration budget. When a tool result says
+a file or symbol does not exist, or that output is withheld, accept it and move
+on — do not re-fetch the same content again or through any other tool.
 When done with THIS file, call f_review_submit.
 </user_task>`;
 

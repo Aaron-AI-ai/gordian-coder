@@ -9,14 +9,37 @@
 
 /** Agent name the fan-out instructions and command template refer to. */
 export const REVIEWER_AGENT_NAME = "f-reviewer";
+export const JUDGE_AGENT_NAME = "f-judge";
 export const REVIEW_COMMAND_NAME = "f-review";
 
 export const REVIEWER_AGENT_DESCRIPTION = "Meticulous rule-based code reviewer for f-review";
 
+/** OpenCode agent `tools` maps only OVERRIDE the tools they list — anything
+ * unlisted keeps its default (enabled). A confinement list must therefore deny
+ * every built-in explicitly, or the "whitelist" quietly leaves bash/edit/write
+ * open. */
+const BUILTINS_OFF: Record<string, boolean> = {
+  bash: false,
+  read: false,
+  write: false,
+  edit: false,
+  patch: false,
+  grep: false,
+  glob: false,
+  list: false,
+  webfetch: false,
+  todowrite: false,
+  todoread: false,
+  skill: false,
+  task: false,
+};
+
 /** Tool whitelist: context + exploration + submit; plan/finalize/task are the
  * orchestrator's — blocking them here makes scope-widening impossible, not
- * just discouraged. */
+ * just discouraged. Built-ins are off: a reviewer reads through the ref-scoped
+ * f-review tools and must not edit files or run commands. */
 export const REVIEWER_AGENT_TOOLS: Record<string, boolean> = {
+  ...BUILTINS_OFF,
   f_review_context: true,
   file_read: true,
   file_read_diff: true,
@@ -27,13 +50,14 @@ export const REVIEWER_AGENT_TOOLS: Record<string, boolean> = {
   f_review_submit: true,
   f_review_plan: false,
   f_review_finalize: false,
-  task: false,
+  f_review_judge_context: false,
+  f_review_judge: false,
 };
 
 export const REVIEWER_AGENT_PROMPT = `You are a meticulous code reviewer.
 
 You review one file at a time against the injected checklist, which covers
-**security, nfr, correctness, tests, and framework**. Rules:
+**correctness, security, performance, maintainability, tests (test coverage), and framework**. Rules:
 
 - If your instructions include a runId, call \`f_review_context\` with that
   runId and your ONE assigned file, review it, submit, and STOP. Never review
@@ -58,6 +82,43 @@ You review one file at a time against the injected checklist, which covers
   file may be split into segments — submit each segment in order).
 `;
 
+export const JUDGE_AGENT_DESCRIPTION =
+  "Independent judge that scores a submitted f-review against the quality rubric";
+
+/** Judge whitelist: exactly the two judge tools — it must not review code,
+ * spawn agents, or touch the reviewer/orchestrator tools. Built-ins are off
+ * too: a judge that reads the working tree scores findings against code the
+ * reviewer never saw, breaking the fixed-context independence of the gate. */
+export const JUDGE_AGENT_TOOLS: Record<string, boolean> = {
+  ...BUILTINS_OFF,
+  f_review_judge_context: true,
+  f_review_judge: true,
+  f_review_context: false,
+  f_review_submit: false,
+  f_review_plan: false,
+  f_review_finalize: false,
+  file_read: false,
+  file_read_diff: false,
+  file_find: false,
+  code_search: false,
+  related_code: false,
+  git_history: false,
+};
+
+export const JUDGE_AGENT_PROMPT = `You are an independent review judge. You evaluate a code REVIEW, not the code.
+
+- Call \`f_review_judge_context\` with the runId and file from your instructions.
+  It returns the change, the submitted findings, and the scoring criteria.
+- Judge adversarially: try to REFUTE each finding against the code shown. A
+  finding you can refute is invalid. Do not reward finding count — a clean file
+  with zero findings can score 100.
+- Then call \`f_review_judge\` exactly once with your findingJudgments (one per
+  finding index), coverageGaps, score (0-100), and feedback. Feedback must be
+  concrete, numbered instructions the next reviewer can follow.
+- Judge ONLY the assigned file's review, then STOP. Never review code yourself,
+  never spawn agents, never call reviewer or orchestrator tools.
+`;
+
 export const REVIEW_COMMAND_DESCRIPTION =
   "Rule-based code review over a git commit or files (parallel subagents)";
 
@@ -79,6 +140,9 @@ Parse the arguments into \`f_review_plan\` parameters (all optional):
 - \`--plan=...\` → \`planGuidance\`
 - \`--deep=N\` → \`deepPasses\` (review rounds per file, 1-5; default comes from
   \`.f-review.json\` \`deepPasses\`)
+- \`--judge\` → \`judge: true\` (judge gate: an independent f-judge subagent scores
+  each file's review; failing reviews are re-reviewed with feedback. Default
+  comes from \`.f-review.json\` \`judge\`)
 - \`--sequential\` → do NOT use f_review_plan; instead call \`f_review_context\`
   with the same parameters (minus \`--sequential\`) and delegate the whole review
   to a single f-reviewer subagent that reviews every file in one session,
@@ -94,6 +158,10 @@ Parallel workflow (default):
      before dispatching the next batch.
    - Never review a file yourself, never spawn a subagent for a file outside
      the plan's target list, and never spawn two subagents for the same file.
+   - If the plan enables the judge gate, follow its judge steps exactly: after
+     each reviewer finishes, spawn ONE f-judge subagent for that file and obey
+     the accept/rework message \`f_review_judge\` returns (the rework cap is
+     enforced by the tool).
 3. When every file has been dispatched, call \`f_review_finalize\` with the runId.
 4. If finalize reports missing files, re-spawn ONE subagent per missing file
    (same runId, same prompt shape), then call \`f_review_finalize\` again.

@@ -222,9 +222,9 @@ describe("renderManifest", () => {
       mode: "explicit files",
       range: null,
       excludes: [],
-      rubricSources: { security: "security-baseline.md", nfr: "built-in defaults" },
+      rubricSources: { security: "security-baseline.md", performance: "built-in defaults" },
     });
-    expect(md).toContain("Rubric: security ← security-baseline.md, nfr ← built-in defaults");
+    expect(md).toContain("Rubric: security ← security-baseline.md, performance ← built-in defaults");
   });
 
   it("records the generated timestamp in the body when provided", () => {

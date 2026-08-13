@@ -19,6 +19,7 @@ import {
   guardExploration,
   onSessionIdle,
   MAX_RESUMES,
+  MAX_MISS_STREAK,
   NO_ACTIVE_REVIEW,
 } from "../loop";
 import { REQUIRED_CATEGORIES } from "../contract";
@@ -36,6 +37,7 @@ function baseState(over: Partial<ReviewState> = {}): ReviewState {
     wholeFile: false,
     systemRule: "",
     frameworkRules: "",
+    extraRules: [],
     evidenceCache: {},
     requirementBackground: "",
     planGuidance: "",
@@ -45,7 +47,13 @@ function baseState(over: Partial<ReviewState> = {}): ReviewState {
     language: "ko",
     iterations: 0,
     callLog: {},
+    dupCalls: {},
+    missStreak: 0,
     recheckCount: {},
+    failedSubmits: {},
+    lastSubmitHash: {},
+    lastValidFindings: {},
+    forcedNotes: {},
     deepPasses: 1,
     deepPassDone: {},
     resumes: 0,
@@ -112,7 +120,9 @@ describe("startReview / submitReview (full loop)", () => {
     return d;
   }
 
-  const fullSubmit = (file: string) => ({
+  // `n` varies the message so consecutive submits differ — resubmitting the
+  // exact payload the final check bounced is accepted instead of re-bounced.
+  const fullSubmit = (file: string, n = 0) => ({
     assessed: [...REQUIRED_CATEGORIES],
     findings: [
       {
@@ -121,7 +131,7 @@ describe("startReview / submitReview (full loop)", () => {
         file,
         line: 1,
         rule: "r1",
-        message: "issue",
+        message: `issue ${n}`,
       },
     ],
   });
@@ -146,23 +156,23 @@ describe("startReview / submitReview (full loop)", () => {
     // full coverage but no exploration + major w/o suggestion → per-file final
     // check reworks the file up to 5 times before letting it through
     for (let i = 1; i <= 5; i++) {
-      const nudged = await submitReview(fullSubmit("a.ts"), "t");
+      const nudged = await submitReview(fullSubmit("a.ts", i), "t");
       expect(nudged).toContain("Final check");
       expect(getState("t")!.currentIndex).toBe(0);
     }
     // 6th submit → recheck cap reached, advance to b.ts
-    const advanced = await submitReview(fullSubmit("a.ts"), "t");
+    const advanced = await submitReview(fullSubmit("a.ts", 6), "t");
     expect(advanced).toContain("Next file: b.ts");
 
     // b.ts: exhaust its own 5 reworks
     for (let i = 1; i <= 5; i++) {
-      const nudged = await submitReview(fullSubmit("b.ts"), "t");
+      const nudged = await submitReview(fullSubmit("b.ts", i), "t");
       expect(nudged).toContain("Final check");
       expect(getState("t")!.currentIndex).toBe(1);
     }
 
     // 6th → report written, verdict FAIL (one major ≥ major)
-    const done = await submitReview(fullSubmit("b.ts"), "t");
+    const done = await submitReview(fullSubmit("b.ts", 6), "t");
     expect(done).toContain("Review complete");
     expect(done).toContain("Verdict: FAIL");
     expect(done).toContain("without exploration calls");
@@ -284,6 +294,211 @@ describe("startReview / submitReview (full loop)", () => {
     guardExploration(getState("t")!, "file_read", "");
     await submitReview(full("b.ts"), "t"); // all done → state cleared
     expect(await onSessionIdle("t")).toBeNull();
+  });
+
+  it("caps invalid submissions, then force-advances with empty findings", async () => {
+    const d = gitRepo();
+    await startReview({}, d, "t");
+    for (let i = 1; i <= 5; i++) {
+      const msg = await submitReview({ garbage: true }, "t");
+      expect(msg).toContain("Invalid submission");
+      expect(msg).toContain(`rejected submit ${i}/5`);
+      expect(getState("t")!.currentIndex).toBe(0);
+    }
+    // cap exceeded → salvage nothing, advance anyway
+    const forced = await submitReview({ garbage: true }, "t");
+    expect(forced).toContain("forced after repeated invalid submissions");
+    expect(forced).toContain("Next file: b.ts");
+    expect(getState("t")!.findings["a.ts"]).toEqual([]);
+  });
+
+  it("caps coverage-missing submissions, then force-accepts the findings it has", async () => {
+    const d = gitRepo();
+    await startReview({}, d, "t");
+    const partial = {
+      assessed: ["security"],
+      findings: [
+        { category: "security", severity: "major", file: "a.ts", line: 1, rule: "r", message: "m" },
+      ],
+    };
+    for (let i = 1; i <= 5; i++) {
+      expect(await submitReview(partial, "t")).toContain("Incomplete");
+    }
+    const forced = await submitReview(partial, "t");
+    expect(forced).toContain("forced with incomplete coverage");
+    expect(getState("t")!.findings["a.ts"]).toHaveLength(1);
+  });
+
+  it("bounces degenerate findings (wrong script / looping text), then drops them at the cap", async () => {
+    const d = gitRepo();
+    await startReview({}, d, "t"); // language defaults to ko
+    const submit = {
+      assessed: [...REQUIRED_CATEGORIES],
+      findings: [
+        {
+          category: "correctness",
+          severity: "major",
+          file: "a.ts",
+          line: 1,
+          rule: "r",
+          message: "这个代码存在严重的安全问题需要立即修复没有验证输入参数", // Chinese in a ko review
+        },
+        { category: "security", severity: "minor", file: "a.ts", line: 1, rule: "r2", message: "정상 소견", suggestion: "s" },
+      ],
+    };
+    for (let i = 1; i <= 5; i++) {
+      const msg = await submitReview(submit, "t");
+      expect(msg).toContain("degenerate output");
+      expect(getState("t")!.currentIndex).toBe(0);
+    }
+    // cap exceeded → the degenerate finding is dropped; the final check still
+    // gets its one bounce, then repeating the payload is accepted
+    expect(await submitReview(submit, "t")).toContain("Final check");
+    const forced = await submitReview(submit, "t");
+    expect(forced).toContain("Next file: b.ts");
+    const kept = getState("t")!.findings["a.ts"];
+    expect(kept).toHaveLength(1);
+    expect(kept[0].message).toBe("정상 소견");
+  });
+
+  it("truncates an oversized submission instead of rejecting it", async () => {
+    const d = gitRepo();
+    await startReview({}, d, "t");
+    guardExploration(getState("t")!, "file_read", ""); // keep the final check clean
+    const long = Array.from({ length: 600 }, (_, i) => `word${i}`).join(" "); // >2000 chars, non-repetitive
+    const findings = Array.from({ length: 51 }, (_, i) => ({
+      category: "correctness",
+      severity: "minor",
+      file: "a.ts",
+      line: 1,
+      rule: `r${i}`,
+      message: i ? `issue ${i}` : long,
+      suggestion: "s",
+    }));
+    const msg = await submitReview({ assessed: [...REQUIRED_CATEGORIES], findings }, "t");
+    expect(msg).not.toContain("Invalid submission");
+    expect(msg).toContain("Next file: b.ts");
+    const kept = getState("t")!.findings["a.ts"];
+    expect(kept).toHaveLength(50); // overflow dropped, review NOT discarded
+    expect(kept[0].message).toHaveLength(2000); // runaway text truncated
+  });
+
+  it("salvages the last parseable findings when invalid submits hit the cap", async () => {
+    const d = gitRepo();
+    await startReview({}, d, "t");
+    // A parseable submit bounces on the final check …
+    expect(await submitReview(fullSubmit("a.ts", 1), "t")).toContain("Final check");
+    // … then the model degrades into schema garbage past the cap.
+    for (let i = 1; i <= 5; i++) {
+      expect(await submitReview({ garbage: true }, "t")).toContain("Invalid submission");
+    }
+    const forced = await submitReview({ garbage: true }, "t");
+    expect(forced).toContain("forced after repeated invalid submissions");
+    expect(forced).toContain("salvaged");
+    expect(getState("t")!.findings["a.ts"]).toHaveLength(1); // earlier findings kept, not []
+  });
+
+  it("warns in the completion message when a target was force-accepted", async () => {
+    const d = gitRepo();
+    await startReview({ files: ["a.ts"] }, d, "t"); // single target → forced accept finalizes
+    for (let i = 1; i <= 5; i++) await submitReview({ garbage: true }, "t");
+    const done = await submitReview({ garbage: true }, "t");
+    expect(done).toContain("Review complete");
+    expect(done).toContain("force-accepted");
+    expect(done).toContain("a.ts");
+  });
+
+  it("accepts a byte-identical resubmission instead of bouncing it again", async () => {
+    const d = gitRepo();
+    await startReview({}, d, "t");
+    // no exploration + major w/o suggestion → final check would normally bounce 5×
+    expect(await submitReview(fullSubmit("a.ts", 1), "t")).toContain("Final check");
+    // the model loops: same payload again → pointless to bounce, accept and move on
+    const accepted = await submitReview(fullSubmit("a.ts", 1), "t");
+    expect(accepted).toContain("Next file: b.ts");
+  });
+
+  it("dedupes exact-duplicate findings on accept", async () => {
+    const d = gitRepo();
+    await startReview({}, d, "t");
+    const f = { category: "correctness", severity: "minor", file: "a.ts", line: 1, rule: "r", message: "m", suggestion: "s" };
+    guardExploration(getState("t")!, "file_read", ""); // keep the final check clean
+    await submitReview({ assessed: [...REQUIRED_CATEGORIES], findings: [f, { ...f }, { ...f }] }, "t");
+    expect(getState("t")!.findings["a.ts"]).toHaveLength(1);
+  });
+
+  it("withholds output for exact-duplicate exploration calls, resetting on advance", async () => {
+    const d = gitRepo();
+    await startReview({}, d, "t");
+    const st = getState("t")!;
+    expect(guardExploration(st, "code_search", "out1", { q: "X" })).toBe("out1");
+    expect(guardExploration(st, "code_search", "out1", { q: "X" })).toBe("out1");
+    const blocked = guardExploration(st, "code_search", "out1", { q: "X" });
+    expect(blocked).toContain("Duplicate call");
+    expect(blocked).not.toContain("out1"); // output withheld, not appended
+    // different args → answered normally
+    expect(guardExploration(st, "code_search", "out2", { q: "Y" })).toBe("out2");
+
+    // advancing to the next target clears the ledger
+    await submitReview(
+      {
+        assessed: [...REQUIRED_CATEGORIES],
+        findings: [
+          { category: "correctness", severity: "minor", file: "a.ts", line: 1, rule: "r", message: "m", suggestion: "s" },
+        ],
+      },
+      "t"
+    );
+    expect(currentFile(getState("t")!)).toBe("b.ts");
+    expect(guardExploration(getState("t")!, "code_search", "out1", { q: "X" })).toBe("out1");
+  });
+
+  it("gives the final-check rework round a fresh exploration budget", async () => {
+    const d = gitRepo();
+    await startReview({}, d, "t");
+    const st = getState("t")!;
+    // burn the round budget AND the duplicate ledger before submitting
+    for (let i = 0; i <= MAX_ITER; i++) guardExploration(st, "file_read", "", { f: "a.ts" });
+    expect(guardExploration(st, "file_read", "out", { f: "a.ts" })).toContain("withheld");
+
+    // the bounce orders re-verification — the ordered re-read must be answerable
+    expect(await submitReview(fullSubmit("a.ts", 1), "t")).toContain("Final check");
+    expect(st.iterations).toBe(0);
+    expect(guardExploration(st, "file_read", "out", { f: "a.ts" })).toBe("out");
+  });
+
+  it("withholds output after MAX_MISS_STREAK consecutive not-found results", () => {
+    const st = baseState();
+    // Varied hunts for a symbol that is nowhere in the repo — args all differ,
+    // so the duplicate guard never fires; the miss streak must.
+    for (let i = 1; i < MAX_MISS_STREAK; i++) {
+      const out = guardExploration(st, "code_search", "No matches for: PBOnlineException", { q: i });
+      expect(out).toContain("No matches");
+    }
+    const blocked = guardExploration(st, "file_find", "// No file matches \"PBOnlineException\"", { q: "x" });
+    expect(blocked).toContain("consecutive lookups found NOTHING");
+    expect(blocked).not.toContain("// No file matches");
+    // A hit resets the streak; misses are answered normally again.
+    expect(guardExploration(st, "file_read", "1|code", { f: "a.ts" })).toBe("1|code");
+    expect(
+      guardExploration(st, "code_search", "No matches for: Y", { q: "y" })
+    ).toContain("No matches for: Y");
+  });
+
+  it("withholds tool output entirely past MAX_ITER", () => {
+    const st = baseState({ iterations: MAX_ITER });
+    const res = guardExploration(st, "file_read", "file content here", { f: "a.ts" });
+    expect(res).toContain("Exploration limit reached");
+    expect(res).not.toContain("file content here");
+  });
+
+  it("a state-level maxIter (config) overrides the MAX_ITER default", () => {
+    const st = baseState({ maxIter: 2 });
+    expect(guardExploration(st, "file_read", "a", { f: "1" })).toBe("a");
+    expect(guardExploration(st, "file_read", "b", { f: "2" })).toBe("b");
+    expect(guardExploration(st, "file_read", "c", { f: "3" })).toContain(
+      "Exploration limit reached (2"
+    );
   });
 
   it("concurrent reviews of the same commit get distinct report labels", async () => {

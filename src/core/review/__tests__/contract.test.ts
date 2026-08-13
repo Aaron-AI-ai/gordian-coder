@@ -5,6 +5,9 @@ import {
   SubmitSchema,
   coverage,
   atLeast,
+  degenerateReason,
+  repetitiveText,
+  scriptMismatch,
   verdict,
   type Finding,
 } from "../contract";
@@ -24,7 +27,12 @@ describe("coverage", () => {
   });
 
   it("returns the missing categories", () => {
-    expect(coverage(["security", "nfr"])).toEqual(["correctness", "tests", "framework"]);
+    expect(coverage(["security", "performance"])).toEqual([
+      "correctness",
+      "maintainability",
+      "tests",
+      "framework",
+    ]);
   });
 
   it("treats an assessed-but-clean category as covered (no findings needed)", () => {
@@ -33,9 +41,17 @@ describe("coverage", () => {
   });
 
   it("ignores duplicate assessments", () => {
-    expect(coverage(["security", "security", "nfr", "correctness", "tests", "framework"])).toEqual(
-      []
-    );
+    expect(
+      coverage([
+        "security",
+        "security",
+        "performance",
+        "maintainability",
+        "correctness",
+        "tests",
+        "framework",
+      ])
+    ).toEqual([]);
   });
 
   it("honors a custom required set", () => {
@@ -59,6 +75,50 @@ describe("FindingSchema", () => {
   it("allows line to be omitted", () => {
     const { line, ...rest } = finding();
     expect(FindingSchema.safeParse(rest).success).toBe(true);
+  });
+
+  it("truncates runaway-length text instead of rejecting the finding", () => {
+    const r = FindingSchema.safeParse(
+      finding({ message: "x".repeat(2001), rule: "x".repeat(501), suggestion: "x".repeat(4001) })
+    );
+    expect(r.success).toBe(true);
+    expect(r.data!.message).toHaveLength(2000);
+    expect(r.data!.rule).toHaveLength(500);
+    expect(r.data!.suggestion).toHaveLength(4000);
+  });
+});
+
+describe("degenerate-output detection", () => {
+  it("repetitiveText flags a phrase looping past the length floor", () => {
+    expect(repetitiveText("this code has an issue. ".repeat(20))).toBe(true);
+    expect(repetitiveText("this code has an issue.")).toBe(false); // short = never flagged
+  });
+
+  it("repetitiveText passes normal long prose", () => {
+    const prose =
+      "The cache key omits the tenant id, so two tenants requesting the same resource " +
+      "share one entry. The first tenant's response is then served to the second, which " +
+      "leaks data across tenant boundaries and must be fixed before release.";
+    expect(repetitiveText(prose)).toBe(false);
+  });
+
+  it("scriptMismatch flags Chinese output in a ko/en review but not in ja", () => {
+    const zh = "这个代码存在严重的安全问题，需要立即修复。这个函数没有验证输入参数。";
+    expect(scriptMismatch(zh, "ko")).toBe(true);
+    expect(scriptMismatch(zh, "en")).toBe(true);
+    expect(scriptMismatch(zh, "ja")).toBe(false); // kanji is legitimate Japanese
+    expect(scriptMismatch("이 코드는 입력 검증이 누락되어 보안 문제가 있습니다.", "ko")).toBe(false);
+    expect(scriptMismatch("短い", "ko")).toBe(false); // under the judgment floor
+  });
+
+  it("degenerateReason checks rule/message but not suggestion", () => {
+    expect(degenerateReason(finding(), "ko")).toBeNull();
+    expect(degenerateReason(finding({ message: "loop ".repeat(50) }), "ko")).toContain("repetitive");
+    expect(
+      degenerateReason(finding({ message: "这个代码存在严重的安全问题需要立即修复没有验证输入" }), "ko")
+    ).toContain("script");
+    // code in `suggestion` may repeat legitimately — never flagged
+    expect(degenerateReason(finding({ suggestion: "await retry(); ".repeat(30) }), "ko")).toBeNull();
   });
 });
 
@@ -101,5 +161,12 @@ describe("SubmitSchema", () => {
 
   it("rejects missing assessed field", () => {
     expect(SubmitSchema.safeParse({ findings: [] }).success).toBe(false);
+  });
+
+  it("keeps the first 50 findings instead of rejecting an oversized submit", () => {
+    const findings = Array.from({ length: 51 }, () => finding());
+    const r = SubmitSchema.safeParse({ assessed: [...REQUIRED_CATEGORIES], findings });
+    expect(r.success).toBe(true);
+    expect(r.data!.findings).toHaveLength(50);
   });
 });

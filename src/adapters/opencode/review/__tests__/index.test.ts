@@ -9,7 +9,7 @@
  */
 
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PluginInput } from "@opencode-ai/plugin";
@@ -17,6 +17,8 @@ import { createReviewModule } from "../index";
 import {
   REVIEWER_AGENT_NAME,
   REVIEWER_AGENT_TOOLS,
+  JUDGE_AGENT_NAME,
+  JUDGE_AGENT_TOOLS,
   REVIEW_COMMAND_NAME,
 } from "../prompts";
 import { MAX_RESUMES } from "../../../../core/review";
@@ -70,6 +72,8 @@ describe("tool registration", () => {
         "code_search",
         "f_review_context",
         "f_review_finalize",
+        "f_review_judge",
+        "f_review_judge_context",
         "f_review_plan",
         "f_review_submit",
         "file_find",
@@ -114,6 +118,29 @@ describe("session guard", () => {
     const out = await mod.tools.file_read.execute({ file_path: "a.ts" } as never, ctx);
     expect(out).toContain("export const a = 1;");
     expect(getState(SESSION)!.callLog["a.ts"].file_read).toBe(1);
+  });
+
+  it("serves an UNTRACKED reference rule via file_read (rules are working-tree inputs)", async () => {
+    const d = gitRepo();
+    // second commit so `commit: "HEAD"` reviews at a real ref (git-show scoped reads)
+    writeFileSync(join(d, "a.ts"), "export const a = 2;\n");
+    Bun.spawnSync(["git", "add", "-A"], { cwd: d });
+    Bun.spawnSync(["git", "commit", "-qm", "change"], { cwd: d });
+    // rule file exists in the working tree but is never committed — the
+    // ref-scoped git read would miss it and no-op the reference feature
+    mkdirSync(join(d, "review", "rules"), { recursive: true });
+    writeFileSync(
+      join(d, "review", "rules", "guide.md"),
+      "---\nmode: reference\n---\n# Order guide\nLayers must not skip.\n"
+    );
+    const { mod } = moduleFor(d);
+    await mod.tools.f_review_context.execute({ commit: "HEAD" } as never, ctx);
+
+    const out = await mod.tools.file_read.execute(
+      { file_path: "review/rules/guide.md" } as never,
+      ctx
+    );
+    expect(out).toContain("Layers must not skip.");
   });
 });
 
@@ -229,6 +256,7 @@ describe("agent/command config injection", () => {
     await mod.config(cfg as never);
 
     expect(cfg.agent[REVIEWER_AGENT_NAME]).toMatchObject({ mode: "subagent" });
+    expect(cfg.agent[JUDGE_AGENT_NAME]).toMatchObject({ mode: "subagent" });
     expect(cfg.command[REVIEW_COMMAND_NAME]).toHaveProperty("template");
   });
 
@@ -242,11 +270,92 @@ describe("agent/command config injection", () => {
     expect(cfg.command[REVIEW_COMMAND_NAME]).toBeDefined(); // the missing one still fills in
   });
 
-  it("denies the reviewer agent the orchestrator-only tools", () => {
+  // OpenCode `tools` maps only override LISTED tools — an unlisted built-in
+  // stays enabled. Confinement therefore requires explicit denies for every
+  // built-in, not just for the f-review tools.
+  const OPENCODE_BUILTINS = [
+    "bash",
+    "read",
+    "write",
+    "edit",
+    "patch",
+    "grep",
+    "glob",
+    "list",
+    "webfetch",
+    "todowrite",
+    "todoread",
+    "skill",
+    "task",
+  ];
+
+  it("denies the reviewer agent the orchestrator-only tools and every built-in", () => {
     // A subagent that could call plan/finalize/task would widen its own scope.
     expect(REVIEWER_AGENT_TOOLS.f_review_plan).toBe(false);
     expect(REVIEWER_AGENT_TOOLS.f_review_finalize).toBe(false);
-    expect(REVIEWER_AGENT_TOOLS.task).toBe(false);
     expect(REVIEWER_AGENT_TOOLS.f_review_submit).toBe(true);
+    expect(REVIEWER_AGENT_TOOLS.f_review_judge).toBe(false); // reviewers never self-judge
+    // A reviewer reads via the ref-scoped f-review tools; it must not edit
+    // files, run commands, or read the working tree directly.
+    for (const t of OPENCODE_BUILTINS) expect(REVIEWER_AGENT_TOOLS[t]).toBe(false);
+  });
+
+  it("confines the judge agent to exactly the two judge tools", () => {
+    expect(JUDGE_AGENT_TOOLS.f_review_judge_context).toBe(true);
+    expect(JUDGE_AGENT_TOOLS.f_review_judge).toBe(true);
+    for (const [name, allowed] of Object.entries(JUDGE_AGENT_TOOLS)) {
+      if (name !== "f_review_judge_context" && name !== "f_review_judge") {
+        expect(allowed).toBe(false);
+      }
+    }
+    // Explicit denies must exist for the built-ins — unlisted means enabled.
+    for (const t of OPENCODE_BUILTINS) expect(JUDGE_AGENT_TOOLS[t]).toBe(false);
+  });
+});
+
+describe("judge tool wiring", () => {
+  it("routes f_review_judge_context and f_review_judge through core with the plugin cwd", async () => {
+    const d = gitRepo();
+    const { mod } = moduleFor(d);
+
+    // Plan a judge-gated run, then fake a submitted review for a.ts.
+    const planMsg = (await mod.tools.f_review_plan.execute(
+      { files: ["a.ts"], judge: true } as never,
+      ctx
+    )) as string;
+    expect(planMsg).toContain("JUDGE GATE");
+    const runId = /Run created: (\S+) /.exec(planMsg)![1];
+    const { writeFileReview } = await import("../../../../core/review");
+    await writeFileReview(
+      runId,
+      {
+        file: "a.ts",
+        assessed: [],
+        findings: [],
+        explorationCalls: 1,
+        partial: false,
+      },
+      "# a",
+      d
+    );
+
+    const judgeCtx = (await mod.tools.f_review_judge_context.execute(
+      { runId, file: "a.ts" } as never,
+      ctx
+    )) as string;
+    expect(judgeCtx).toContain("judge round 1");
+
+    const verdict = (await mod.tools.f_review_judge.execute(
+      {
+        runId,
+        file: "a.ts",
+        findingJudgments: [],
+        coverageGaps: [],
+        score: 100,
+        feedback: "",
+      } as never,
+      ctx
+    )) as string;
+    expect(verdict).toContain("✅ Judge PASS");
   });
 });

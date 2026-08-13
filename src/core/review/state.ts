@@ -9,6 +9,7 @@
  */
 
 import type { Category, Finding, Severity } from "./contract";
+import type { ExtraRule } from "./rubric";
 import { targetPath } from "./segment";
 
 export interface ReviewState {
@@ -24,6 +25,7 @@ export interface ReviewState {
   runId?: string; // set when this session reviews ONE file of a parallel run (Model A)
   systemRule: string;
   frameworkRules: string; // authoritative framework conventions (always injected)
+  extraRules: ExtraRule[]; // review/rules/*.md; glob-gated per file at prompt render
   evidenceCache: Record<string, string>; // related-code + git-history dossier per target
   requirementBackground: string;
   planGuidance: string;
@@ -34,8 +36,15 @@ export interface ReviewState {
   label: string;
   language: string; // findings/report language, e.g. "ko"
   iterations: number;
+  maxIter?: number; // per-round exploration budget (config `maxIter`; unset = MAX_ITER)
   callLog: Record<string, Record<string, number>>; // per-file tool-call audit: file → tool → count
+  dupCalls: Record<string, number>; // exact-duplicate exploration calls (file+tool+args hash); reset per target/round
+  missStreak: number; // consecutive not-found exploration results; reset on any hit and per target/round
   recheckCount: Record<string, number>; // per-file count of final-check reworks issued (cap MAX_FINAL_RECHECKS)
+  failedSubmits: Record<string, number>; // per-file rejected submits (invalid/incomplete/degenerate; cap MAX_FAILED_SUBMITS)
+  lastSubmitHash: Record<string, string>; // per-file hash of the last submit the FINAL CHECK bounced — an identical resubmission means re-bouncing is pointless
+  lastValidFindings: Record<string, Finding[]>; // per-file findings of the last parseable submit — salvaged if invalid submits later hit the cap
+  forcedNotes: Record<string, string>; // per-target force-accept note — propagated into the report/run result so a salvaged review is never mistaken for a clean one
   deepPasses: number; // total review rounds per target (1 = single pass; clamped 1..5)
   deepPassDone: Record<string, number>; // per-target completed rounds (submit gate driver)
   resumes: number; // times the idle watchdog re-drove an incomplete review (cap MAX_RESUMES)

@@ -7,6 +7,14 @@ import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { VERSION } from "../../version";
 import { createModules } from "./modules";
+import { moebiusAfterTool, moebiusBeforeTool } from "./moebius-reporter";
+import {
+  recordCall,
+  isLooping,
+  loopNotice,
+  escalateLoop,
+  guardNativeCall,
+} from "./repeat-guard";
 import {
   getAllTools,
   processMessage,
@@ -135,6 +143,8 @@ const OpenCodeAdapter: Plugin = async (input) => {
 
     // Hook: before tool execution
     "tool.execute.before": async (hookInput, output) => {
+      recordCall(hookInput.sessionID ?? "", hookInput.tool, output.args);
+      moebiusBeforeTool(hookInput.tool, hookInput.sessionID ?? "", output.args as Record<string, unknown>);
       await beforeToolExecute(
         hookInput.tool,
         output.args as Record<string, unknown>,
@@ -144,11 +154,25 @@ const OpenCodeAdapter: Plugin = async (input) => {
 
     // Hook: after tool execution
     "tool.execute.after": async (hookInput, hookOutput) => {
+      moebiusAfterTool(hookInput.tool, hookInput.sessionID ?? "", hookOutput);
       await afterToolExecute(
         hookInput.tool,
         hookOutput,
         { ...context, sessionId: hookInput.sessionID }
       );
+      // Native explorers (glob/grep/read/bash) bypass the f-review tool
+      // wrappers — when a review is active, count them against the same
+      // exploration budget / duplicate guards the f-review tools use.
+      const nativeNotice = guardNativeCall(hookInput.sessionID ?? "", hookInput.tool);
+      if (nativeNotice) {
+        hookOutput.output = nativeNotice;
+      }
+      // Identical-call loop: starve it — replace the output in place (the
+      // wrapper reuses this object, same mechanism as before-hook args).
+      if (isLooping(hookInput.sessionID ?? "")) {
+        hookOutput.output =
+          loopNotice(hookInput.sessionID ?? "") + escalateLoop(hookInput.sessionID ?? "");
+      }
     },
 
     // Hook: modify LLM call parameters (temperature, topP, topK, options)
