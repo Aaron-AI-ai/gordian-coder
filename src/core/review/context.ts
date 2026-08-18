@@ -50,6 +50,7 @@ export const ReviewConfigSchema = z.object({
   rulesDir: field(z.string()), // project rules directory, relative to root (default "review/rules")
   judge: field(z.boolean()), // run mode: judge each file's review with an independent agent
   judgeThreshold: field(z.number()), // judge pass score 0..100 (default 70)
+  judgeRounds: field(z.number()), // max rework (re-review) rounds per file (0..5, default 2; 0 = judge once, never re-review)
 });
 export type ReviewConfig = z.infer<typeof ReviewConfigSchema>;
 

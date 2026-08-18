@@ -255,6 +255,23 @@ describe("submitJudge", () => {
     expect(loadJudgment(meta.runId, "a.ts", d).terminal?.status).toBe("judge-incomplete");
   });
 
+  it("meta judgeRounds overrides the rework cap (1 = judge twice, re-review once)", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta({ judgeRounds: 1 }), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+
+    // Judge call 1: below threshold → the single allowed rework.
+    const first = await submitJudge(judgePayload(meta.runId, 10), d);
+    expect(first).toContain("rework 1/1");
+    await writeFileReview(meta.runId, reviewResult(), "# a revision 2", d);
+
+    // Judge call 2: still below threshold → terminal, no further re-review.
+    const second = await submitJudge(judgePayload(meta.runId, 10), d);
+    expect(second).toContain("Judge INCOMPLETE");
+    expect(loadJudgment(meta.runId, "a.ts", d).terminal?.status).toBe("judge-incomplete");
+    expect(judgeContext(meta.runId, "a.ts", d)).toContain("Judge INCOMPLETE");
+  });
+
   it("HARD-enforces the cap: past it no context, verdict, or re-review is served", async () => {
     const d = gitRepo();
     const meta = await createRun(baseMeta(), d);
@@ -677,14 +694,18 @@ describe("plan/finalize integration", () => {
     expect(loadRun(runId, d)!.judge).toBe(true);
   });
 
-  it("planReview picks up judge/judgeThreshold from .f-review.json", async () => {
+  it("planReview picks up judge/judgeThreshold/judgeRounds from .f-review.json", async () => {
     const d = gitRepo();
-    writeFileSync(join(d, ".f-review.json"), '{"judge": true, "judgeThreshold": 85}');
+    writeFileSync(
+      join(d, ".f-review.json"),
+      '{"judge": true, "judgeThreshold": 85, "judgeRounds": 1}'
+    );
     const msg = await planReview({}, d);
     const runId = /Run created: (\S+) /.exec(msg)![1];
     const meta = loadRun(runId, d)!;
     expect(meta.judge).toBe(true);
     expect(meta.judgeThreshold).toBe(85);
+    expect(meta.judgeRounds).toBe(1);
   });
 
   it("finalizeRun reports judge outcomes: passed, capped-below-threshold, unjudged", async () => {

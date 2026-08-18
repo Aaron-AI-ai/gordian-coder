@@ -76,6 +76,9 @@ export interface RunMeta {
   judge?: boolean;
   /** Judge pass score (0..100, default DEFAULT_JUDGE_THRESHOLD). */
   judgeThreshold?: number;
+  /** Max judge rework (re-review) rounds per file (0..5, default
+   * MAX_JUDGE_ROUNDS; 0 = judge once, never re-review). */
+  judgeRounds?: number;
   /** Baseline finding keys snapshotted at PLAN time (like sequential mode does
    * at start). Finalize must not re-read the report dir: a finalize retry would
    * otherwise see its own partial report and mislabel this run's findings as
@@ -104,6 +107,7 @@ export const RunMetaSchema: z.ZodType<RunMeta> = z.object({
   deepPasses: z.number().int().min(1).max(5).optional(),
   judge: z.boolean().optional(),
   judgeThreshold: z.number().min(0).max(100).optional(),
+  judgeRounds: z.number().int().min(0).max(5).optional(),
   baseline: z.array(z.string()).optional(),
   sourceIdentity: z.string().optional(),
   criteriaIdentity: z.string().optional(),
@@ -649,6 +653,10 @@ export async function planReview(args: PlanReviewArgs, cwd: string): Promise<str
     judgeThreshold:
       typeof config.judgeThreshold === "number"
         ? Math.max(0, Math.min(100, config.judgeThreshold))
+        : undefined,
+    judgeRounds:
+      typeof config.judgeRounds === "number"
+        ? Math.max(0, Math.min(5, Math.trunc(config.judgeRounds)))
         : undefined,
     sourceIdentity: range ?? filesSnapshotIdentity(cwd, targets),
     criteriaIdentity: reviewCriteriaIdentity(cwd),

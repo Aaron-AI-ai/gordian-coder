@@ -37,8 +37,15 @@ import {
 } from "./run";
 
 /** Max rework (re-review) instructions per file — after that judging becomes
- * terminal INCOMPLETE and is flagged fail-closed in the final report. */
+ * terminal INCOMPLETE and is flagged fail-closed in the final report.
+ * Default only; `.f-review.json` `judgeRounds` overrides it per run. */
 export const MAX_JUDGE_ROUNDS = 2;
+
+/** Effective rework cap for a run: `judgeRounds` snapshotted into the run
+ * meta at plan time, else MAX_JUDGE_ROUNDS. */
+function reworkCap(meta: { judgeRounds?: number } | null | undefined): number {
+  return meta?.judgeRounds ?? MAX_JUDGE_ROUNDS;
+}
 /** Malformed submissions for one review revision before judging terminates
  * fail-closed. This is separate from (and never consumes) rework rounds. */
 export const MAX_INVALID_JUDGE_SUBMISSIONS = 3;
@@ -497,9 +504,9 @@ export function judgeContext(runId: string, file: string, cwd: string): string {
   }
   // Hard cap enforcement (the tool descriptions promise it): past the rework
   // cap no further judge round is served — the latest review stands.
-  if (reworkCount(runId, file, cwd) > MAX_JUDGE_ROUNDS) {
+  if (reworkCount(runId, file, cwd) > reworkCap(meta)) {
     return (
-      `⚠️ ${file} already hit the judge rework cap (${MAX_JUDGE_ROUNDS}) in run ${runId}. ` +
+      `⚠️ ${file} already hit the judge rework cap (${reworkCap(meta)}) in run ${runId}. ` +
       `Judging is INCOMPLETE — do NOT judge or re-review it; it is flagged in the final report.`
     );
   }
@@ -636,6 +643,7 @@ function attemptMessage(
   runId: string,
   file: string,
   threshold: number,
+  cap: number,
   judgment: FileJudgment,
   attempt: JudgeAttempt,
   duplicate = false
@@ -655,7 +663,7 @@ function attemptMessage(
   }
   const reworks = judgment.attempts.filter((a) => a.verdict === "rework").length;
   return [
-    `${prefix}🔁 Judge REWORK for ${file} (score ${attempt.score} < ${threshold}, rework ${reworks}/${MAX_JUDGE_ROUNDS}).`,
+    `${prefix}🔁 Judge REWORK for ${file} (score ${attempt.score} < ${threshold}, rework ${reworks}/${cap}).`,
     `Re-spawn ONE f-reviewer subagent with this prompt:`,
     `  "Call f_review_context with runId=\"${runId}\" and files=[\"${file}\"], review that single file addressing the judge feedback injected into your instructions, and call f_review_submit."`,
     `After it completes, spawn a NEW f-judge subagent for ${file} again (fresh session).`,
@@ -779,7 +787,9 @@ async function recordInvalidSubmission(
   const existing = judgment.attempts.findLast((attempt) => attemptMatchesReview(attempt, review));
   const meta = loadRun(runId, cwd);
   const threshold = meta?.judgeThreshold ?? DEFAULT_JUDGE_THRESHOLD;
-  if (existing) return attemptMessage(runId, file, threshold, judgment, existing, true);
+  if (existing) {
+    return attemptMessage(runId, file, threshold, reworkCap(meta), judgment, existing, true);
+  }
   const currentTerminal = judgment.terminal;
   if (currentTerminal && terminalMatchesReview(currentTerminal, review)) {
     return terminalMessage(file, currentTerminal);
@@ -853,16 +863,18 @@ async function submitJudgeSerialized(
   const judgment = loadJudgment(runId, file, cwd);
   const existing = judgment.attempts.findLast((attempt) => attemptMatchesReview(attempt, review));
   const threshold = meta.judgeThreshold ?? DEFAULT_JUDGE_THRESHOLD;
-  if (existing) return attemptMessage(runId, file, threshold, judgment, existing, true);
+  if (existing) {
+    return attemptMessage(runId, file, threshold, reworkCap(meta), judgment, existing, true);
+  }
   const currentTerminal = judgment.terminal;
   if (currentTerminal && terminalMatchesReview(currentTerminal, review)) {
     return terminalMessage(file, currentTerminal);
   }
-  // Hard cap enforcement: once more than MAX_JUDGE_ROUNDS rework verdicts
-  // exist, no later artifact can reopen judging.
-  if (reworkCount(runId, file, cwd) > MAX_JUDGE_ROUNDS) {
+  // Hard cap enforcement: once more than the run's rework cap of rework
+  // verdicts exist, no later artifact can reopen judging.
+  if (reworkCount(runId, file, cwd) > reworkCap(meta)) {
     return (
-      `⚠️ ${file} already hit the judge rework cap (${MAX_JUDGE_ROUNDS}) — verdict NOT recorded. ` +
+      `⚠️ ${file} already hit the judge rework cap (${reworkCap(meta)}) — verdict NOT recorded. ` +
       `Judging is INCOMPLETE; continue with the remaining files, then f_review_finalize.`
     );
   }
@@ -912,12 +924,12 @@ async function submitJudgeSerialized(
   judgment.attempts.push(attempt);
   if (verdict === "rework") {
     const reworks = judgment.attempts.filter((a) => a.verdict === "rework").length;
-    if (reworks > MAX_JUDGE_ROUNDS) {
+    if (reworks > reworkCap(meta)) {
       judgment.terminal = {
         status: "judge-incomplete",
         reviewRevision: review.revision,
         reviewArtifactHash: artifactIdentity(review),
-        reason: `score ${parsed.data.score} remained below threshold ${threshold} after ${MAX_JUDGE_ROUNDS} rework rounds`,
+        reason: `score ${parsed.data.score} remained below threshold ${threshold} after ${reworkCap(meta)} rework rounds`,
         at: new Date().toISOString(),
       };
     }
@@ -927,5 +939,5 @@ async function submitJudgeSerialized(
     judgment.terminal = undefined;
   }
   await persistJudgment(runId, file, cwd, judgment);
-  return attemptMessage(runId, file, threshold, judgment, attempt);
+  return attemptMessage(runId, file, threshold, reworkCap(meta), judgment, attempt);
 }
