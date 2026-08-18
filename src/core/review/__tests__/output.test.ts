@@ -13,6 +13,7 @@ import {
   baselineKey,
   parseReportKeys,
   loadBaseline,
+  htmlReportPath,
 } from "../output";
 import type { Finding } from "../contract";
 
@@ -118,11 +119,12 @@ describe("renderReport", () => {
     expect(md).toContain("line1<br>line2");
   });
 
-  it("renders the suggestion column ('-' when absent)", () => {
+  it("renders the suggestion column ('-' when absent, deferred when multi-line)", () => {
     const md = renderReport({
       "a.ts": [finding({ suggestion: "use env var\nnot a literal" }), finding()],
     });
-    expect(md).toContain("| use env var<br>not a literal |");
+    expect(md).toContain("| ↓ see below |"); // moved out of the table, see below
+    expect(md).toContain("use env var\nnot a literal"); // intact, not <br>-flattened
     expect(md).toMatch(/hardcoded token \| - \|/);
   });
 
@@ -292,5 +294,129 @@ describe("writeReport", () => {
     await writeReport(abs, { "a.ts": [finding()] }, "L", cwd);
     expect(existsSync(abs)).toBe(true);
     expect(existsSync(join(cwd, abs))).toBe(false);
+  });
+});
+
+describe("html report", () => {
+  it("writes an html view beside every markdown report", async () => {
+    const d = tmp();
+    await writeReport("nested/out.md", { "a.ts": [finding()] }, "L", d, "ko");
+    const html = readFileSync(join(d, "nested/out.html"), "utf8");
+    expect(existsSync(join(d, "nested/out.md"))).toBe(true);
+    expect(html).toContain("코드 리뷰 리포트");
+    expect(html).toContain("no-secret");
+    // Every placeholder resolved — an unfilled one would ship as literal text.
+    expect(html).not.toContain("{{");
+  });
+
+  it("escapes finding text so review content cannot inject markup", async () => {
+    const d = tmp();
+    await writeReport(
+      "out.md",
+      { "a.ts": [finding({ message: '<script>alert(1)</script> & "quoted"' })] },
+      "L",
+      d
+    );
+    const html = readFileSync(join(d, "out.html"), "utf8");
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).toContain("&amp;");
+  });
+
+  it("carries the verdict, the severity spread, and the run appendix", async () => {
+    const d = tmp();
+    await writeReport(
+      "out.md",
+      {
+        "a.ts": [finding({ severity: "blocker" }), finding({ severity: "nit", rule: "r2" })],
+        "clean.ts": [],
+      },
+      "L",
+      d,
+      "en",
+      "major",
+      undefined,
+      DATE,
+      "## Run Summary\n\n- Quality status: **INCOMPLETE**"
+    );
+    const html = readFileSync(join(d, "out.html"), "utf8");
+    expect(html).toContain('class="verdict fail"');
+    expect(html).toContain("1 finding(s) at or above major");
+    expect(html).toContain('class="seg blocker"');
+    expect(html).toContain('class="seg nit"');
+    expect(html).toContain("<strong>INCOMPLETE</strong>"); // appendix markdown rendered
+    expect(html).toContain("50%"); // 1 of 2 files clean
+  });
+
+  it("marks baseline findings as existing, like the markdown report", async () => {
+    const d = tmp();
+    await writeReport(
+      "out.md",
+      { "a.ts": [finding()] },
+      "L",
+      d,
+      "ko",
+      undefined,
+      new Set([baselineKey("a.ts", "no-secret")])
+    );
+    expect(readFileSync(join(d, "out.html"), "utf8")).toContain('class="badge old">기존');
+  });
+
+  it("names the html after the markdown target, never colliding with it", () => {
+    expect(htmlReportPath("fcq/report/f-review/review-A-20260727.md")).toBe(
+      "fcq/report/f-review/review-A-20260727.html"
+    );
+    expect(htmlReportPath("out.txt")).toBe("out.txt.html");
+  });
+});
+
+describe("multi-line suggestions", () => {
+  const code = ["Add a null filter:", "", "```java", "list.stream()", "  .filter(Objects::nonNull)", "```"].join("\n");
+
+  it("moves a code suggestion out of the table instead of flattening it to <br>", () => {
+    const md = renderReport(
+      { "A.java": [finding({ line: 142, rule: "null 필터링 누락", suggestion: code })] },
+      "",
+      "ko"
+    );
+    const [table, details] = md.split("### 제안 상세");
+    expect(table).not.toContain("<br>"); // the whole point: no wall of <br>
+    expect(table).toContain("↓ 아래 참조");
+    expect(details).toContain("#### null 필터링 누락 (L142)");
+    expect(details).toContain("```java"); // fence preserved, so the code stays pastable
+    expect(details).toContain("  .filter(Objects::nonNull)"); // and indentation with it
+  });
+
+  it("keeps single-line suggestions inline in the table", () => {
+    const md = renderReport({ "a.ts": [finding({ suggestion: "delete the line" })] }, "", "en");
+    expect(md).toContain("| delete the line |");
+    expect(md).not.toContain("Suggestions"); // no details section when nothing deferred
+  });
+
+  it("parses baseline keys past a suggestion block that looks like report structure", () => {
+    // Model-written code may contain "## " or a "|" row; parsing it as report
+    // structure would file later findings under a bogus heading.
+    const hostile = ["```md", "## not-a-file.ts", "| major | x | 1 | fake-rule | m | - |", "```"].join("\n");
+    const md = renderReport(
+      {
+        "a.ts": [finding({ rule: "real-rule", suggestion: hostile })],
+        "b.ts": [finding({ rule: "second-rule" })],
+      },
+      "",
+      "en"
+    );
+    const keys = parseReportKeys(md);
+    expect(keys.has(baselineKey("a.ts", "real-rule"))).toBe(true);
+    expect(keys.has(baselineKey("b.ts", "second-rule"))).toBe(true);
+    expect(keys.has(baselineKey("not-a-file.ts", "fake-rule"))).toBe(false);
+    expect(keys.size).toBe(2);
+  });
+
+  it("strips the code fence in the html view, which is already preformatted", async () => {
+    const d = tmp();
+    await writeReport("out.md", { "A.java": [finding({ suggestion: code })] }, "L", d, "ko");
+    const html = readFileSync(join(d, "out.html"), "utf8");
+    expect(html).toContain("list.stream()");
+    expect(html).not.toContain("```");
   });
 });

@@ -13,6 +13,7 @@ import { existsSync, statSync, readdirSync, readFileSync, renameSync } from "nod
 import { join, isAbsolute, dirname, basename } from "node:path";
 import { loadConfig } from "./context";
 import { SEVERITIES, verdict, type Finding, type Severity } from "./contract";
+import { renderHtmlReport } from "./html";
 
 const DEFAULT_REPORT_DIR = "fcq/report/f-review/";
 const DEFAULT_MANIFEST_DIR = "fcq/f-review/manifest/";
@@ -77,6 +78,8 @@ interface ReportLabels {
   noIssues: string;
   header: string;
   existing: string; // marker for findings already present in the baseline report
+  seeBelow: string; // table cell standing in for a multi-line suggestion
+  detailsTitle: string; // heading of the section holding those suggestions
 }
 
 const LABELS: Record<string, ReportLabels> = {
@@ -86,6 +89,8 @@ const LABELS: Record<string, ReportLabels> = {
     noIssues: "_이슈 없음._",
     header: "| 심각도 | 분류 | 라인 | 규칙 | 내용 | 제안 |",
     existing: "기존",
+    seeBelow: "↓ 아래 참조",
+    detailsTitle: "제안 상세",
   },
   en: {
     title: "# Code Review Report",
@@ -93,6 +98,8 @@ const LABELS: Record<string, ReportLabels> = {
     noIssues: "_No issues._",
     header: "| severity | category | line | rule | message | suggestion |",
     existing: "existing",
+    seeBelow: "↓ see below",
+    detailsTitle: "Suggestions",
   },
   ja: {
     title: "# コードレビューレポート",
@@ -100,12 +107,22 @@ const LABELS: Record<string, ReportLabels> = {
     noIssues: "_問題なし。_",
     header: "| 深刻度 | 分類 | 行 | ルール | 内容 | 提案 |",
     existing: "既存",
+    seeBelow: "↓ 下記参照",
+    detailsTitle: "提案の詳細",
   },
 };
 
 /** Escape a value for a markdown table cell: pipes and newlines. */
 function cell(s: string): string {
   return s.replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
+}
+
+/** A suggestion carrying real code (or any multi-line text) cannot live in a
+ * table cell: markdown has no cell newline, so cell() flattens it into a wall
+ * of `<br>` that is unreadable and unpastable. Those move under the table as
+ * their own block; single-line suggestions stay inline where they read fine. */
+function isBlockSuggestion(s: string | undefined): s is string {
+  return !!s && /\r?\n/.test(s);
 }
 
 // ── baseline (previous-report) support ───────────────────────────
@@ -121,7 +138,16 @@ export function baselineKey(file: string, rule: string): string {
 export function parseReportKeys(md: string): Set<string> {
   const keys = new Set<string>();
   let file = "";
+  let inFence = false;
   for (const line of md.split("\n")) {
+    // Suggestion blocks hold model-written code. A fenced line starting with
+    // "## " or "|" is source, not report structure — parsing it would file the
+    // next findings under a bogus heading and poison the next run's baseline.
+    if (line.startsWith("```")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
     const h = /^## (.+)$/.exec(line);
     if (h) {
       file = h[1].trim();
@@ -199,18 +225,42 @@ export function renderReport(
     }
     lines.push(L.header);
     lines.push("| --- | --- | --- | --- | --- | --- |");
+    const blocks: (Finding & { suggestion: string })[] = [];
     for (const x of fs) {
       const old = baseline?.has(baselineKey(file, x.rule)) ? `**[${L.existing}]** ` : "";
+      if (isBlockSuggestion(x.suggestion)) blocks.push({ ...x, suggestion: x.suggestion });
+      const suggestion = !x.suggestion
+        ? "-"
+        : isBlockSuggestion(x.suggestion)
+          ? L.seeBelow
+          : cell(x.suggestion);
       lines.push(
-        `| ${x.severity} | ${x.category} | ${x.line ?? "-"} | ${cell(x.rule)} | ${old}${cell(x.message)} | ${x.suggestion ? cell(x.suggestion) : "-"} |`
+        `| ${x.severity} | ${x.category} | ${x.line ?? "-"} | ${cell(x.rule)} | ${old}${cell(x.message)} | ${suggestion} |`
       );
     }
     lines.push("");
+    // Kept verbatim: the model writes these as markdown (usually a fenced code
+    // block), and the point of moving them here is that they stay pastable.
+    if (blocks.length) {
+      lines.push(`### ${L.detailsTitle}`, "");
+      for (const x of blocks) {
+        lines.push(`#### ${x.rule}${x.line ? ` (L${x.line})` : ""}`, "", x.suggestion.trim(), "");
+      }
+    }
   }
   return lines.join("\n");
 }
 
-/** Write the report; Bun.write creates parent directories. Returns the path.
+/** Swap a report path's extension for `.html`. A target without `.md` (an
+ * explicit `--output report.txt`) gets the suffix appended, so the html file
+ * can never collide with the markdown one it accompanies. */
+export function htmlReportPath(path: string): string {
+  return path.endsWith(".md") ? `${path.slice(0, -3)}.html` : `${path}.html`;
+}
+
+/** Write the report; Bun.write creates parent directories. Returns the
+ * markdown path — the machine-readable artifact loadBaseline reads back.
+ * An HTML view of the same data is written beside it (see html.ts).
  * `appendix` (optional) is extra markdown appended after the body — used by
  * parallel runs to attach their coverage/quality summary. */
 export async function writeReport(
@@ -228,6 +278,10 @@ export async function writeReport(
   backupReportDir(dirname(abs), now);
   const body = renderReport(findings, label, language, failOn, baseline);
   await Bun.write(abs, appendix ? `${body}\n${appendix}` : body);
+  await Bun.write(
+    htmlReportPath(abs),
+    renderHtmlReport(findings, label, language, failOn, baseline, now, appendix, baselineKey)
+  );
   return path;
 }
 

@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<!--
+  f-review HTML report template.
+
+  Design lives here, data does not: html.ts fills every placeholder and
+  never emits markup of its own except the repeated rows/blocks the data
+  decides (table rows, detail blocks, chips). Edit the CSS, the layout, or the
+  script here — TypeScript only needs touching when a NEW placeholder appears.
+
+  Bundled into dist as inline text (`import ... with { type: "text" }`), so the
+  published plugin stays a single file with no runtime asset lookup.
+
+  Placeholders are double-brace NAME tokens; an unknown name throws instead of
+  rendering blank, so a renamed placeholder can never ship as an empty section.
+  That also means this comment must not contain one.
+-->
+<html lang="{{LANG}}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<style>
+:root {
+  --paper:#fbfaf7; --card:#ffffff; --ink:#15171a; --graphite:#646b73; --line:#e6e4dd;
+  --pass:#2f7d32; --fail:#c5362b;
+  --nit:#2f6feb; --minor:#b07a00; --major:#c75300; --blocker:#c5362b;
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,'D2Coding',monospace;
+  --sans:'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',system-ui,sans-serif;
+}
+* { box-sizing:border-box; }
+[hidden] { display:none !important; }
+body { margin:0; font-family:var(--sans); background:var(--paper); color:var(--ink); -webkit-font-smoothing:antialiased; }
+.wrap { max-width:1120px; margin:0 auto; padding:0 22px 64px; }
+.eyebrow { font-family:var(--mono); font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--graphite); }
+
+/* header */
+header { padding:34px 0 22px; border-bottom:1px solid var(--line); }
+.topline { display:flex; justify-content:space-between; align-items:baseline; gap:16px; flex-wrap:wrap; }
+h1 { font-size:30px; font-weight:800; letter-spacing:-.01em; margin:10px 0 12px; }
+.meta { font-family:var(--mono); color:var(--graphite); font-size:12px; line-height:1.9; word-break:break-all; }
+.meta b { color:var(--ink); font-weight:600; }
+
+/* verdict */
+.verdict { display:flex; align-items:center; gap:10px; margin:20px 0 0; padding:13px 16px;
+  border-radius:9px; font-size:14px; font-weight:700; }
+.verdict.pass { background:#eef5ee; color:var(--pass); border:1px solid #cfe3cf; }
+.verdict.fail { background:#fdf1ef; color:var(--fail); border:1px solid #f2d4cf; }
+
+/* hero */
+.hero { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:28px; align-items:end; padding:26px 0 24px; border-bottom:1px solid var(--line); }
+.stats { display:flex; gap:34px; flex-wrap:wrap; }
+.stat .n { font-family:var(--mono); font-size:34px; font-weight:700; line-height:1; letter-spacing:-.02em; }
+.stat .l { font-size:12px; color:var(--graphite); margin-top:7px; }
+.stat.rate .n { color:var(--pass); }
+.stat.bad .n { color:var(--fail); }
+.spectrum { min-width:300px; }
+.spectrum-bar { display:flex; height:18px; border-radius:4px; overflow:hidden; background:#ecebe5; }
+.spectrum-bar .seg { min-width:0; }
+.seg.nit{background:var(--nit);} .seg.minor{background:var(--minor);}
+.seg.major{background:var(--major);} .seg.blocker{background:var(--blocker);}
+.spectrum-bar.empty { background:var(--pass); }
+.spectrum-legend { display:flex; gap:14px; flex-wrap:wrap; margin-top:10px; font-family:var(--mono); font-size:11px; color:var(--graphite); }
+.spectrum-legend .lg b { color:var(--ink); }
+.spectrum-legend .dot { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:5px; vertical-align:baseline; }
+
+/* tabs (sticky with the filter toolbar, so navigation survives long scrolls) */
+.stickyhead { position:sticky; top:0; z-index:5; background:var(--paper); margin-top:36px; }
+.tabs { display:flex; gap:2px; margin:0; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+.tab { font-family:var(--sans); font-size:14px; font-weight:600; padding:11px 17px; border:none; background:none;
+  color:var(--graphite); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; }
+.tab:hover { color:var(--ink); }
+.tab.active { color:var(--ink); border-bottom-color:var(--ink); }
+.tab .c { font-family:var(--mono); font-size:12px; font-weight:400; color:var(--graphite); margin-left:6px; }
+.tab.active .c { color:var(--ink); }
+.tab:focus-visible { outline:2px solid var(--nit); outline-offset:-2px; border-radius:4px; }
+.panel { margin-top:18px; }
+
+/* tables */
+table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; font-size:13px; }
+th, td { padding:9px 12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+th { background:#f1efe8; font-weight:600; font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--graphite); white-space:nowrap; }
+tbody tr:last-child td { border-bottom:none; }
+tbody tr:hover { background:#faf8f2; }
+td code, code { font-family:var(--mono); background:#f1efe8; padding:1px 6px; border-radius:5px; font-size:12px; }
+.num { font-family:var(--mono); text-align:right; }
+.catrow { cursor:pointer; }
+.catrow:focus-visible { outline:2px solid var(--nit); outline-offset:-2px; }
+.catrow.fail { background:#fdf3f1; }
+.catrow.pass { background:#f1f7f1; }
+.catrow.fail td:first-child { box-shadow:inset 3px 0 0 var(--fail); font-weight:700; color:var(--fail); }
+.catrow.pass td:first-child { box-shadow:inset 3px 0 0 var(--pass); color:var(--pass); }
+.catrow.fail:hover { background:#fbe9e6; } .catrow.pass:hover { background:#e8f2e8; }
+
+/* badges */
+.badge { display:inline-block; padding:2px 9px; border-radius:6px; font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.04em; color:#fff; white-space:nowrap; }
+.badge.old { background:var(--graphite); }
+.sev { display:inline-block; padding:1px 8px; border-radius:6px; font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.03em; border:1px solid currentColor; white-space:nowrap; }
+.sev.nit{color:var(--nit);} .sev.minor{color:var(--minor);}
+.sev.major{color:var(--major);} .sev.blocker{color:var(--blocker);}
+
+/* filter toolbar (lives inside .stickyhead) */
+.toolbar { padding:12px 0 10px; border-bottom:1px solid var(--line); }
+.chips { display:flex; gap:7px; flex-wrap:wrap; margin-bottom:10px; }
+.chip, .fbtn { font-family:var(--mono); font-size:12px; padding:5px 11px; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:7px; cursor:pointer; line-height:1.3; }
+.chip b { color:var(--graphite); margin-left:5px; font-weight:600; }
+.chip:hover, .fbtn:hover { border-color:#c9c6bc; }
+.chip.active, .fbtn.active { background:var(--ink); color:var(--paper); border-color:var(--ink); }
+.chip.active b { color:var(--paper); opacity:.7; }
+.controls { display:flex; gap:18px; align-items:center; flex-wrap:wrap; }
+.seg-group { display:flex; gap:6px; align-items:center; }
+.seg-group .lbl { font-family:var(--mono); font-size:11px; color:var(--graphite); margin-right:2px; }
+#q { font-family:var(--mono); font-size:12px; padding:6px 11px; border:1px solid var(--line); border-radius:7px; background:var(--card); min-width:220px; flex:1; max-width:320px; }
+#q:focus, .chip:focus-visible, .fbtn:focus-visible { outline:2px solid var(--nit); outline-offset:1px; }
+
+/* findings */
+details.vblk { background:var(--card); border:1px solid var(--line); border-radius:9px; margin:9px 0; }
+details.vblk > summary { cursor:pointer; padding:11px 14px; font-size:13px; display:flex; align-items:center; gap:9px; flex-wrap:wrap; list-style:none; }
+details.vblk > summary::-webkit-details-marker { display:none; }
+/* display:flex removes the native disclosure marker — draw it back */
+details.vblk > summary::before { content:'\25B8'; color:var(--graphite); }
+details.vblk[open] > summary::before { content:'\25BE'; }
+details.vblk[open] > summary { border-bottom:1px solid var(--line); }
+details.vblk summary .desc { color:var(--graphite); }
+details.vblk summary code { word-break:break-all; }
+details.vblk ul { margin:0; padding:10px 16px 14px 30px; font-size:13px; list-style:none; }
+details.vblk li { margin:10px 0; line-height:1.65; }
+details.vblk li::before { content:'\25B8'; color:var(--graphite); margin-right:7px; }
+.fix { display:block; margin:6px 0 0 16px; padding:8px 11px; background:#f7f6f1; border-left:3px solid var(--line);
+  border-radius:0 6px 6px 0; font-size:12px; white-space:pre-wrap; }
+.fix .fixlbl { font-family:var(--mono); font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--graphite); display:block; margin-bottom:3px; }
+.viol-controls { display:flex; gap:7px; margin:0 0 12px; }
+.empty-note { color:var(--graphite); font-family:var(--mono); font-size:13px; padding:18px 4px; }
+.fhide { display:none !important; }   /* filtered-out finding, distinct from a collapsed block */
+
+/* run summary appendix */
+.runsum { font-size:13px; line-height:1.85; }
+.runsum h2 { font-size:13px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; margin:30px 0 10px; }
+
+#totop { position:fixed; right:22px; bottom:22px; width:40px; height:40px; border-radius:50%;
+  border:1px solid var(--line); background:var(--card); color:var(--ink); font-size:16px;
+  cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,.08); z-index:6; }
+#totop:hover { border-color:#c9c6bc; }
+.footer { margin-top:46px; padding-top:14px; border-top:1px solid var(--line); color:var(--graphite); font-family:var(--mono); font-size:11px; }
+@media (max-width:720px){ .hero{grid-template-columns:1fr;} .spectrum{min-width:0;} }
+@media (prefers-reduced-motion:reduce){ *{scroll-behavior:auto;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="topline">
+      <span class="eyebrow">{{EYEBROW}}</span>
+      <span class="eyebrow">{{STAMP}}</span>
+    </div>
+    <h1>{{HEADING}}</h1>
+    <div class="meta">{{META}}</div>
+  </header>
+
+  {{VERDICT}}
+
+  <section class="hero">
+    <div class="stats">{{STATS}}</div>
+    <div class="spectrum">
+      <span class="eyebrow">{{SPECTRUM_LABEL}}</span>
+      <div class="spectrum-bar{{SPECTRUM_EMPTY}}">{{SPECTRUM}}</div>
+      <div class="spectrum-legend">{{LEGEND}}</div>
+    </div>
+  </section>
+
+  <div class="stickyhead">
+    <nav class="tabs" role="tablist">{{TABS}}</nav>
+    <div class="toolbar" hidden>
+      <div class="chips">{{CHIPS}}</div>
+      <div class="controls">
+        <div class="seg-group" data-group="sev">
+          <span class="lbl">{{SEVERITY_LABEL}}</span>
+          {{SEVERITY_BUTTONS}}
+        </div>
+        <input id="q" type="search" placeholder="{{SEARCH_LABEL}}" aria-label="{{SEARCH_LABEL}}">
+      </div>
+    </div>
+  </div>
+
+  <section class="panel" data-panel="cat">
+    <table>
+      <thead><tr>{{CATEGORY_HEAD}}</tr></thead>
+      <tbody>{{CATEGORY_ROWS}}</tbody>
+    </table>
+  </section>
+
+  <section class="panel" data-panel="files" hidden>
+    {{EXPAND_CONTROLS}}
+    {{FILE_BLOCKS}}
+    <div class="empty-note" data-empty="vblk" hidden>{{NO_MATCH}}</div>
+  </section>
+
+  <section class="panel" data-panel="viol" hidden>
+    {{EXPAND_CONTROLS}}
+    {{RULE_BLOCKS}}
+  </section>
+
+  {{APPENDIX}}
+
+  <div class="footer">{{FOOTER}}</div>
+</div>
+<button id="totop" hidden aria-label="top">&#8593;</button>
+<script>
+(function(){
+  var state={cat:'',sev:'',q:''};
+  var curTab='cat';
+  function setActive(el){
+    var sibs=el.parentNode.querySelectorAll('.chip,.fbtn');
+    for(var i=0;i<sibs.length;i++){ sibs[i].classList.remove('active'); }
+    el.classList.add('active');
+  }
+  /* Reflect tab/filters in the URL hash — survives reload, shareable as a link */
+  function syncHash(){
+    var parts=[];
+    if(curTab!=='cat'){ parts.push('tab='+curTab); }
+    if(state.cat){ parts.push('cat='+encodeURIComponent(state.cat)); }
+    if(state.sev){ parts.push('sev='+state.sev); }
+    if(state.q){ parts.push('q='+encodeURIComponent(state.q)); }
+    try{ history.replaceState(null,'','#'+parts.join('&')); }catch(e){ /* file:// restrictions */ }
+  }
+  /* Both detail tabs group findings, so filtering is per item: a block stays
+     visible while at least one of its findings still matches. */
+  function apply(){
+    var blks=document.querySelectorAll('.vblk');
+    for(var b=0;b<blks.length;b++){
+      var items=blks[b].querySelectorAll('li[data-sev]');
+      var vis=0;
+      for(var k=0;k<items.length;k++){
+        var d=items[k].dataset;
+        var m=(!state.sev||d.sev===state.sev)&&(!state.cat||d.cat===state.cat)
+          &&(!state.q||(d.q||'').indexOf(state.q)>=0);
+        items[k].classList.toggle('fhide',!m);
+        if(m){ vis++; }
+      }
+      blks[b].hidden=vis===0;
+    }
+    var notes=document.querySelectorAll('[data-empty]');
+    for(var j=0;j<notes.length;j++){
+      var all=document.querySelectorAll('.'+notes[j].getAttribute('data-empty')), any=false;
+      for(var n=0;n<all.length;n++){ if(!all[n].hidden){ any=true; break; } }
+      notes[j].hidden=any;
+    }
+    syncHash();
+  }
+  /* Category row click → findings tab, filtered to that category */
+  function gotoCat(cat){
+    state.cat=cat;
+    var chips=document.querySelectorAll('.chip');
+    for(var i=0;i<chips.length;i++){
+      if(chips[i].getAttribute('data-cat')===cat){ setActive(chips[i]); break; }
+    }
+    apply(); showTab('viol');
+  }
+  var toolbar=document.querySelector('.toolbar');
+  function showTab(name){
+    curTab=name;
+    var panels=document.querySelectorAll('.panel');
+    for(var i=0;i<panels.length;i++){ panels[i].hidden=panels[i].getAttribute('data-panel')!==name; }
+    var tabs=document.querySelectorAll('.tab');
+    for(var j=0;j<tabs.length;j++){ tabs[j].classList.toggle('active',tabs[j].getAttribute('data-tab')===name); }
+    if(toolbar){ toolbar.hidden=(name==='cat'); }
+    syncHash();
+  }
+  document.addEventListener('click',function(e){
+    var tab=e.target.closest&&e.target.closest('.tab');
+    if(tab){ showTab(tab.getAttribute('data-tab')); return; }
+    var row=e.target.closest&&e.target.closest('.catrow');
+    if(row){ gotoCat(row.getAttribute('data-cat')); return; }
+    var ex=e.target.closest&&e.target.closest('[data-expand]');
+    if(ex){
+      var open=ex.getAttribute('data-expand')==='1';
+      /* only this panel's blocks — the file tab must not expand the rule tab */
+      var scope=ex.closest('.panel')||document;
+      var blks=scope.querySelectorAll('details.vblk');
+      for(var i=0;i<blks.length;i++){ blks[i].open=open; }
+      return;
+    }
+    var t=e.target.closest&&e.target.closest('.chip,.fbtn');
+    if(!t){ return; }
+    if(t.hasAttribute('data-cat')){ state.cat=t.getAttribute('data-cat'); }
+    if(t.hasAttribute('data-sev')){ state.sev=t.getAttribute('data-sev'); }
+    setActive(t); apply();
+  });
+  document.addEventListener('keydown',function(e){
+    if(e.key!=='Enter'){ return; }
+    var row=e.target.closest&&e.target.closest('.catrow');
+    if(row){ gotoCat(row.getAttribute('data-cat')); }
+  });
+  var qbox=document.getElementById('q');
+  if(qbox){ qbox.addEventListener('input',function(){ state.q=qbox.value.toLowerCase(); apply(); }); }
+  var vcs=document.querySelectorAll('.viol-controls');
+  for(var vi=0;vi<vcs.length;vi++){
+    if(!vcs[vi].parentNode.querySelector('.vblk')){ vcs[vi].hidden=true; }
+  }
+  var totop=document.getElementById('totop');
+  if(totop){
+    window.addEventListener('scroll',function(){ totop.hidden=window.scrollY<600; });
+    totop.addEventListener('click',function(){ window.scrollTo(0,0); });
+  }
+  /* Restore state from the URL hash */
+  function activate(sel,attr,val){
+    var els=document.querySelectorAll(sel);
+    for(var i=0;i<els.length;i++){
+      if(els[i].getAttribute(attr)===val){ setActive(els[i]); return; }
+    }
+  }
+  var tab0='cat';
+  var h=location.hash.replace(/^#/,'');
+  if(h){
+    var parts=h.split('&');
+    for(var i=0;i<parts.length;i++){
+      var eq=parts[i].indexOf('=');
+      if(eq<0){ continue; }
+      var k=parts[i].slice(0,eq), v=decodeURIComponent(parts[i].slice(eq+1));
+      if(k==='tab'){ tab0=v; }
+      else if(Object.prototype.hasOwnProperty.call(state,k)){ state[k]=v; }
+    }
+  }
+  if(tab0!=='viol'&&tab0!=='files'){ tab0='cat'; }
+  if(state.cat){ activate('.chip','data-cat',state.cat); }
+  if(state.sev){ activate('.fbtn[data-sev]','data-sev',state.sev); }
+  if(state.q&&qbox){ qbox.value=state.q; }
+  apply();
+  showTab(tab0);
+})();
+</script>
+</body>
+</html>
