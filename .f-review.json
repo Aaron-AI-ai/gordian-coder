@@ -1,4 +1,6 @@
 {
   "debug": true,
-  "deepPasses": 3
+  "deepPasses": 1,
+  "maxIter": 7,
+  "maxToolCalls": 10
 }

@@ -21,6 +21,8 @@ import {
   JUDGE_AGENT_NAME,
   JUDGE_AGENT_PERMISSION,
   JUDGE_AGENT_TOOLS,
+  REVIEWER_AGENT_STEPS,
+  JUDGE_AGENT_STEPS,
   REVIEW_COMMAND_NAME,
 } from "../prompts";
 import { MAX_RESUMES } from "../../../../core/review";
@@ -234,6 +236,7 @@ describe("system-prompt injection", () => {
     await mod.systemTransform({ sessionID: SESSION } as never, output as never);
     expect(output.system).toHaveLength(2);
     expect(output.system[0]).toContain("<current_file_path>a.ts</current_file_path>");
+    expect(output.system[0]).toContain("TOOL_CALL_BUDGET: 1/10 used");
     expect(output.system[0]).toContain("f_review_submit");
     expect(output.system[1]).toContain("English");
   });
@@ -276,6 +279,22 @@ describe("idle watchdog", () => {
     expect(prompts).toHaveLength(0); // nothing left to re-drive
     expect(getState(SESSION)).toBeUndefined(); // session finalized and cleared
   });
+
+  it("never auto-resumes after the session-wide tool budget is exhausted", async () => {
+    const d = gitRepo();
+    const { mod, prompts } = moduleFor(d);
+    await mod.tools.f_review_context.execute({ files: ["a.ts", "b.ts"] } as never, ctx);
+    const st = getState(SESSION)!;
+    st.toolBudgetExhausted = true;
+    st.toolCalls = st.maxToolCalls;
+
+    await mod.event({
+      event: { type: "session.idle", properties: { sessionID: SESSION } },
+    } as never);
+
+    expect(prompts).toHaveLength(0);
+    expect(getState(SESSION)).toBeUndefined();
+  });
 });
 
 describe("agent/command config injection", () => {
@@ -291,6 +310,10 @@ describe("agent/command config injection", () => {
       REVIEWER_AGENT_PERMISSION
     );
     expect(cfg.agent[JUDGE_AGENT_NAME]).toHaveProperty("permission", JUDGE_AGENT_PERMISSION);
+    expect(cfg.agent[REVIEWER_AGENT_NAME]).toHaveProperty("steps", REVIEWER_AGENT_STEPS);
+    expect(cfg.agent[JUDGE_AGENT_NAME]).toHaveProperty("steps", JUDGE_AGENT_STEPS);
+    expect(REVIEWER_AGENT_STEPS).toBe(10);
+    expect(JUDGE_AGENT_STEPS).toBe(3);
     expect(cfg.command[REVIEW_COMMAND_NAME]).toHaveProperty("template");
   });
 

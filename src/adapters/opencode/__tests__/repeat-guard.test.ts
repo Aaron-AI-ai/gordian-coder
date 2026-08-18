@@ -8,6 +8,7 @@ import {
   loopNotice,
   escalateLoop,
   guardNativeCall,
+  isAlternatingLoop,
   REPEAT_LIMIT,
   HARD_LIMIT,
   MAX_SESSIONS,
@@ -22,6 +23,11 @@ function reviewState(): ReviewState {
   return {
     active: true,
     iterations: 0,
+    toolCalls: 1,
+    explorationCalls: 0,
+    maxToolCalls: 10,
+    explorationSealed: false,
+    toolBudgetExhausted: false,
     targets: [],
     currentIndex: 0,
     submitToken: "test-token",
@@ -57,6 +63,24 @@ describe("repeat-guard", () => {
     }
     recordCall(s, "grep", { filePath: "a.ts" }); // same args, different tool → reset
     expect(isLooping(s)).toBe(false);
+  });
+
+  test("detects an alternating A-B-A-B lookup loop even though the streak resets", () => {
+    const s = "s-alternating";
+    recordCall(s, "code_search", {
+      search_text: "RequiredArgsConstructor",
+      file_patterns: ["**/*.java"],
+    });
+    recordCall(s, "file_find", { query_name: "RequiredArgsConstructor" });
+    recordCall(s, "code_search", {
+      search_text: "RequiredArgsConstructor",
+      file_patterns: ["**/*.java"],
+    });
+    expect(isAlternatingLoop(s)).toBe(false);
+    recordCall(s, "file_find", { query_name: "RequiredArgsConstructor" });
+
+    expect(isLooping(s)).toBe(false); // neither exact call was consecutive
+    expect(isAlternatingLoop(s)).toBe(true);
   });
 
   test("whitespace-varied args count as the same call", () => {
@@ -164,7 +188,7 @@ describe("repeat-guard", () => {
     // Budget poisoned: ANY further exploration call now force-converges,
     // even ones that would reset the repeat-guard streak.
     expect(guardExploration(getState(s)!, "file_read", "fresh content")).toContain(
-      "Exploration limit reached"
+      "Exploration is sealed"
     );
     clearState(s);
   });

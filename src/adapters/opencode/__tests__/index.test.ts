@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hooks, PluginInput } from "@opencode-ai/plugin";
 import { REQUIRED_CATEGORIES } from "../../../core/review";
+import { getState } from "../../../core/review/state";
 import OpenCodeAdapter from "../index";
 
 const tmps: string[] = [];
@@ -25,10 +26,20 @@ function gitRepo(): string {
   return directory;
 }
 
-async function adapterHooks(directory = process.cwd()): Promise<Hooks> {
+async function adapterHooks(
+  directory = process.cwd(),
+  aborted: string[] = []
+): Promise<Hooks> {
   return OpenCodeAdapter({
     directory,
-    client: {},
+    client: {
+      session: {
+        abort: async (req: { path: { id: string } }) => {
+          aborted.push(req.path.id);
+          return { data: true };
+        },
+      },
+    },
   } as unknown as PluginInput);
 }
 
@@ -99,5 +110,136 @@ describe("OpenCode repeat-hook integration", () => {
 
     expect(third).toContain("Loop detected");
     expect(third).toContain("output withheld");
+  });
+
+  test("uses maxToolCalls to reserve submit slots and abort on the 10th non-submit call", async () => {
+    const directory = gitRepo();
+    writeFileSync(
+      join(directory, ".f-review.json"),
+      JSON.stringify({ deepPasses: 1, maxIter: 7, maxToolCalls: 10 })
+    );
+    const aborted: string[] = [];
+    const hooks = await adapterHooks(directory, aborted);
+    const sessionID = "adapter-total-budget";
+    const context = { sessionID } as never;
+    await hooks.tool!.f_review_context.execute({ files: ["a.ts"] }, context);
+
+    // f_review_context is call 1. Seven exploration calls consume calls 2..8.
+    for (let i = 0; i < 7; i++) {
+      await hooks["tool.execute.before"]!(
+        { sessionID, tool: "code_search", callID: `search-${i}` },
+        { args: { search_text: `symbol-${i}` } }
+      );
+    }
+    expect(getState(sessionID)!.toolCalls).toBe(8);
+
+    // Call 9 is rejected before execution because two calls are reserved for submit/recovery.
+    await expect(
+      hooks["tool.execute.before"]!(
+        { sessionID, tool: "file_find", callID: "search-8" },
+        { args: { query_name: "another-symbol" } }
+      )
+    ).rejects.toThrow("reserved for f_review_submit");
+    expect(aborted).toHaveLength(0);
+
+    // Call 10 is not submit: mark the review incomplete and hard-abort the session.
+    await expect(
+      hooks["tool.execute.before"]!(
+        { sessionID, tool: "file_read", callID: "search-9" },
+        { args: { file_path: "a.ts" } }
+      )
+    ).rejects.toThrow("maxToolCalls=10");
+    expect(aborted).toEqual([sessionID]);
+    expect(getState(sessionID)!.toolBudgetExhausted).toBe(true);
+  });
+
+  test("allows the 10th call when it is submit, then aborts only if the review remains active", async () => {
+    const directory = gitRepo();
+    writeFileSync(join(directory, ".f-review.json"), JSON.stringify({ maxToolCalls: 10 }));
+    const aborted: string[] = [];
+    const hooks = await adapterHooks(directory, aborted);
+    const sessionID = "adapter-submit-at-limit";
+    const context = { sessionID } as never;
+    await hooks.tool!.f_review_context.execute({ files: ["a.ts"] }, context);
+    const st = getState(sessionID)!;
+    st.toolCalls = 9;
+
+    const args = { submitToken: "wrong", assessed: [...REQUIRED_CATEGORIES], findings: [] };
+    await hooks["tool.execute.before"]!(
+      { sessionID, tool: "f_review_submit", callID: "submit-10" },
+      { args }
+    );
+    const actual = await hooks.tool!.f_review_submit.execute(args, context);
+    const result = { title: "f_review_submit", output: actual, metadata: {} };
+    await hooks["tool.execute.after"]!(
+      { sessionID, tool: "f_review_submit", callID: "submit-10" },
+      result
+    );
+
+    expect(result.output).toContain("tool-call budget exhausted");
+    expect(aborted).toEqual([sessionID]);
+    expect(getState(sessionID)!.toolBudgetExhausted).toBe(true);
+  });
+
+  test("preserves a successful terminal submit at the exact configured limit", async () => {
+    const directory = gitRepo();
+    writeFileSync(join(directory, ".f-review.json"), JSON.stringify({ maxToolCalls: 10 }));
+    const aborted: string[] = [];
+    const hooks = await adapterHooks(directory, aborted);
+    const sessionID = "adapter-terminal-at-limit";
+    const context = { sessionID } as never;
+    await hooks.tool!.f_review_context.execute({ files: ["a.ts"] }, context);
+    const st = getState(sessionID)!;
+    st.toolCalls = 9;
+    st.callLog["a.ts"] = { file_read: 1 }; // satisfy the final evidence check
+
+    const args = {
+      submitToken: st.submitToken,
+      assessed: [...REQUIRED_CATEGORIES],
+      findings: [],
+    };
+    await hooks["tool.execute.before"]!(
+      { sessionID, tool: "f_review_submit", callID: "terminal-submit-10" },
+      { args }
+    );
+    const actual = await hooks.tool!.f_review_submit.execute(args, context);
+    const result = { title: "f_review_submit", output: actual, metadata: {} };
+    await hooks["tool.execute.after"]!(
+      { sessionID, tool: "f_review_submit", callID: "terminal-submit-10" },
+      result
+    );
+
+    expect(result.output).toContain("✅ Review complete");
+    expect(result.output).not.toContain("budget exhausted");
+    expect(aborted).toHaveLength(0);
+    expect(getState(sessionID)).toBeUndefined();
+  });
+
+  test("blocks the fourth A-B-A-B lookup before it can execute", async () => {
+    const directory = gitRepo();
+    const hooks = await adapterHooks(directory);
+    const sessionID = "adapter-alternating-loop";
+    const context = { sessionID } as never;
+    await hooks.tool!.f_review_context.execute({ files: ["a.ts"] }, context);
+
+    const calls = [
+      ["code_search", { search_text: "RequiredArgsConstructor" }],
+      ["file_find", { query_name: "RequiredArgsConstructor" }],
+      ["code_search", { search_text: "RequiredArgsConstructor" }],
+    ] as const;
+    for (const [tool, args] of calls) {
+      await hooks["tool.execute.before"]!(
+        { sessionID, tool, callID: `${tool}-${getState(sessionID)!.toolCalls}` },
+        { args }
+      );
+    }
+
+    await expect(
+      hooks["tool.execute.before"]!(
+        { sessionID, tool: "file_find", callID: "alternating-fourth" },
+        { args: { query_name: "RequiredArgsConstructor" } }
+      )
+    ).rejects.toThrow("alternating lookup loop");
+    expect(getState(sessionID)!.explorationSealed).toBe(true);
   });
 });

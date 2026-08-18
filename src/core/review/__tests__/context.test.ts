@@ -7,7 +7,9 @@ import {
   applyExclude,
   isDefaultExcluded,
   loadConfig,
+  DEFAULT_MAX_TOOL_CALLS,
   resolveMaxIter,
+  resolveMaxToolCalls,
   collectTargets,
   buildDiffMap,
   ReviewInputSchema,
@@ -144,6 +146,24 @@ describe("resolveMaxIter", () => {
     expect(resolveMaxIter(d)).toBe(7);
     writeFileSync(join(d, ".f-review.json"), '{"maxIter": "lots"}');
     expect(resolveMaxIter(d)).toBe(MAX_ITER);
+  });
+});
+
+describe("resolveMaxToolCalls", () => {
+  it("defaults to the hard reviewer-session limit", () => {
+    expect(resolveMaxToolCalls(tmp())).toBe(DEFAULT_MAX_TOOL_CALLS);
+  });
+
+  it("reads maxToolCalls from .f-review.json, clamped to a usable minimum", () => {
+    const d = tmp();
+    writeFileSync(join(d, ".f-review.json"), '{"maxToolCalls": 10}');
+    expect(resolveMaxToolCalls(d)).toBe(10);
+    writeFileSync(join(d, ".f-review.json"), '{"maxToolCalls": 2}');
+    expect(resolveMaxToolCalls(d)).toBe(3);
+    writeFileSync(join(d, ".f-review.json"), '{"maxToolCalls": 7.9}');
+    expect(resolveMaxToolCalls(d)).toBe(7);
+    writeFileSync(join(d, ".f-review.json"), '{"maxToolCalls": "many"}');
+    expect(resolveMaxToolCalls(d)).toBe(DEFAULT_MAX_TOOL_CALLS);
   });
 });
 

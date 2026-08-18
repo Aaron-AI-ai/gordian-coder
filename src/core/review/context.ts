@@ -46,6 +46,7 @@ export const ReviewConfigSchema = z.object({
   debug: field(z.boolean()), // emit `[f-review:*]` trace logs (alternative to F_REVIEW_DEBUG env)
   deepPasses: field(z.number()), // review rounds per file/segment (clamped 1..5; 1 = single pass)
   maxIter: field(z.number()), // exploration tool calls per round before forced convergence (default MAX_ITER)
+  maxToolCalls: field(z.number()), // total tool calls per reviewer session, including context/submit
   rulesDir: field(z.string()), // project rules directory, relative to root (default "review/rules")
   judge: field(z.boolean()), // run mode: judge each file's review with an independent agent
   judgeThreshold: field(z.number()), // judge pass score 0..100 (default 70)
@@ -87,6 +88,18 @@ export function resolveMaxIter(cwd: string): number {
   const v = loadConfig(cwd).maxIter;
   if (typeof v !== "number" || !Number.isFinite(v)) return MAX_ITER;
   return Math.max(1, Math.trunc(v));
+}
+
+/** Hard reviewer-session tool-call ceiling. Three is the smallest useful
+ * value: one context call plus two submit/recovery slots. Unlike maxIter this
+ * budget never resets between files, deep passes, or final-check retries. */
+export const DEFAULT_MAX_TOOL_CALLS = 10;
+export const MIN_MAX_TOOL_CALLS = 3;
+
+export function resolveMaxToolCalls(cwd: string): number {
+  const v = loadConfig(cwd).maxToolCalls;
+  if (typeof v !== "number" || !Number.isFinite(v)) return DEFAULT_MAX_TOOL_CALLS;
+  return Math.max(MIN_MAX_TOOL_CALLS, Math.trunc(v));
 }
 
 /**

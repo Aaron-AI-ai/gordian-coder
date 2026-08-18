@@ -22,6 +22,7 @@ import {
   buildDiffMap,
   resolveDeepPasses,
   resolveMaxIter,
+  resolveMaxToolCalls,
   resolveDiffRange,
   type CommitSpec,
 } from "./context";
@@ -226,6 +227,11 @@ function startRunFileReview(
     label: meta.label,
     language: meta.language,
     iterations: 0,
+    toolCalls: 1, // the f_review_context call that created this state
+    explorationCalls: 0,
+    maxToolCalls: resolveMaxToolCalls(cwd),
+    explorationSealed: false,
+    toolBudgetExhausted: false,
     callLog: {},
     recheckCount: {},
     failedSubmits: {},
@@ -254,6 +260,7 @@ function startRunFileReview(
       : "";
   return [
     `Run ${runId}: reviewing ${file} (${meta.range ? `commit diff ${meta.range}` : "explicit files"}${meta.whole ? " · whole-file" : ""}).${seg}${rounds}`,
+    `Tool-call budget: 1/${state.maxToolCalls} used (context); reserve the final two calls for f_review_submit/recovery.`,
     `The review checklist is injected into your instructions. Use ONLY the review tools`,
     `(related_code / git_history / file_read / code_search) for deeper context — never the`,
     `host's built-in Read/Grep/Glob — then call f_review_submit.`,
@@ -374,6 +381,11 @@ async function startReviewUnlocked(
     // report language — arg → config → default "ko".
     language: args.language ?? loadConfig(cwd).language ?? "ko",
     iterations: 0, // exploration budget for the current file; reset on advance
+    toolCalls: 1, // the f_review_context call that created this state
+    explorationCalls: 0,
+    maxToolCalls: resolveMaxToolCalls(cwd),
+    explorationSealed: false,
+    toolBudgetExhausted: false,
     callLog: {},
     recheckCount: {},
     failedSubmits: {},
@@ -438,6 +450,7 @@ async function startReviewUnlocked(
     "",
     `Full target list written to: ${manifestPath}`,
     `The review checklist is now injected into your instructions.`,
+    `Tool-call budget: 1/${state.maxToolCalls} used (context); reserve the final two calls for f_review_submit/recovery.`,
     `Review the first target (${reviewTargets[0]}). Related-code and Git-history evidence is injected`,
     `automatically; use ONLY the review tools (related_code / git_history / file_read / code_search /`,
     `file_read_diff) for deeper context — never the host's built-in Read/Grep/Glob — then call`,
@@ -497,6 +510,12 @@ export function guardExploration(
   out: string,
   args?: unknown
 ): string {
+  if (st.explorationSealed) {
+    return (
+      `⚠️ Exploration is sealed for this reviewer session (${st.toolCalls}/${st.maxToolCalls} ` +
+      `tool calls used). Output withheld. Call f_review_submit now.`
+    );
+  }
   const file = currentFile(st);
   if (file) {
     const log = (st.callLog[file] ??= {});
@@ -870,15 +889,16 @@ async function writeRunReview(
     coverageComplete: !partial && !forced,
     ...(forced ? { forced } : {}),
   };
+  const partialReason = st.toolBudgetExhausted
+    ? `The reviewer reached maxToolCalls=${st.maxToolCalls} after ${st.toolCalls} tool calls.`
+    : `Only ${Object.keys(st.findings).length}/${st.targets.length} segment(s) completed.`;
   const quality = partial || forced
     ? [
         "",
         "## Review Quality",
         "",
         "- Status: **INCOMPLETE**",
-        ...(partial
-          ? [`- Only ${Object.keys(st.findings).length}/${st.targets.length} segment(s) completed.`]
-          : []),
+        ...(partial ? [`- ${partialReason}`] : []),
         ...(forced ? [`- Bounded recovery force-advanced one or more targets:${forced}`] : []),
         "",
       ].join("\n")
@@ -888,7 +908,9 @@ async function writeRunReview(
   st.active = false;
   clearState(sessionId);
   const head = partial
-    ? `⚠️ ${file} partially reviewed (${Object.keys(st.findings).length}/${st.targets.length} segment(s)); partial review saved.`
+    ? st.toolBudgetExhausted
+      ? `⚠️ ${file} review stopped at maxToolCalls=${st.maxToolCalls}; partial review saved.`
+      : `⚠️ ${file} partially reviewed (${Object.keys(st.findings).length}/${st.targets.length} segment(s)); partial review saved.`
     : forced
       ? `⚠️ ${file} force-advanced after bounded recovery (${merged.length} issue(s) salvaged)${forced}; incomplete review saved with a forced marker.`
       : `✅ ${file} reviewed (${merged.length} issue(s)); review saved.`;
@@ -915,7 +937,11 @@ async function finalizeReport(
   const degraded = partial || forcedTargets.length > 0;
   const qualityReasons = [
     ...(partial
-      ? [`Only ${Object.keys(st.findings).length}/${st.targets.length} target(s) produced an artifact.`]
+      ? [
+          st.toolBudgetExhausted
+            ? `Reviewer reached maxToolCalls=${st.maxToolCalls} after ${st.toolCalls} tool calls.`
+            : `Only ${Object.keys(st.findings).length}/${st.targets.length} target(s) produced an artifact.`,
+        ]
       : []),
     ...(forcedTargets.length
       ? [
@@ -985,7 +1011,9 @@ async function finalizeReport(
     : "";
   const fileCount = Object.keys(report).length; // distinct real files (segments merged)
   const head = partial
-    ? `⚠️ Review incomplete — ${reviewed.length}/${st.targets.length} target(s) reviewed after ${MAX_RESUMES} auto-resumes; partial report written.`
+    ? st.toolBudgetExhausted
+      ? `⚠️ Review incomplete — maxToolCalls=${st.maxToolCalls} reached; ${reviewed.length}/${st.targets.length} target(s) reviewed and partial report written.`
+      : `⚠️ Review incomplete — ${reviewed.length}/${st.targets.length} target(s) reviewed after ${MAX_RESUMES} auto-resumes; partial report written.`
     : forcedTargets.length
       ? `⚠️ Review incomplete — bounded recovery force-advanced ${forcedTargets.length} target(s); ${fileCount} file(s), ${all.length} issue(s) salvaged.`
       : `✅ Review complete — ${fileCount} file(s), ${all.length} issue(s).`;
@@ -1001,6 +1029,14 @@ export async function onSessionIdle(
 ): Promise<{ kind: "resume"; text: string } | { kind: "finalized"; text: string } | null> {
   const st = getState(sessionId);
   if (!st?.active || isDone(st)) return null;
+  if (st.toolBudgetExhausted) {
+    return {
+      kind: "finalized",
+      text: st.runId
+        ? await writeRunReview(st, sessionId, true)
+        : await finalizeReport(st, sessionId, true),
+    };
+  }
   if (st.resumes < MAX_RESUMES) {
     st.resumes++;
     return {
@@ -1076,7 +1112,10 @@ export function reviewPromptFor(st: ReviewState): string | null {
     ].join("\n")
   );
   return (
-    `${prompt}\n\nCURRENT_SUBMIT_TOKEN: ${st.submitToken}\n` +
+    `${prompt}\n\nTOOL_CALL_BUDGET: ${st.toolCalls}/${st.maxToolCalls} used; ` +
+    `${Math.max(0, st.maxToolCalls - st.toolCalls)} remaining. ` +
+    `The final two calls are reserved for f_review_submit/recovery.${st.explorationSealed ? " EXPLORATION IS SEALED — submit now." : ""}\n` +
+    `CURRENT_SUBMIT_TOKEN: ${st.submitToken}\n` +
     `Copy this exact value into f_review_submit.submitToken. It changes after each target/review round; never reuse an earlier token.`
   );
 }

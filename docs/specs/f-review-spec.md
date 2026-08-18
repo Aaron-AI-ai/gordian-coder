@@ -217,7 +217,11 @@ Python package, Java source-root/static import처럼 저장소 내부인데 휴�
 
 **세션 레벨 동일-호출 가드 (어댑터, repeat-guard)**: OpenCode의 `tool.execute.before/after` 훅에서 모든 도구의 동일 호출(도구+정규화한 인자) 연속 반복을 감시한다. `REPEAT_LIMIT`(3) 연속이면 **명시적으로 조회성인 도구에 한해서만** 출력을 보류하고 "다른 행동을 하라" notice로 교체한다. `bash`와 알 수 없는 플러그인 도구는 상태를 바꿀 수 있으므로 조회성 목록에 넣지 않는다. `f_review_submit`/`f_review_judge`/plan/context/finalize처럼 상태를 바꾸는 도구도 실행 후 결과를 절대 가리지 않는다. 상태는 이미 전진했는데 다음 파일·리포트 경로 응답만 숨기면 동일 payload가 새 상태에 재적용될 수 있기 때문이다. 코어의 bounded terminal/idempotency와 OpenCode agent `steps` 상한이 이 경로의 최종 안전핀이다.
 
-`HARD_LIMIT`(6) 도달 시 **격상**: 활성 리뷰 세션이면 탐색 예산을 소진 상태로 만들어(위 MAX_ITER 가드가 즉시 발동) 어떤 탐색 도구를 불러도 강제 수렴 메시지가 나가고, 유일한 생산적 출구는 `f_review_submit`이 된다. 라운드 단위 예산 리셋이 퇴화 모델의 루프 활주로를 늘리지 않게 하는 안전핀이다.
+연속 동일 호출뿐 아니라 최근 네 호출의 `A-B-A-B` 패턴도 감지한다. 특히 `code_search("X")`와 `file_find("X")`는 검색어를 정규화한 동일 lookup intent로 묶어, 도구 이름을 번갈아 반복 가드를 우회하지 못하게 한다. 감지 즉시 탐색을 봉인하고 `f_review_submit`만 생산적인 출구로 남긴다.
+
+**세션 전체 하드 예산 (`maxToolCalls`)**: OpenCode reviewer의 context·탐색·submit을 모두 합친 호출 상한이며 기본 10, 최소 3이다. `maxIter`와 달리 파일 전진·딥패스·최종 점검·idle 재개에서 절대 리셋되지 않는다. 마지막 두 호출은 submit/수정 submit용으로 예약한다. 상한 번째 호출이 submit이 아니면 실행 전에 차단하고 세션을 abort하며, 상한 번째 submit 뒤에도 리뷰가 활성 상태면 `INCOMPLETE`로 부분 종료한다. 예산 소진 세션은 idle watchdog이 재개하지 않는다.
+
+`HARD_LIMIT`(6) 도달 시 **격상**: 활성 리뷰 세션이면 탐색을 영구 봉인해 어떤 탐색 도구를 불러도 강제 수렴 메시지가 나가고, 유일한 생산적 출구는 `f_review_submit`이 된다. 이 봉인은 라운드 전환에서도 리셋되지 않아 퇴화 모델에 새 루프 활주로를 주지 않는다.
 
 **네이티브 탐색 도구도 같은 예산을 쓴다**: 리뷰 활성 세션에서 네이티브 `glob`/`grep`/`read`/`list`/`lsp`/웹 검색 도구 호출은 after-hook에서 `guardExploration`을 통과한다 — `MAX_ITER` 예산 소모 + 동일 인자 반복(`MAX_DUP_CALLS`, **비연속 반복 포함**) 차단. `bash`는 상태 변경 가능성이 있어 사후 출력을 가리거나 조회 예산으로 오분류하지 않는다(번들 reviewer/judge에서는 기본 거부). 출력 문자열은 검사하지 않으므로 miss-streak은 f-review 탐색 도구 전용으로 유지된다.
 
@@ -417,7 +421,7 @@ src/adapters/opencode/review/
 ```
 
 설정 파일: 프로젝트 루트 `.f-review.json`, 없으면 `fcq/config/.f-review.json`
-(`{ exclude, output, language, frameworkGuide, failOn, debug, deepPasses, maxIter, rulesDir, judge, judgeThreshold }`).
+(`{ exclude, output, language, frameworkGuide, failOn, debug, deepPasses, maxIter, maxToolCalls, rulesDir, judge, judgeThreshold }`).
 Zod로 검증하며 타입이 틀린 필드는 unset으로 강등된다(파일 전체를 버리지 않음); 루트 파일이 파싱 불가면 fcq 폴백을 시도한다.
 
 **딥패스 반복 리뷰 (`deepPasses`)** — 타깃(파일/세그먼트)당 리뷰 라운드 수. 파라미터 `deepPasses` > 설정 `deepPasses` > 기본 1,
@@ -436,6 +440,8 @@ run 모드에서는 plan 시점 값이 run.json에 저장돼 모든 서브에이
 `MAX_ITER` 탐색 예산은 **라운드 단위**로 리셋된다(딥패스 라운드와 최종 점검 바운스 모두). 2라운드 이후의 지시문이
 "코드를 다시 읽고 반박하라"이므로, 소진된 예산을 이월하면 그 지시에 "탐색 한도 도달 — 지금 submit 하라"로
 응답하게 되기 때문이다. 상한은 여전히 유한하다: 파일당 최대 `(MAX_DEEP_PASSES + MAX_FINAL_RECHECKS) × MAX_ITER`.
+
+**세션 호출 예산 (`maxToolCalls`)** — reviewer 세션 전체 도구 호출 상한. 기본 10, 최소 3으로 clamp하며 `f_review_context`도 1회로 계산한다. 예: `{ "deepPasses": 1, "maxIter": 7, "maxToolCalls": 10 }`은 context 1회, 탐색 최대 7회, submit/복구 2회를 배정한다. OpenCode agent의 `steps=10`은 보조 상한이고, 실제 호출 강제는 before-hook 카운터와 세션 abort가 담당한다.
 
 **동일 페이로드 재제출(repeat)**: 딥패스 라운드는 라운드마다 지시가 다르므로 byte-identical 재제출도
 라운드를 정상 소진한다(성실한 수렴 ≠ 루프). 최종 점검만 repeat 감지를 무장한다 — 최종 점검이 바운스한

@@ -19,6 +19,8 @@ import {
   loopNotice,
   escalateLoop,
   guardNativeCall,
+  beforeReviewToolCall,
+  afterReviewToolCall,
 } from "./repeat-guard";
 import {
   getAllTools,
@@ -115,6 +117,15 @@ const OpenCodeAdapter: Plugin = async (input) => {
   const moduleEvents = modules.map((m) => m.event).filter((e) => e != null);
   const moduleConfigs = modules.map((m) => m.config).filter((c) => c != null);
 
+  const abortSession = async (sessionID: string): Promise<void> => {
+    try {
+      await input.client.session.abort({ path: { id: sessionID } });
+    } catch {
+      // `steps` remains the fallback hard stop. The state stays marked
+      // exhausted so session.idle finalizes instead of re-driving the model.
+    }
+  };
+
   return {
     // Register tools from core + feature-module tools
     tool: { ...createOpenCodeTools(), ...moduleTools },
@@ -154,7 +165,13 @@ const OpenCodeAdapter: Plugin = async (input) => {
 
     // Hook: before tool execution
     "tool.execute.before": async (hookInput, output) => {
-      recordCall(hookInput.sessionID ?? "", hookInput.tool, output.args);
+      const sessionID = hookInput.sessionID ?? "";
+      recordCall(sessionID, hookInput.tool, output.args);
+      const budget = beforeReviewToolCall(sessionID, hookInput.tool);
+      if (!budget.allow) {
+        if (budget.abort) await abortSession(sessionID);
+        throw new Error(budget.message);
+      }
       moebiusBeforeTool(hookInput.tool, hookInput.sessionID ?? "", output.args as Record<string, unknown>);
       await beforeToolExecute(
         hookInput.tool,
@@ -201,6 +218,11 @@ const OpenCodeAdapter: Plugin = async (input) => {
         )
       ) {
         hookOutput.output = `${hookOutput.output}\n${loopNotice(hookInput.sessionID ?? "")} STOP calling this control tool; its state is already terminal/unchanged.`;
+      }
+      const budget = afterReviewToolCall(hookInput.sessionID ?? "", hookInput.tool);
+      if (budget.abort) {
+        hookOutput.output = `${hookOutput.output}\n⚠️ ${budget.message}`;
+        await abortSession(hookInput.sessionID ?? "");
       }
     },
 

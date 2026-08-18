@@ -40,6 +40,11 @@ export interface ReviewState {
   language: string; // findings/report language, e.g. "ko"
   iterations: number;
   maxIter?: number; // per-round exploration budget (config `maxIter`; unset = MAX_ITER)
+  toolCalls: number; // session-total calls, including the initial context and submits; never reset
+  explorationCalls: number; // session-total exploration attempts; never reset
+  maxToolCalls: number; // config `maxToolCalls`; hard ceiling for the reviewer session
+  explorationSealed: boolean; // true once only f_review_submit may make progress
+  toolBudgetExhausted: boolean; // terminal: watchdog must finalize partial, never auto-resume
   callLog: Record<string, Record<string, number>>; // per-file tool-call audit: file → tool → count
   dupCalls: Record<string, number>; // exact-duplicate exploration calls (file+tool+args hash); reset per target/round
   missStreak: number; // consecutive not-found exploration results; reset on any hit and per target/round

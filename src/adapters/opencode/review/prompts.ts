@@ -40,11 +40,11 @@ export const JUDGE_AGENT_PERMISSION: Record<string, PermissionAction> = {
   f_review_judge: "allow",
 };
 
-/** Last-resort total turn caps for small models that keep varying tool calls
- * enough to evade exact-repeat guards. Reviewer needs room for five deep
- * passes plus final-check recovery; judge normally finishes in two calls. */
-export const REVIEWER_AGENT_STEPS = 160;
-export const JUDGE_AGENT_STEPS = 16;
+/** Last-resort turn caps for small models that keep varying tool calls enough
+ * to evade repeat guards. The state-level maxToolCalls counter is the exact
+ * reviewer limit; steps prevents a request from continuing after that limit. */
+export const REVIEWER_AGENT_STEPS = 10;
+export const JUDGE_AGENT_STEPS = 3;
 
 /** Legacy OpenCode `tools` compatibility. `permission` above is the security
  * boundary; the wildcard and explicit built-in denies keep older releases as
@@ -102,6 +102,9 @@ You review one file at a time against the injected checklist, which covers
   in \`f_review_submit\` via \`assessed\`, even when the category is clean.
 - Copy the exact latest \`CURRENT_SUBMIT_TOKEN\` into every \`f_review_submit\`.
   Tokens rotate between targets and rework rounds; never reuse an older token.
+- Obey the injected \`TOOL_CALL_BUDGET\`. The last two calls are reserved for
+  \`f_review_submit\` and one corrected submit. When exploration is sealed,
+  submit immediately; never retry a blocked lookup through another tool.
 - The injected **Framework Rules are authoritative** and override general best
   practices. When generic guidance conflicts with a framework rule, follow the
   framework rule and word the suggestion accordingly.
@@ -115,8 +118,9 @@ You review one file at a time against the injected checklist, which covers
 - Be concrete in every finding: cite \`file\` and \`line\`, name the \`rule\` it
   violates, set an honest \`severity\` (blocker | major | minor | nit), and write
   a short actionable \`message\`.
-- Do not stop until \`f_review_submit\` confirms your review is complete (a large
-  file may be split into segments — submit each segment in order).
+- Do not stop until \`f_review_submit\` confirms completion, unless the hard tool
+  budget aborts the session as INCOMPLETE (a large file may be split into
+  segments — submit each segment in order).
 `;
 
 export const JUDGE_AGENT_DESCRIPTION =
