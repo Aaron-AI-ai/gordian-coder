@@ -11,7 +11,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join, relative } from "node:path";
 import { z } from "zod";
 import { MAX_ITER } from "./reader";
 
@@ -219,6 +219,27 @@ export function buildDiffMap(
   }
 }
 
+/**
+ * A user-supplied path in git's repo-relative forward-slash form.
+ *
+ * An ABSOLUTE path must be rebased onto `cwd`: every consumer joins the target
+ * against cwd (`readFileAt` → `join(cwd, path)`, `git show <ref>:<path>`,
+ * evidence, judge), so an absolute target resolves to `<cwd>/<cwd>/…` and every
+ * read returns "file not found" — the reviewer survives only because the model
+ * happens to pass relative paths to file_read, while the judge reads the stored
+ * target verbatim and scores 0 on a file it believes does not exist.
+ *
+ * A path outside the repo is left as-is: `relative()` would yield `../…`, which
+ * matches no diff header and is silently dropped by isDefaultExcluded's leading
+ * dot rule. Keeping it absolute fails the same way but visibly.
+ */
+function normalizeTarget(file: string, cwd: string): string {
+  const path = file.replaceAll("\\", "/").replace(/^\.\//, "");
+  if (!isAbsolute(path)) return path;
+  const rel = relative(cwd, path).replaceAll("\\", "/");
+  return rel && !rel.startsWith("../") ? rel : path;
+}
+
 /** Build the deduped, exclude-filtered, sorted target file list. */
 export async function collectTargets(
   input: ReviewInput,
@@ -228,10 +249,9 @@ export async function collectTargets(
   const range = resolveDiffRange(input.commit, !!input.files?.length);
 
   if (range) for (const f of gitDiffFiles(range, cwd)) set.add(f);
-  // Normalize user-supplied paths ("./x", backslashes) to git's repo-relative
-  // forward-slash form, so they match diff headers and each other.
-  if (input.files)
-    for (const f of input.files) set.add(f.replaceAll("\\", "/").replace(/^\.\//, ""));
+  // Normalize user-supplied paths ("./x", backslashes, absolute) to git's
+  // repo-relative forward-slash form, so they match diff headers and each other.
+  if (input.files) for (const f of input.files) set.add(normalizeTarget(f, cwd));
 
   const kept = [...set].filter((f) => !isDefaultExcluded(f));
   const patterns = [...(loadConfig(cwd).exclude ?? []), ...(input.exclude ?? [])];

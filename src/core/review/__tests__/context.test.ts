@@ -219,6 +219,22 @@ describe("collectTargets (files-only, no git)", () => {
     );
     expect(targets).toEqual(["src/a.ts", "src/b.ts"]); // deduped + normalized
   });
+
+  it("rebases absolute paths inside cwd onto the repo root", async () => {
+    // Every consumer joins the target against cwd, so an absolute target reads
+    // as <cwd>/<cwd>/… and the judge scores 0 on a file it cannot open.
+    const d = tmp();
+    const targets = await collectTargets(
+      { files: [join(d, "src/a.ts"), "src/a.ts", join(d, "src/b.ts")] },
+      d
+    );
+    expect(targets).toEqual(["src/a.ts", "src/b.ts"]); // deduped against the relative form
+  });
+
+  it("leaves absolute paths outside cwd alone", async () => {
+    const targets = await collectTargets({ files: ["/elsewhere/src/a.ts"] }, tmp());
+    expect(targets).toEqual(["/elsewhere/src/a.ts"]); // ../ would be dropped by the dot rule
+  });
 });
 
 describe("buildDiffMap", () => {
