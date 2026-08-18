@@ -45,6 +45,7 @@ export interface ReviewState {
   maxToolCalls: number; // config `maxToolCalls`; hard ceiling for the reviewer session
   explorationSealed: boolean; // true once only f_review_submit may make progress
   toolBudgetExhausted: boolean; // terminal: watchdog must finalize partial, never auto-resume
+  graceCalls?: number; // non-submit calls seen after exhaustion; past GRACE_CALLS the session is aborted
   callLog: Record<string, Record<string, number>>; // per-file tool-call audit: file → tool → count
   dupCalls: Record<string, number>; // exact-duplicate exploration calls (file+tool+args hash); reset per target/round
   missStreak: number; // consecutive not-found exploration results; reset on any hit and per target/round

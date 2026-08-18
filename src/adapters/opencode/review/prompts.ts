@@ -40,11 +40,18 @@ export const JUDGE_AGENT_PERMISSION: Record<string, PermissionAction> = {
   f_review_judge: "allow",
 };
 
-/** Last-resort turn caps for small models that keep varying tool calls enough
- * to evade repeat guards. The state-level maxToolCalls counter is the exact
- * reviewer limit; steps prevents a request from continuing after that limit. */
-export const REVIEWER_AGENT_STEPS = 10;
-export const JUDGE_AGENT_STEPS = 3;
+/** Last-resort OpenCode turn caps. These must stay well ABOVE the state-level
+ * maxToolCalls budget: when OpenCode's steps cap fires first, it disables all
+ * tools and injects its wrap-up instruction as an *assistant* message, and a
+ * small model in that position tends to repeat that text until max output
+ * tokens instead of complying. Keeping steps a distant backstop lets
+ * repeat-guard's forced f_review_submit convergence end the session first. */
+export function reviewerAgentSteps(maxToolCalls: number): number {
+  // ponytail: 2x leaves room for text-only turns between tool calls; the real
+  // limit is maxToolCalls, enforced turn-by-turn in repeat-guard.
+  return maxToolCalls * 2;
+}
+export const JUDGE_AGENT_STEPS = 6;
 
 /** Legacy OpenCode `tools` compatibility. `permission` above is the security
  * boundary; the wildcard and explicit built-in denies keep older releases as

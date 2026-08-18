@@ -52,6 +52,12 @@ export interface ReviewToolBudgetDecision {
 /** Keep two calls available for the normal submit plus one corrected submit.
  * The initial f_review_context call is accounted for separately in state. */
 export const RESERVED_SUBMIT_CALLS = 2;
+
+/** Non-submit calls tolerated after budget exhaustion before the session is
+ * hard-aborted. The window exists so an exhausted session can still emit
+ * f_review_submit (the only call that turns spent exploration into a review)
+ * instead of being cancelled with its findings still in the model's head. */
+export const GRACE_CALLS = 3;
 const RECENT_CALLS = 4;
 
 const streaks = new Map<string, Streak>();
@@ -261,10 +267,24 @@ export function beforeReviewToolCall(
   const max = st.maxToolCalls;
   if (!Number.isFinite(max)) return budgetDecision(true, false);
   if (st.toolBudgetExhausted) {
+    // The review only exists once f_review_submit runs, so submit stays
+    // callable after exhaustion — killing the session before it can submit
+    // throws away everything the exploration budget just paid for.
+    if (tool === "f_review_submit") return budgetDecision(true, false);
+    st.graceCalls = (st.graceCalls ?? 0) + 1;
+    if (st.graceCalls > GRACE_CALLS) {
+      return budgetDecision(
+        false,
+        true,
+        `Review tool-call budget exhausted (maxToolCalls=${max}) and the ` +
+          `${GRACE_CALLS}-call submit grace window is spent; aborting the session.`
+      );
+    }
     return budgetDecision(
       false,
-      true,
-      `Review tool-call budget already exhausted (maxToolCalls=${max}).`
+      false,
+      `Review tool-call budget exhausted (maxToolCalls=${max}). Only f_review_submit ` +
+        `may be called now — submit the review with what you have already seen.`
     );
   }
 
@@ -275,15 +295,19 @@ export function beforeReviewToolCall(
 
   // The exact limit may run only when it is the submit that can finish the
   // review. Later attempts remain pinned to max instead of growing forever.
+  // Exhaustion opens the submit-only grace window instead of aborting:
+  // the next GRACE_CALLS non-submit calls are refused with a "submit now"
+  // notice, and only past that is the session hard-aborted.
   if (st.toolCalls > max || (st.toolCalls === max && !isSubmit)) {
     st.toolCalls = max;
     st.explorationSealed = true;
     st.toolBudgetExhausted = true;
     return budgetDecision(
       false,
-      true,
-      `Review stopped: maxToolCalls=${max} reached and call ${max} was ${tool}, not f_review_submit. ` +
-        `The review will be finalized as INCOMPLETE.`
+      false,
+      `Review stopped exploring: maxToolCalls=${max} reached and call ${max} was ${tool}, ` +
+        `not f_review_submit. Only f_review_submit may be called now — submit the review ` +
+        `with what you have already seen.`
     );
   }
 
@@ -319,7 +343,10 @@ export function beforeReviewToolCall(
 }
 
 /** Reaching the exact limit is terminal unless the permitted submit completed
- * the review, in which case submitReview already cleared the state. */
+ * the review, in which case submitReview already cleared the state. No abort
+ * here: submit must stay reachable through the grace window so the session
+ * can still turn its exploration into a review; the idle watchdog finalizes
+ * a partial report if it never does. */
 export function afterReviewToolCall(
   sessionID: string,
   tool: string
@@ -330,9 +357,9 @@ export function afterReviewToolCall(
   st.toolBudgetExhausted = true;
   return budgetDecision(
     false,
-    true,
-    `Review tool-call budget exhausted after ${tool} (${st.toolCalls}/${st.maxToolCalls}); ` +
-      `the review remains active and will be finalized as INCOMPLETE.`
+    false,
+    `Review tool-call budget exhausted after ${tool} (${st.toolCalls}/${st.maxToolCalls}). ` +
+      `Only f_review_submit may be called now — submit the review with what you have.`
   );
 }
 

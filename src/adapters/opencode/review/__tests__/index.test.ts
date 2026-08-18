@@ -21,11 +21,11 @@ import {
   JUDGE_AGENT_NAME,
   JUDGE_AGENT_PERMISSION,
   JUDGE_AGENT_TOOLS,
-  REVIEWER_AGENT_STEPS,
+  reviewerAgentSteps,
   JUDGE_AGENT_STEPS,
   REVIEW_COMMAND_NAME,
 } from "../prompts";
-import { MAX_RESUMES } from "../../../../core/review";
+import { MAX_RESUMES, DEFAULT_MAX_TOOL_CALLS } from "../../../../core/review";
 import { clearState, getState } from "../../../../core/review/state";
 
 const SESSION = "oc";
@@ -310,10 +310,14 @@ describe("agent/command config injection", () => {
       REVIEWER_AGENT_PERMISSION
     );
     expect(cfg.agent[JUDGE_AGENT_NAME]).toHaveProperty("permission", JUDGE_AGENT_PERMISSION);
-    expect(cfg.agent[REVIEWER_AGENT_NAME]).toHaveProperty("steps", REVIEWER_AGENT_STEPS);
+    // steps must stay strictly above the tool-call budget so repeat-guard's
+    // forced convergence fires before OpenCode's degenerate wrap-up injection.
+    const expectedSteps = reviewerAgentSteps(DEFAULT_MAX_TOOL_CALLS);
+    expect(expectedSteps).toBeGreaterThan(DEFAULT_MAX_TOOL_CALLS);
+    expect(cfg.agent[REVIEWER_AGENT_NAME]).toHaveProperty("steps", expectedSteps);
+    expect(cfg.agent[REVIEWER_AGENT_NAME]).toHaveProperty("maxSteps", expectedSteps);
     expect(cfg.agent[JUDGE_AGENT_NAME]).toHaveProperty("steps", JUDGE_AGENT_STEPS);
-    expect(REVIEWER_AGENT_STEPS).toBe(10);
-    expect(JUDGE_AGENT_STEPS).toBe(3);
+    expect(JUDGE_AGENT_STEPS).toBe(6);
     expect(cfg.command[REVIEW_COMMAND_NAME]).toHaveProperty("template");
   });
 

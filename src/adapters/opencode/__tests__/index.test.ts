@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Hooks, PluginInput } from "@opencode-ai/plugin";
 import { REQUIRED_CATEGORIES } from "../../../core/review";
 import { getState } from "../../../core/review/state";
+import { GRACE_CALLS } from "../repeat-guard";
 import OpenCodeAdapter from "../index";
 
 const tmps: string[] = [];
@@ -112,7 +113,7 @@ describe("OpenCode repeat-hook integration", () => {
     expect(third).toContain("output withheld");
   });
 
-  test("uses maxToolCalls to reserve submit slots and abort on the 10th non-submit call", async () => {
+  test("uses maxToolCalls to open a submit-only grace window, aborting only past it", async () => {
     const directory = gitRepo();
     writeFileSync(
       join(directory, ".f-review.json"),
@@ -142,18 +143,46 @@ describe("OpenCode repeat-hook integration", () => {
     ).rejects.toThrow("reserved for f_review_submit");
     expect(aborted).toHaveLength(0);
 
-    // Call 10 is not submit: mark the review incomplete and hard-abort the session.
+    // Call 10 is not submit: exhaust the budget but do NOT abort — the session
+    // enters a submit-only grace window so it can still produce a review.
     await expect(
       hooks["tool.execute.before"]!(
         { sessionID, tool: "file_read", callID: "search-9" },
         { args: { file_path: "a.ts" } }
       )
     ).rejects.toThrow("maxToolCalls=10");
-    expect(aborted).toEqual([sessionID]);
+    expect(aborted).toHaveLength(0);
     expect(getState(sessionID)!.toolBudgetExhausted).toBe(true);
+
+    // f_review_submit remains callable throughout the grace window.
+    await hooks["tool.execute.before"]!(
+      { sessionID, tool: "f_review_submit", callID: "submit-grace" },
+      { args: { submitToken: "t" } }
+    );
+    expect(aborted).toHaveLength(0);
+
+    // GRACE_CALLS non-submit calls are refused with a "submit now" notice…
+    for (let i = 0; i < GRACE_CALLS; i++) {
+      await expect(
+        hooks["tool.execute.before"]!(
+          { sessionID, tool: "code_search", callID: `grace-${i}` },
+          { args: { search_text: `late-${i}` } }
+        )
+      ).rejects.toThrow("Only f_review_submit");
+      expect(aborted).toHaveLength(0);
+    }
+
+    // …and only past the window is the session hard-aborted.
+    await expect(
+      hooks["tool.execute.before"]!(
+        { sessionID, tool: "code_search", callID: "grace-over" },
+        { args: { search_text: "too-late" } }
+      )
+    ).rejects.toThrow("grace window is spent");
+    expect(aborted).toEqual([sessionID]);
   });
 
-  test("allows the 10th call when it is submit, then aborts only if the review remains active", async () => {
+  test("allows the 10th call when it is submit and keeps submit reachable afterwards", async () => {
     const directory = gitRepo();
     writeFileSync(join(directory, ".f-review.json"), JSON.stringify({ maxToolCalls: 10 }));
     const aborted: string[] = [];
@@ -177,8 +206,15 @@ describe("OpenCode repeat-hook integration", () => {
     );
 
     expect(result.output).toContain("tool-call budget exhausted");
-    expect(aborted).toEqual([sessionID]);
+    // No abort: submit must stay reachable so a corrected resubmit can still
+    // land; the idle watchdog finalizes a partial report if it never does.
+    expect(aborted).toHaveLength(0);
     expect(getState(sessionID)!.toolBudgetExhausted).toBe(true);
+    await hooks["tool.execute.before"]!(
+      { sessionID, tool: "f_review_submit", callID: "submit-retry" },
+      { args }
+    );
+    expect(aborted).toHaveLength(0);
   });
 
   test("preserves a successful terminal submit at the exact configured limit", async () => {

@@ -47,6 +47,7 @@ import {
   judgeContext,
   submitJudge,
   ruleFileContent,
+  resolveMaxToolCalls,
 } from "../../../core/review";
 import {
   REVIEWER_AGENT_NAME,
@@ -58,7 +59,7 @@ import {
   JUDGE_AGENT_DESCRIPTION,
   JUDGE_AGENT_PROMPT,
   JUDGE_AGENT_PERMISSION,
-  REVIEWER_AGENT_STEPS,
+  reviewerAgentSteps,
   JUDGE_AGENT_STEPS,
   JUDGE_AGENT_TOOLS,
   REVIEW_COMMAND_NAME,
@@ -425,14 +426,15 @@ export function createReviewModule(input: PluginInput): {
   // Register the f-reviewer agent and /f-review command from the bundle.
   // `??=` keeps any project/global md definition of the same name authoritative.
   const config: NonNullable<Hooks["config"]> = async (cfg) => {
+    const reviewerSteps = reviewerAgentSteps(resolveMaxToolCalls(cwd));
     (cfg.agent ??= {})[REVIEWER_AGENT_NAME] ??= {
       mode: "subagent",
       description: REVIEWER_AGENT_DESCRIPTION,
       prompt: REVIEWER_AGENT_PROMPT,
       permission: REVIEWER_AGENT_PERMISSION,
       tools: REVIEWER_AGENT_TOOLS,
-      steps: REVIEWER_AGENT_STEPS,
-      maxSteps: REVIEWER_AGENT_STEPS,
+      steps: reviewerSteps,
+      maxSteps: reviewerSteps,
     };
     cfg.agent[JUDGE_AGENT_NAME] ??= {
       mode: "subagent",

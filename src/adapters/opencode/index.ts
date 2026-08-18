@@ -120,9 +120,12 @@ const OpenCodeAdapter: Plugin = async (input) => {
   const abortSession = async (sessionID: string): Promise<void> => {
     try {
       await input.client.session.abort({ path: { id: sessionID } });
-    } catch {
+    } catch (err) {
       // `steps` remains the fallback hard stop. The state stays marked
       // exhausted so session.idle finalizes instead of re-driving the model.
+      console.error(
+        `[gordian-coder] session.abort(${sessionID}) failed: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   };
 
@@ -220,10 +223,10 @@ const OpenCodeAdapter: Plugin = async (input) => {
         hookOutput.output = `${hookOutput.output}\n${loopNotice(hookInput.sessionID ?? "")} STOP calling this control tool; its state is already terminal/unchanged.`;
       }
       const budget = afterReviewToolCall(hookInput.sessionID ?? "", hookInput.tool);
-      if (budget.abort) {
+      if (!budget.allow && budget.message) {
         hookOutput.output = `${hookOutput.output}\n⚠️ ${budget.message}`;
-        await abortSession(hookInput.sessionID ?? "");
       }
+      if (budget.abort) await abortSession(hookInput.sessionID ?? "");
     },
 
     // Hook: modify LLM call parameters (temperature, topP, topK, options)
