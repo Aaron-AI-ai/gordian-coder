@@ -25,6 +25,7 @@ import { z } from "zod";
 import { capped, type Finding } from "./contract";
 import { buildDiffMap } from "./context";
 import { afterRef, readFileAt, renderFileContent } from "./reader";
+import { loadExtraRules, loadFrameworkGuide, renderExtraRules } from "./rubric";
 import {
   loadRun,
   readFileReviewResult,
@@ -49,11 +50,18 @@ const JUDGE_DIFF_MAX_CHARS = 10_000;
 const JUDGE_FILE_MAX_LINES = 2000;
 /** Context lines around a finding whose line the capped excerpt did not show. */
 const JUDGE_WINDOW = 25;
-/** Hard ceiling for the complete judge prompt returned to a small model. */
-export const JUDGE_CONTEXT_MAX_CHARS = 40_000;
-/** Section budgets leave room for the rubric, identities, and instructions. */
+/** Hard ceiling for the complete judge prompt returned to a small model.
+ * Raised with the authoritative-rules section rather than shrinking the
+ * findings/change budgets: those shrink into contextOverflow, which is
+ * terminal, so trading evidence for rules would buy one fix with a regression. */
+export const JUDGE_CONTEXT_MAX_CHARS = 48_000;
+/** Section budgets leave room for the rules, identities, and instructions. */
 const JUDGE_FINDINGS_MAX_CHARS = 18_000;
 const JUDGE_CHANGE_MAX_CHARS = 18_000;
+/** Cap on the authoritative-rules section (framework guide + glob-gated
+ * project rules). Truncated, never rejected: a review judged against partial
+ * rules still beats one judged against none. */
+const JUDGE_RULES_MAX_CHARS = 8_000;
 const JUDGE_BASE_MAX_CHARS = 10_000;
 
 // Judge text is truncated (never rejected) at the same kind of caps the
@@ -375,6 +383,43 @@ function contextOverflowTerminal(
   };
 }
 
+/**
+ * The rulebook the reviewer was held to, as shown to the judge.
+ *
+ * Without it the judge scores against general best practice and rejects
+ * correct rule-based findings as style preferences — observed as "Spring
+ * supports @RequiredArgsConstructor, this is not a blocker" against a project
+ * whose authoritative guide forbids exactly that, sinking every file below the
+ * threshold no matter how many rework rounds ran.
+ *
+ * Mirrors what the reviewer's prompt injects (framework guide + glob-gated
+ * project rules) minus the category rubric: `JUDGE_CRITERIA` already defines
+ * scoring, and handing the judge the review checklist invites it to re-review
+ * the code instead of judging the review.
+ */
+function authoritativeRules(file: string, cwd: string): string {
+  const body = [loadFrameworkGuide(cwd), renderExtraRules(loadExtraRules(cwd), file)]
+    .map((section) => section.trim())
+    .filter(Boolean)
+    .join("\n\n");
+  if (!body) return "";
+  const capped =
+    body.length > JUDGE_RULES_MAX_CHARS
+      ? `${body.slice(0, JUDGE_RULES_MAX_CHARS)}\n… (rules truncated)`
+      : body;
+  return [
+    `### Authoritative project rules (the reviewer was REQUIRED to follow these)`,
+    `A finding that correctly applies a rule below is VALID even when it`,
+    `contradicts general best practice. Do not penalize it as a style`,
+    `preference, an outdated pattern, or a framework misunderstanding. These`,
+    `rules are not up for debate — judge only whether the reviewer applied them`,
+    `correctly to this file.`,
+    ``,
+    capped,
+    ``,
+  ].join("\n");
+}
+
 function buildJudgePrompt(
   meta: RunMeta,
   result: PersistedFileReviewResult,
@@ -400,6 +445,7 @@ function buildJudgePrompt(
     `### Criteria`,
     JUDGE_CRITERIA,
     ``,
+    authoritativeRules(result.file, cwd),
     `### The change under review`,
     excerpt,
     ``,

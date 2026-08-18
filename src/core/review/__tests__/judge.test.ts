@@ -143,6 +143,37 @@ describe("judgeContext", () => {
     expect(out).toContain("call f_review_judge");
   });
 
+  it("injects the authoritative rules the reviewer was held to", async () => {
+    // Without them the judge scores against general best practice and rejects
+    // correct rule-based findings as style preferences, sinking every file
+    // below the threshold no matter how many rework rounds run.
+    const d = gitRepo();
+    writeFileSync(join(d, ".f-review.json"), JSON.stringify({ frameworkGuide: "fw.md" }));
+    writeFileSync(join(d, "fw.md"), "- Field injection with @Autowired is REQUIRED here.\n");
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+
+    const out = judgeContext(meta.runId, "a.ts", d);
+    expect(out).toContain("Field injection with @Autowired is REQUIRED here.");
+    expect(out).toContain("REQUIRED to follow these");
+    expect(out).toContain("not up for debate");
+  });
+
+  it("truncates oversized rules instead of failing the judge context", async () => {
+    // Rules are advisory context: a review judged against partial rules still
+    // beats one judged against none, so this must never become an overflow.
+    const d = gitRepo();
+    writeFileSync(join(d, ".f-review.json"), JSON.stringify({ frameworkGuide: "fw.md" }));
+    writeFileSync(join(d, "fw.md"), "x".repeat(30_000));
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+
+    const out = judgeContext(meta.runId, "a.ts", d);
+    expect(out).toContain("(rules truncated)");
+    expect(out).toContain("Validity (40%)"); // still a real context, not an overflow notice
+    expect(out.length).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_CHARS);
+  });
+
   it("shows file content instead of a diff for whole-file runs", async () => {
     const d = gitRepo();
     const meta = await createRun(baseMeta({ whole: true }), d);
