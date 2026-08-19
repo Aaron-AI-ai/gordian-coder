@@ -36,3 +36,22 @@ export function dbgOnce(key: string, section: string, message: string): void {
   dumped.add(key);
   dbg(section, message);
 }
+
+const noted = new Set<string>();
+/** Sessions tracked before the note keys are dropped; the server is long-lived
+ * and these keys are only there to stop per-turn repeats. */
+const NOTE_KEYS_MAX = 500;
+
+/**
+ * Operational note printed ONCE per key, regardless of the debug flag.
+ *
+ * Unlike dbg(), this is not tracing: it tells whoever is watching the OpenCode
+ * log which files a review actually consulted. That is the difference between
+ * trusting a review and auditing it, so it must not require opting in.
+ */
+export function noteOnce(key: string, message: string): void {
+  if (noted.has(key)) return;
+  if (noted.size >= NOTE_KEYS_MAX) noted.clear();
+  noted.add(key);
+  console.error(`[f-review] ${message}`);
+}

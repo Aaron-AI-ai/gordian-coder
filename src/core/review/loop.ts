@@ -70,9 +70,9 @@ import {
   type ReviewState,
 } from "./state";
 import { afterRef, fileRead, renderFileContent, sanitizeFindingLines, MAX_ITER } from "./reader";
-import { buildReviewEvidence } from "./evidence";
+import { reviewEvidence } from "./evidence";
 import { SEGMENT_THRESHOLD, inFileRelated, planSegments, targetPath, targetRange } from "./segment";
-import { dbg, dbgOnce, setReviewDebug } from "./debug";
+import { dbg, dbgOnce, noteOnce, setReviewDebug } from "./debug";
 import { VERSION } from "../../version";
 
 export const NO_ACTIVE_REVIEW = "No active review. Call f_review_context first.";
@@ -1065,8 +1065,18 @@ export function reviewPromptFor(st: ReviewState): string | null {
   const path = targetPath(target); // strip a segment's #start-end back to the real path
   const range = targetRange(target); // set for a segment of a large whole-file review
   // Evidence (cross-file related + history) is per real file — segments share it.
-  const evidence =
-    st.evidenceCache[path] ?? (st.evidenceCache[path] = buildReviewEvidence(st.cwd, st.ref, path));
+  // Built once per path; the audit line below therefore prints once per file.
+  let evidence = st.evidenceCache[path];
+  if (evidence === undefined) {
+    const built = reviewEvidence(st.cwd, st.ref, path);
+    evidence = st.evidenceCache[path] = built.text;
+    noteOnce(
+      `evidence:${st.cwd}:${path}`,
+      `${path} — injected ${built.sources.length} imported source(s), ` +
+        `${built.docs.length} framework KB page(s)` +
+        [...built.sources, ...built.docs].map((entry) => `\n         · ${entry}`).join("")
+    );
+  }
 
   // Choose what goes in the review block: a segment slice (+ same-file related
   // declarations it references), the whole file, or the diff hunks.
