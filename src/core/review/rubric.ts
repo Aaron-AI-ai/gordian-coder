@@ -168,10 +168,57 @@ function parseRule(raw: string): { globs: string[]; content: string; reference: 
  * bullets twice into every prompt (and the two copies drifted).
  * ponytail: static imports — adding a bundled rule means adding a line here. */
 const BUNDLED_RULES: ExtraRule[] = [
-  { file: "framework_kb.md", ...parseRule(FRAMEWORK_KB_RULE) },
   { file: "java.md", ...parseRule(JAVA_RULE) },
   { file: "mapper_dao_xml.md", ...parseRule(MAPPER_RULE) },
 ];
+
+// The contiguous markdown table in framework_kb.md (header + separator + rows).
+const KB_TABLE = /\|[^\n]*\|(?:\r?\n\|[^\n]*\|)+/;
+
+/**
+ * Appended to every framework-KB rule, bundled or project-supplied.
+ *
+ * The pages are resolved and injected as evidence (see framework-kb.ts), so any
+ * "read the KB directory with file_read" procedure — which is what these rules
+ * said before injection existed, and what a project's own md may still say — now
+ * buys nothing and spends a tool call from a budget that is already the reason
+ * reviews come back thin. The code owns this instruction so no md can contradict
+ * it; the md owns the domain content.
+ */
+const KB_INJECTION_NOTICE = [
+  "",
+  "**Lookup is not required.** The KB pages for this file's matching imports are",
+  'already injected under "## Framework knowledge base" in the review evidence.',
+  "Do not `file_read` or `code_search` the KB directory — you would spend a tool",
+  "call re-fetching what you have already been given.",
+].join("\n");
+
+/** The framework-KB rule: `.f-review.json` `frameworkKbFile` (a project md,
+ * frontmatter globs respected) replaces the bundled framework_kb.md wholesale;
+ * `frameworkKb` (prefix→directory map) then replaces the rule's table — both
+ * differ per project. Missing/unreadable file → fall back to the bundled md.
+ * The injection notice is appended last, so it survives either substitution. */
+function frameworkKbRule(cwd: string): ExtraRule {
+  const cfg = loadConfig(cwd);
+  let base = { file: "framework_kb.md", ...parseRule(FRAMEWORK_KB_RULE) };
+  if (cfg.frameworkKbFile) {
+    const abs = isAbsolute(cfg.frameworkKbFile) ? cfg.frameworkKbFile : join(cwd, cfg.frameworkKbFile);
+    if (existsSync(abs))
+      base = { file: cfg.frameworkKbFile, ...parseRule(readFileSync(abs, "utf8")) };
+  }
+  const entries = Object.entries(cfg.frameworkKb ?? {});
+  const content = entries.length
+    ? base.content.replace(
+        KB_TABLE,
+        [
+          "| import prefix | KB location |",
+          "|---|---|",
+          ...entries.map(([prefix, dir]) => `| \`${prefix}\` | \`${dir}\` |`),
+        ].join("\n")
+      )
+    : base.content;
+  return { ...base, content: `${content.trimEnd()}\n${KB_INJECTION_NOTICE}\n` };
+}
 
 /** Project rules directory, relative to the project root: `.f-review.json`
  * `rulesDir` if set, else `review/rules`. */
@@ -189,12 +236,13 @@ function rulesDirOf(cwd: string): string {
 export function loadExtraRules(cwd: string = process.cwd()): ExtraRule[] {
   const rel = rulesDirOf(cwd);
   const dir = join(cwd, rel);
-  if (!existsSync(dir)) return [...BUNDLED_RULES];
+  const bundled = [frameworkKbRule(cwd), ...BUNDLED_RULES];
+  if (!existsSync(dir)) return bundled;
   const project = readdirSync(dir, { recursive: true, encoding: "utf8" })
     .filter((f) => f.endsWith(".md"))
     .sort()
     .map((f) => ({ file: `${rel}/${f}`, ...parseRule(readFileSync(join(dir, f), "utf8")) }));
-  return [...BUNDLED_RULES, ...project];
+  return [...bundled, ...project];
 }
 
 /** First heading (or first line) of a rule body — the index blurb for

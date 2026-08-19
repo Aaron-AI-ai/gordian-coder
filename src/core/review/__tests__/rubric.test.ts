@@ -142,6 +142,56 @@ describe("extra rules (review/rules)", () => {
     ]);
   });
 
+  it("replaces the framework_kb table with the frameworkKb map from .f-review.json", () => {
+    const d = tmp();
+    writeFileSync(
+      join(d, ".f-review.json"),
+      '{"frameworkKb": {"com.acme.fw.*": "docs/kb/acme-fw/"}}'
+    );
+    const kb = loadExtraRules(d).find((r) => r.file === "framework_kb.md")!;
+    expect(kb.content).toContain("| `com.acme.fw.*` | `docs/kb/acme-fw/` |");
+    expect(kb.content).not.toContain("fico-fwk-core");
+    // without config, the bundled default table stays
+    const def = loadExtraRules(tmp()).find((r) => r.file === "framework_kb.md")!;
+    expect(def.content).toContain("fico-fwk-core");
+  });
+
+  it("appends the injection notice to a project md that still says to look the KB up", () => {
+    // Injection made the lookup procedure obsolete, but a project's own KB rule
+    // predates that and may still order a file_read. The notice is code-owned so
+    // no md — bundled or supplied — can send the reviewer after what it already has.
+    const d = tmp();
+    writeFileSync(
+      join(d, "my-kb-rule.md"),
+      "#### Our KB\n\nRead the md files under `docs/kb/` with `file_read` first.\n"
+    );
+    writeFileSync(join(d, ".f-review.json"), '{"frameworkKbFile": "my-kb-rule.md"}');
+    const rule = loadExtraRules(d).find((r) => r.file === "my-kb-rule.md");
+    expect(rule?.content).toContain("Lookup is not required.");
+    expect(rule?.content).toContain("Framework knowledge base");
+  });
+
+  it("replaces framework_kb.md wholesale via frameworkKbFile, composing with frameworkKb", () => {
+    const d = tmp();
+    writeFileSync(
+      join(d, "my-kb-rule.md"),
+      '---\nglobs: "*.kt"\n---\nCustom procedure.\n\n| import prefix | KB location |\n|---|---|\n| `x` | `y` |\n'
+    );
+    writeFileSync(
+      join(d, ".f-review.json"),
+      '{"frameworkKbFile": "my-kb-rule.md", "frameworkKb": {"com.acme.*": "kb/acme/"}}'
+    );
+    const kb = loadExtraRules(d)[0];
+    expect(kb.file).toBe("my-kb-rule.md");
+    expect(kb.globs).toEqual(["*.kt"]);
+    expect(kb.content).toContain("Custom procedure.");
+    expect(kb.content).toContain("| `com.acme.*` | `kb/acme/` |"); // table still overridden by map
+    // missing file → bundled fallback
+    const d2 = tmp();
+    writeFileSync(join(d2, ".f-review.json"), '{"frameworkKbFile": "nope.md"}');
+    expect(loadExtraRules(d2)[0].file).toBe("framework_kb.md");
+  });
+
   it("loads from a custom rulesDir set in .f-review.json", () => {
     const d = tmp();
     mkdirSync(join(d, "fcq", "config", "rules"), { recursive: true });

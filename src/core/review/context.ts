@@ -48,6 +48,8 @@ export const ReviewConfigSchema = z.object({
   maxIter: field(z.number()), // exploration tool calls per round before forced convergence (default MAX_ITER)
   maxToolCalls: field(z.number()), // total tool calls per reviewer session, including context/submit
   rulesDir: field(z.string()), // project rules directory, relative to root (default "review/rules")
+  frameworkKb: field(z.record(z.string())), // import prefix → KB dir map; replaces the framework_kb rule's table
+  frameworkKbFile: field(z.string()), // path to an md replacing the bundled framework_kb.md entirely (frontmatter globs respected)
   judge: field(z.boolean()), // run mode: judge each file's review with an independent agent
   judgeThreshold: field(z.number()), // judge pass score 0..100 (default 70)
   judgeRounds: field(z.number()), // max rework (re-review) rounds per file (0..5, default 2; 0 = judge once, never re-review)
