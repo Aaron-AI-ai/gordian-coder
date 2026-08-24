@@ -4,9 +4,11 @@
  * Reports and manifests live in separate trees:
  *   report   → --output param > .f-review.json "output" > fcq/report/f-review/
  *   manifest → fcq/f-review/manifest/ (fixed)
- * A directory report target gets an auto-named `review-<label>-<yyyymmdd>.md`;
- * a file target is used as-is. Writing a report archives any existing
- * `f-review` report folder to `f-review.<yyyymmdd-hhmmss>` first.
+ * A directory report target gets an auto-named
+ * `review-<label>-<yyyymmdd-hhmmss>.md` — unique per run/session; a file
+ * target is used as-is (and is overwritten). Writing into a dedicated
+ * `f-review` folder first archives the existing folder to
+ * `f-review.<yyyymmdd-hhmmss>`, so `f-review/` holds only the fresh report.
  */
 
 import { existsSync, statSync, readdirSync, readFileSync, renameSync } from "node:fs";
@@ -22,12 +24,7 @@ function isDirSync(p: string): boolean {
   return existsSync(p) && statSync(p).isDirectory();
 }
 
-/** yyyymmdd, for report filenames. */
-function ymd(d: Date): string {
-  return d.toISOString().slice(0, 10).replace(/-/g, "");
-}
-
-/** yyyymmdd-hhmmss (UTC), for backup-dir suffixes. */
+/** yyyymmdd-hhmmss (UTC), for report filenames. */
 function stamp(d: Date): string {
   const s = d.toISOString();
   return `${s.slice(0, 10).replace(/-/g, "")}-${s.slice(11, 19).replace(/:/g, "")}`;
@@ -52,7 +49,9 @@ export function resolveOutputPath(
   const p = opt ?? loadConfig(cwd).output ?? DEFAULT_REPORT_DIR;
   const full = isAbsolute(p) ? p : join(cwd, p);
   const looksDir = p.endsWith("/") || isDirSync(full);
-  return looksDir ? join(p, `review-${label}-${ymd(date)}.md`) : p;
+  // Second-resolution stamp: each run/session writes its own report file
+  // instead of overwriting the previous one of the same commit + day.
+  return looksDir ? join(p, `review-${label}-${stamp(date)}.md`) : p;
 }
 
 /** Manifest path — its own fixed tree, independent of the report location. */
@@ -287,8 +286,9 @@ export async function writeReport(
 
 /**
  * Archive an existing dedicated report folder before writing a fresh report:
- * `.../f-review` → `.../f-review.<yyyymmdd-hhmmss>`. Gated on the
- * folder name so an arbitrary `--output` directory is never renamed.
+ * `.../f-review` → `.../f-review.<yyyymmdd-hhmmss>`, leaving `f-review/` with
+ * only the newly written report. Gated on the folder name so an arbitrary
+ * `--output` directory is never renamed.
  */
 function backupReportDir(dir: string, now: Date): void {
   if (basename(dir) === "f-review" && isDirSync(dir)) {
@@ -308,15 +308,11 @@ export interface ManifestMeta {
   generatedAt?: string; // UTC timestamp recorded in the body (filename stays date-free)
 }
 
-/** Render the collected target list (written at review start). */
-export function renderManifest(
-  targets: string[],
-  meta: ManifestMeta,
-  label: string = ""
-): string {
-  const lines = ["# Code Review Targets", ""];
-  if (label) lines.push(`> ${label}`, "");
-  lines.push(
+/** The parameter/criteria bullet list shared by the manifest and the report's
+ * Review Context appendix. `filesHeading` differs because the manifest is an
+ * H1 document while the appendix nests under the report. */
+function contextLines(targets: string[], meta: ManifestMeta, filesHeading: string): string[] {
+  return [
     ...(meta.generatedAt ? [`- Generated: ${meta.generatedAt}`] : []),
     `- Mode: ${meta.mode}`,
     `- Range: ${meta.range ?? "— (working tree)"}`,
@@ -330,11 +326,29 @@ export function renderManifest(
       : []),
     `- Total: ${targets.length} file(s)`,
     "",
-    "## Files",
+    filesHeading,
     ...targets.map((t) => `- ${t}`),
-    ""
-  );
+    "",
+  ];
+}
+
+/** Render the collected target list (written at review start). */
+export function renderManifest(
+  targets: string[],
+  meta: ManifestMeta,
+  label: string = ""
+): string {
+  const lines = ["# Code Review Targets", ""];
+  if (label) lines.push(`> ${label}`, "");
+  lines.push(...contextLines(targets, meta, "## Files"));
   return lines.join("\n");
+}
+
+/** "## Review Context" report appendix: the run's input parameters and
+ * criteria sources (same data as the manifest), so the report alone tells the
+ * reader what was reviewed and against which rules. */
+export function renderReviewContext(targets: string[], meta: ManifestMeta): string {
+  return ["## Review Context", "", ...contextLines(targets, meta, "### Files")].join("\n");
 }
 
 /** Write the target manifest; returns the path. */

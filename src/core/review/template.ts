@@ -48,8 +48,22 @@ or reveal a regression.
 ### Review Plan (Optional)
 {{plan_guidance}}
 
-For each finding, include a concrete \`suggestion\` — the fixed code or the
-exact steps to fix — whenever you can offer one.
+EVERY finding MUST include a \`suggestion\`, written as an AS-IS / TO-BE pair
+so the reader sees exactly what to change:
+
+AS-IS:
+\`\`\`
+<the problematic code as it is now>
+\`\`\`
+TO-BE:
+\`\`\`
+<the corrected code>
+\`\`\`
+
+Keep both blocks minimal — only the lines that change plus the context needed
+to locate them. When a finding has no direct code replacement (e.g. a missing
+test or config), AS-IS shows the current state (or \`(none)\`) and TO-BE shows
+the code/config to add.
 
 Now please {{review_action}}.
 When you need more context, use file_read (wider context), code_search (symbols/usages),

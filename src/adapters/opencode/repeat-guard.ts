@@ -192,7 +192,7 @@ export function shouldSuppressIdempotentReplay(
     return /already recorded|Judge INCOMPLETE|already hit the judge rework cap/.test(output);
   }
   if (tool === "f_review_plan") {
-    return /Duplicate f_review_plan ignored|Refusing to create another run/.test(output);
+    return /Refusing to create another run|still being created by another process/.test(output);
   }
   if (tool === "f_review_context") {
     return /Duplicate f_review_context ignored|already has (?:a submitted|a terminal) review artifact/.test(

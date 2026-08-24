@@ -36,6 +36,7 @@ export interface ReviewState {
   output?: string;
   failOn?: Severity; // CI gate threshold; unset = no gate
   baseline: Set<string>; // finding keys from the previous report (marks re-found issues)
+  reportContext?: string; // "## Review Context" appendix (params + criteria sources), built at start
   label: string;
   language: string; // findings/report language, e.g. "ko"
   iterations: number;

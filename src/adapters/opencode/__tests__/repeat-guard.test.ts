@@ -150,7 +150,7 @@ describe("repeat-guard", () => {
       shouldSuppressIdempotentReplay(
         planSession,
         "f_review_plan",
-        "ℹ️ Duplicate f_review_plan ignored; resume unfinished run r1"
+        "⚠️ Refusing to create another run: 3 unfinished runs already exist"
       )
     ).toBe(true);
 

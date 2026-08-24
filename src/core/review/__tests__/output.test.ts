@@ -37,17 +37,17 @@ const finding = (over: Partial<Finding> = {}): Finding => ({
   ...over,
 });
 
-const DATE = new Date("2026-07-27T09:30:05Z"); // ymd → 20260727
+const DATE = new Date("2026-07-27T09:30:05Z"); // stamp → 20260727-093005
 
 describe("resolveOutputPath", () => {
   it("defaults to fcq/report/f-review/ with dated auto filename", () => {
     expect(resolveOutputPath(undefined, "L", tmp(), DATE)).toBe(
-      "fcq/report/f-review/review-L-20260727.md"
+      "fcq/report/f-review/review-L-20260727-093005.md"
     );
   });
 
   it("treats a trailing-slash param as a directory", () => {
-    expect(resolveOutputPath("reports/", "L", tmp(), DATE)).toBe("reports/review-L-20260727.md");
+    expect(resolveOutputPath("reports/", "L", tmp(), DATE)).toBe("reports/review-L-20260727-093005.md");
   });
 
   it("uses an explicit filename as-is (no date appended)", () => {
@@ -57,7 +57,7 @@ describe("resolveOutputPath", () => {
   it("reads output from config when no param", () => {
     const d = tmp();
     writeFileSync(join(d, ".f-review.json"), JSON.stringify({ output: "docs/rv/" }));
-    expect(resolveOutputPath(undefined, "L", d, DATE)).toBe("docs/rv/review-L-20260727.md");
+    expect(resolveOutputPath(undefined, "L", d, DATE)).toBe("docs/rv/review-L-20260727-093005.md");
   });
 
   it("param overrides config", () => {
@@ -69,13 +69,13 @@ describe("resolveOutputPath", () => {
   it("detects an existing directory without trailing slash", () => {
     const d = tmp();
     mkdirSync(join(d, "reports"));
-    expect(resolveOutputPath("reports", "L", d, DATE)).toBe("reports/review-L-20260727.md");
+    expect(resolveOutputPath("reports", "L", d, DATE)).toBe("reports/review-L-20260727-093005.md");
   });
 
   it("keeps an absolute directory path absolute (not re-rooted under cwd)", () => {
     const d = tmp();
     const abs = join(d, "out") + "/";
-    expect(resolveOutputPath(abs, "L", d, DATE)).toBe(join(abs, "review-L-20260727.md"));
+    expect(resolveOutputPath(abs, "L", d, DATE)).toBe(join(abs, "review-L-20260727-093005.md"));
   });
 });
 
@@ -248,15 +248,14 @@ describe("writeReport", () => {
     expect(existsSync(join(d, "nested/dir/out.md"))).toBe(true);
   });
 
-  it("archives an existing f-review report folder before writing anew", async () => {
+  it("archives an existing f-review report folder, leaving only the fresh report", async () => {
     const d = tmp();
     const dir = "fcq/report/f-review";
-    await writeReport(join(dir, "review-A-20260726.md"), { "a.ts": [finding()] }, "A", d);
-    // second review the next day: old folder is backed up, new report written fresh
-    await writeReport(join(dir, "review-B-20260727.md"), { "b.ts": [finding()] }, "B", d, "en", undefined, undefined, DATE);
-    expect(existsSync(join(d, dir, "review-A-20260726.md"))).toBe(false); // moved out
-    expect(existsSync(join(d, dir, "review-B-20260727.md"))).toBe(true); // fresh
-    expect(existsSync(join(d, `${dir}.20260727-093005`, "review-A-20260726.md"))).toBe(true); // archived
+    await writeReport(join(dir, "review-A-20260726-080000.md"), { "a.ts": [finding()] }, "A", d);
+    await writeReport(join(dir, "review-B-20260727-093005.md"), { "b.ts": [finding()] }, "B", d, "en", undefined, undefined, DATE);
+    expect(existsSync(join(d, dir, "review-A-20260726-080000.md"))).toBe(false); // moved out
+    expect(existsSync(join(d, dir, "review-B-20260727-093005.md"))).toBe(true); // fresh only
+    expect(existsSync(join(d, `${dir}.20260727-093005`, "review-A-20260726-080000.md"))).toBe(true); // archived
   });
 
   it("same-second rewrite picks a fresh backup suffix instead of crashing", async () => {

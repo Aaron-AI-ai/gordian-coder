@@ -708,7 +708,7 @@ describe("plan/finalize integration", () => {
     expect(meta.judgeRounds).toBe(1);
   });
 
-  it("finalizeRun reports judge outcomes: passed, capped-below-threshold, unjudged", async () => {
+  it("finalizeRun folds judge outcomes into the response, keeping the report findings-only", async () => {
     const d = gitRepo();
     writeFileSync(join(d, "b.ts"), "b\n");
     writeFileSync(join(d, "c.ts"), "c\n");
@@ -721,12 +721,12 @@ describe("plan/finalize integration", () => {
     // c.ts reviewed but never judged
 
     const msg = await finalizeRun(meta.runId, d);
+    expect(msg).toContain("Run terminated — INCOMPLETE");
+    expect(msg).toContain("below judge threshold");
+    expect(msg).toContain("unjudged review(s)");
     const path = /Report: (.+)$/.exec(msg)![1];
     const md = readFileSync(join(d, path), "utf8");
-    expect(md).toContain(`Judge: 1/3 file(s) passed (threshold ${DEFAULT_JUDGE_THRESHOLD})`);
-    expect(md).toContain("Below judge threshold (quality incomplete): b.ts (score 10)");
-    expect(md).toContain("Reviewed but never judged: c.ts");
-    expect(msg).toContain("Run terminated — INCOMPLETE");
+    expect(md).not.toContain("## Run Summary"); // judge detail stays out of the report
   });
 
   it("invalidates a cached PASS when its persisted judgment becomes semantically invalid", async () => {

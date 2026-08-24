@@ -121,8 +121,8 @@ export function moebiusAfterTool(tool: string, sessionID: string, result: unknow
       post({
         id: "plan",
         name: "Plan & fan-out",
-        status: /Run created:|Duplicate f_review_plan ignored/.test(text) ? "succeeded" : "failed",
-        ...(/Run created:|Duplicate f_review_plan ignored/.test(text)
+        status: /Run created:/.test(text) ? "succeeded" : "failed",
+        ...(/Run created:/.test(text)
           ? { output: { text: text.slice(0, 2000) } }
           : { error: text.slice(0, 2000) }),
       });

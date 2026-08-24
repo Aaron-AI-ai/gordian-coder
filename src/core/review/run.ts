@@ -40,9 +40,16 @@ import {
   resolveDiffRange,
   type CommitSpec,
 } from "./context";
-import { defaultLabel, loadBaseline, resolveOutputPath, writeReport } from "./output";
+import {
+  defaultLabel,
+  loadBaseline,
+  manifestTimestamp,
+  renderReviewContext,
+  resolveOutputPath,
+  writeReport,
+} from "./output";
 import { DEFAULT_JUDGE_THRESHOLD, readRunJudgments } from "./judge";
-import { buildRubric, loadExtraRules, loadFrameworkGuide } from "./rubric";
+import { buildRubric, loadExtraRules, loadFrameworkGuide, rubricSources } from "./rubric";
 
 export const RUNS_DIR = "fcq/f-review/runs";
 /** Hard cap on targets per run — refuse larger fan-outs (split the range instead). */
@@ -89,6 +96,9 @@ export interface RunMeta {
   sourceIdentity?: string;
   /** Hash of every effective review rule/guide used when planning. */
   criteriaIdentity?: string;
+  /** Effective exclude globs (config + plan args), kept for the report's
+   * Review Context appendix. */
+  excludes?: string[];
 }
 
 /** Persisted run metadata is external state, even though this process created it. */
@@ -111,6 +121,7 @@ export const RunMetaSchema: z.ZodType<RunMeta> = z.object({
   baseline: z.array(z.string()).optional(),
   sourceIdentity: z.string().optional(),
   criteriaIdentity: z.string().optional(),
+  excludes: z.array(z.string()).optional(),
 });
 
 /**
@@ -660,6 +671,7 @@ export async function planReview(args: PlanReviewArgs, cwd: string): Promise<str
         : undefined,
     sourceIdentity: range ?? filesSnapshotIdentity(cwd, targets),
     criteriaIdentity: reviewCriteriaIdentity(cwd),
+    excludes: [...(config.exclude ?? []), ...(args.exclude ?? [])],
   };
 
   const fingerprint = planFingerprint(planned);
@@ -671,57 +683,16 @@ export async function planReview(args: PlanReviewArgs, cwd: string): Promise<str
     );
   }
   try {
-    // Tool-call replay safety: the same unfinished plan is a read of existing
-    // state, not a request to fan out a second set of workers. This scan and
-    // the eventual create occur under the fingerprint claim above.
+    // Every plan call fans out a fresh review, even for an identical unfinished
+    // plan — resuming a prior run's artifacts is future work. The fingerprint
+    // claim above still keeps two simultaneous identical planners from creating
+    // two runs in the same instant.
     pruneRuns(cwd);
     const unfinished = unfinishedRuns(cwd);
-    const reused = unfinished.find(
-      (candidate) => planFingerprint(candidate) === fingerprint
-    );
-    if (reused) {
-      const reusedResults = readRunResults(reused.runId, cwd);
-      const { missing } = runCoverage(reused, reusedResults);
-      const reusedJudgments = reused.judge ? readRunJudgments(reused.runId, cwd) : [];
-      const judgePending = reused.judge
-        ? reused.targets.filter((file) => {
-            const review = reusedResults.find((result) => result.file === file);
-            if (!review) return false;
-            const hash = reviewArtifactHash(review);
-            const judgment = reusedJudgments.find((candidate) => candidate.file === file);
-            const terminal = judgment?.terminal;
-            if (
-              terminal?.reviewRevision === review.revision &&
-              terminal.reviewArtifactHash === hash
-            ) {
-              return false;
-            }
-            const attempt = judgment?.attempts.findLast(
-              (candidate) =>
-                candidate.reviewRevision === review.revision &&
-                candidate.reviewArtifactHash === hash
-            );
-            return (
-              !attempt ||
-              attempt.verdict !== "pass" ||
-              attempt.score < (reused.judgeThreshold ?? DEFAULT_JUDGE_THRESHOLD)
-            );
-          })
-        : [];
-      return (
-        `ℹ️ Duplicate f_review_plan ignored; resume unfinished run ${reused.runId}. ` +
-        `STOP calling f_review_plan and do NOT spawn duplicate workers for targets already dispatched. ` +
-        (missing.length
-          ? `Review artifacts are still missing for: ${missing.join(", ")}. Coordinate only those outstanding targets, then call f_review_finalize.`
-          : judgePending.length
-            ? `Review artifacts exist, but the judge gate is still pending/rework for: ${judgePending.join(", ")}. Resume those judge/reviewer rounds; finalize only after they pass or become terminal INCOMPLETE.`
-            : `All review artifacts exist; call f_review_finalize now.`)
-      );
-    }
     if (unfinished.length >= MAX_UNFINISHED_RUNS) {
       return (
         `⚠️ Refusing to create another run: ${unfinished.length} unfinished runs already exist ` +
-        `(cap ${MAX_UNFINISHED_RUNS}). Resume/finalize one of: ` +
+        `(cap ${MAX_UNFINISHED_RUNS}). Finalize one of: ` +
         unfinished.slice(0, MAX_UNFINISHED_RUNS).map((run) => run.runId).join(", ")
       );
     }
@@ -810,11 +781,9 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
   const coverageIncomplete = targetResults
     .filter((r) => !r.coverageComplete)
     .map((r) => r.file);
-  const unexplored = targetResults.filter((r) => !r.explorationCalls).map((r) => r.file);
 
   // Judge outcomes are bound to the current review revision. A pass for an
   // artifact that was subsequently rewritten cannot bless the newer review.
-  const judgeLines: string[] = [];
   let judgeBelowThreshold: string[] = [];
   let judgeUnjudged: string[] = [];
   let judgeIncomplete: string[] = [];
@@ -842,14 +811,6 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
         ? terminal
         : undefined;
     };
-    const passed = reviewed.filter((file) => {
-      const attempt = currentAttempt(file);
-      return (
-        !currentTerminal(file) &&
-        attempt?.verdict === "pass" &&
-        attempt.score >= threshold
-      );
-    });
     judgeIncomplete = reviewed.filter((file) => !!currentTerminal(file));
     judgeBelowThreshold = reviewed.filter((file) => {
       const attempt = currentAttempt(file);
@@ -862,26 +823,6 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
     judgeUnjudged = reviewed.filter(
       (file) => !currentTerminal(file) && !currentAttempt(file)
     );
-    judgeLines.push(
-      `- Judge: ${passed.length}/${reviewed.length} file(s) passed (threshold ${threshold})`
-    );
-    if (judgeBelowThreshold.length) {
-      judgeLines.push(
-        `- ⚠️ Below judge threshold (quality incomplete): ${judgeBelowThreshold
-          .map((file) => `${file} (score ${currentAttempt(file)?.score})`)
-          .join(", ")}`
-      );
-    }
-    if (judgeIncomplete.length) {
-      judgeLines.push(
-        `- ⚠️ Judge incomplete (bounded terminal): ${judgeIncomplete
-          .map((file) => `${file} (${currentTerminal(file)?.reason})`)
-          .join(", ")}`
-      );
-    }
-    if (judgeUnjudged.length) {
-      judgeLines.push(`- ⚠️ Reviewed but never judged: ${judgeUnjudged.join(", ")}`);
-    }
   }
 
   const qualityReasons: string[] = [];
@@ -912,42 +853,22 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
     }
   }
 
-  // Run-quality appendix rendered under the standard report body.
-  const summary = [
-    "## Run Summary",
-    "",
-    `- Run: ${runId} (${meta.range ? `commit diff ${meta.range}` : "explicit files"}${meta.whole ? " · whole-file" : ""})`,
-    `- Coverage: ${reviewed.length}/${meta.targets.length} file(s) reviewed${
-      missing.length
-        ? ` — **INCOMPLETE**, missing: ${missing.join(", ")}`
-        : qualityIncomplete
-          ? " — artifacts present; **QUALITY INCOMPLETE**"
-          : " — complete"
-    }`,
-    `- Quality status: ${qualityIncomplete ? `**INCOMPLETE** — ${qualityReasons.join("; ")}` : "complete"}`,
-    ...(partials.length ? [`- ⚠️ Partial reviews (subagent cut off early): ${partials.join(", ")}`] : []),
-    ...(forced.length
-      ? [`- ⚠️ Force-advanced by bounded recovery (terminal, not quality-complete): ${forced.join(", ")}`]
-      : []),
-    ...(coverageIncomplete.length
-      ? [`- ⚠️ Coverage incomplete: ${coverageIncomplete.join(", ")}`]
-      : []),
-    ...(unexplored.length
-      ? [`- ⚠️ Reviewed without exploration calls (evidence only): ${unexplored.join(", ")}`]
-      : []),
-    ...judgeLines,
-    ...(meta.failOn && qualityIncomplete
-      ? [`- Verdict: **FAIL** — quality incomplete; failOn=${meta.failOn} fails closed`]
-      : []),
-    `- Per-file reviews: ${join(RUNS_DIR, runId, "reviews")}/`,
-    "",
-  ].join("\n");
-
-  const path = resolveOutputPath(meta.output, meta.label, cwd);
+  // Name the report by runId, not just label: runId is claimed under an
+  // exclusive-create lock, so parallel runs of the same commit (even across
+  // processes, in the same second) can never resolve to the same file.
+  const path = resolveOutputPath(meta.output, meta.runId, cwd);
   const baseline = new Set(meta.baseline ?? []); // plan-time snapshot (see RunMeta.baseline)
   // renderReport only knows finding severity, not run quality. Suppress its
-  // finding-only PASS line for incomplete runs; the appendix records the
-  // fail-closed quality verdict instead.
+  // finding-only PASS line for incomplete runs; the tool response carries the
+  // fail-closed quality verdict. The only appendix is the Review Context —
+  // input parameters and criteria sources, never run-quality noise.
+  const context = renderReviewContext(meta.targets, {
+    mode: `${meta.range ? `commit diff (${meta.range})` : "explicit files"}${meta.whole ? " · whole-file" : ""}`,
+    range: meta.range,
+    excludes: meta.excludes ?? [],
+    rubricSources: rubricSources(cwd),
+    generatedAt: manifestTimestamp(new Date(meta.createdAt)),
+  });
   await writeReport(
     path,
     findings,
@@ -957,7 +878,7 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
     qualityIncomplete ? undefined : meta.failOn,
     baseline,
     new Date(),
-    summary
+    context
   );
 
   const forcedWarn = forced.length

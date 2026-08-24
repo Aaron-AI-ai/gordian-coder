@@ -464,9 +464,10 @@ describe("startReview / submitReview (full loop)", () => {
 
     const report = /Report: (.+)$/.exec(done)![1];
     const md = readFileSync(join(d, report), "utf8");
-    expect(md).toContain("Status: **INCOMPLETE**");
-    expect(md).toContain("**Verdict: FAIL**");
+    // The report stays findings-only; the fail-closed verdict travels in the
+    // summary line, and a degraded run must never render a PASS.
     expect(md).not.toContain("**Verdict: PASS**");
+    expect(md).not.toContain("## Review Quality");
   });
 
   it("accepts a byte-identical resubmission instead of bouncing it again", async () => {
@@ -562,9 +563,9 @@ describe("startReview / submitReview (full loop)", () => {
     expect(terminal).not.toContain("Verdict: PASS");
     expect(terminal).not.toContain("✅ Review complete");
     const report = /Report: (.+)$/.exec(terminal)![1];
-    expect(readFileSync(join(d, report), "utf8")).toContain(
-      "repeated stale submit-token replays"
-    );
+    const md = readFileSync(join(d, report), "utf8");
+    expect(md).not.toContain("## Review Quality"); // findings-only report
+    expect(md).not.toContain("Verdict: PASS");
     expect(getState("t")).toBeUndefined();
   });
 

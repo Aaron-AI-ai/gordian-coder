@@ -35,6 +35,7 @@ import {
 } from "./rubric";
 import { buildReviewPrompt, targetVars } from "./template";
 import {
+  renderReviewContext,
   resolveOutputPath,
   resolveManifestPath,
   writeReport,
@@ -72,7 +73,7 @@ import {
 import { afterRef, fileRead, renderFileContent, sanitizeFindingLines, MAX_ITER } from "./reader";
 import { reviewEvidence } from "./evidence";
 import { SEGMENT_THRESHOLD, inFileRelated, planSegments, targetPath, targetRange } from "./segment";
-import { dbg, dbgOnce, noteOnce, setReviewDebug } from "./debug";
+import { dbg, dbgOnce, setReviewDebug } from "./debug";
 import { VERSION } from "../../version";
 
 export const NO_ACTIVE_REVIEW = "No active review. Call f_review_context first.";
@@ -411,20 +412,18 @@ async function startReviewUnlocked(
   const scope = range ? `commit diff (${range})` : "explicit files";
   const mode = state.wholeFile ? `${scope} · whole-file` : scope;
   const excludes = [...(loadConfig(cwd).exclude ?? []), ...(args.exclude ?? [])];
+  const manifestMeta = {
+    mode,
+    range,
+    excludes,
+    rubricSources: rubricSources(cwd),
+    generatedAt: manifestTimestamp(),
+  };
   const manifestPath = resolveManifestPath(state.label);
-  await writeManifest(
-    manifestPath,
-    reviewTargets,
-    {
-      mode,
-      range,
-      excludes,
-      rubricSources: rubricSources(cwd),
-      generatedAt: manifestTimestamp(),
-    },
-    state.label,
-    cwd
-  );
+  await writeManifest(manifestPath, reviewTargets, manifestMeta, state.label, cwd);
+  // Same data again as the report's Review Context appendix — the report alone
+  // should tell the reader what was reviewed and against which rules.
+  state.reportContext = renderReviewContext(reviewTargets, manifestMeta);
 
   const PREVIEW = 30;
   const preview = reviewTargets.slice(0, PREVIEW).map((t) => `  - ${t}`);
@@ -925,7 +924,10 @@ async function finalizeReport(
   sessionId: string,
   partial: boolean
 ): Promise<string> {
-  const path = resolveOutputPath(st.output, st.label, st.cwd);
+  // Session id in the filename: the in-process clash suffix (startReview) can't
+  // see sessions in OTHER processes, so two same-commit reviews finalizing in
+  // the same second would otherwise collide.
+  const path = resolveOutputPath(st.output, `${st.label}-${sessionId.slice(-6)}`, st.cwd);
   // Findings are keyed per target (a large file's segments each have their own
   // key); merge them back under the real file path so the report groups by file.
   const report: Record<string, Finding[]> = {};
@@ -935,43 +937,10 @@ async function finalizeReport(
   const all = Object.values(st.findings).flat();
   const forcedTargets = Object.keys(st.forcedNotes);
   const degraded = partial || forcedTargets.length > 0;
-  const qualityReasons = [
-    ...(partial
-      ? [
-          st.toolBudgetExhausted
-            ? `Reviewer reached maxToolCalls=${st.maxToolCalls} after ${st.toolCalls} tool calls.`
-            : `Only ${Object.keys(st.findings).length}/${st.targets.length} target(s) produced an artifact.`,
-        ]
-      : []),
-    ...(forcedTargets.length
-      ? [
-          `${forcedTargets.length} target(s) were force-advanced after repeated rejected submissions: ${forcedTargets.join(", ")}.`,
-          ...forcedTargets
-            .slice(0, 20)
-            .map(
-              (target) =>
-                `${target}: ${st.forcedNotes[target].replace(/^\s*[—-]\s*/, "")}.`
-            ),
-        ]
-      : []),
-  ];
-  const qualityAppendix = degraded
-    ? [
-        "## Review Quality",
-        "",
-        "- Status: **INCOMPLETE**",
-        ...qualityReasons.map((reason) => `- ${reason}`),
-        ...(st.failOn
-          ? [
-              `- **Verdict: FAIL** — review quality is incomplete; \`failOn=${st.failOn}\` cannot pass on salvaged/partial coverage.`,
-            ]
-          : []),
-        "",
-      ].join("\n")
-    : undefined;
   // A partial/forced terminal result must never render a findings-only PASS in
-  // the persisted artifact. The quality appendix above carries the fail-closed
-  // result while the bounded loop still clears its state and terminates.
+  // the persisted artifact: failOn is suppressed for degraded runs and the
+  // fail-closed verdict travels in the returned summary line. The report itself
+  // stays findings-only (no quality appendix).
   await writeReport(
     path,
     report,
@@ -981,7 +950,7 @@ async function finalizeReport(
     degraded ? undefined : st.failOn,
     st.baseline,
     new Date(),
-    qualityAppendix
+    st.reportContext
   );
   st.active = false;
   clearState(sessionId);
@@ -1065,17 +1034,9 @@ export function reviewPromptFor(st: ReviewState): string | null {
   const path = targetPath(target); // strip a segment's #start-end back to the real path
   const range = targetRange(target); // set for a segment of a large whole-file review
   // Evidence (cross-file related + history) is per real file — segments share it.
-  // Built once per path; the audit line below therefore prints once per file.
   let evidence = st.evidenceCache[path];
   if (evidence === undefined) {
-    const built = reviewEvidence(st.cwd, st.ref, path);
-    evidence = st.evidenceCache[path] = built.text;
-    noteOnce(
-      `evidence:${st.cwd}:${path}`,
-      `${path} — injected ${built.sources.length} imported source(s), ` +
-        `${built.docs.length} framework KB page(s)` +
-        [...built.sources, ...built.docs].map((entry) => `\n         · ${entry}`).join("")
-    );
+    evidence = st.evidenceCache[path] = reviewEvidence(st.cwd, st.ref, path).text;
   }
 
   // Choose what goes in the review block: a segment slice (+ same-file related

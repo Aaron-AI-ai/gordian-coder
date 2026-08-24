@@ -259,17 +259,18 @@ describe("planReview", () => {
     expect(loadRun(runId, d)?.targets).toEqual(["a.ts", "b.ts"]);
   });
 
-  it("reuses an identical unfinished plan instead of spawning another fan-out", async () => {
+  it("creates a fresh run for a repeated identical plan (no resume)", async () => {
     const d = gitRepo();
     const first = await planReview({}, d);
-    const runId = /Run created: (\S+)/.exec(first)![1];
+    const firstId = /Run created: (\S+)/.exec(first)![1];
     const second = await planReview({}, d);
-    expect(second).toContain("Duplicate f_review_plan ignored");
-    expect(second).toContain(`resume unfinished run ${runId}`);
-    expect(readdirSync(join(d, RUNS_DIR)).filter((name) => name !== ".claims")).toHaveLength(1);
+    expect(second).toContain("Run created:");
+    const secondId = /Run created: (\S+)/.exec(second)![1];
+    expect(secondId).not.toBe(firstId);
+    expect(readdirSync(join(d, RUNS_DIR)).filter((name) => name !== ".claims")).toHaveLength(2);
   });
 
-  it("atomically reuses one run for concurrent identical plans across processes", async () => {
+  it("concurrent identical plans never create two runs in the same instant", async () => {
     const d = gitRepo();
     const modulePath = join(import.meta.dir, "..", "run.ts");
     const script =
@@ -285,16 +286,17 @@ describe("planReview", () => {
         return output;
       })
     );
+    // Overlapping planners are refused by the claim; non-overlapping ones each
+    // create their own run (always-fresh). Nobody resumes, nothing else leaks.
     const created = messages.filter((message) => message.startsWith("Run created:"));
-    expect(created).toHaveLength(1);
-    const runId = /Run created: (\S+)/.exec(created[0])![1];
-    for (const duplicate of messages.filter((message) => message !== created[0])) {
-      expect(duplicate).toContain("Duplicate f_review_plan ignored");
-      expect(duplicate).toContain(`resume unfinished run ${runId}`);
-    }
-    expect(readdirSync(join(d, RUNS_DIR)).filter((name) => name !== ".claims")).toEqual([
-      runId,
-    ]);
+    const refused = messages.filter((message) =>
+      message.includes("still being created by another process")
+    );
+    expect(created.length).toBeGreaterThanOrEqual(1);
+    expect(created.length + refused.length).toBe(messages.length);
+    expect(readdirSync(join(d, RUNS_DIR)).filter((name) => name !== ".claims")).toHaveLength(
+      created.length
+    );
   });
 
   it("creates a new run when HEAD moves even if the changed file list is identical", async () => {
@@ -501,7 +503,7 @@ describe("finalizeRun", () => {
     expect(await finalizeRun("ghost", dir())).toContain("Unknown run");
   });
 
-  it("aggregates a complete run into the standard report + run summary", async () => {
+  it("aggregates a complete run into the standard findings-only report", async () => {
     const d = gitRepo();
     const meta = await createRun({ ...baseMeta(["a.ts", "b.ts"]), failOn: "major" }, d);
     await writeFileReview(meta.runId, result("a.ts"), "# a", d);
@@ -515,8 +517,15 @@ describe("finalizeRun", () => {
     const md = readFileSync(join(d, path), "utf8");
     expect(md).toContain("## a.ts");
     expect(md).toContain("## b.ts");
-    expect(md).toContain("## Run Summary");
-    expect(md).toContain("Coverage: 2/2 file(s) reviewed — complete");
+    // Operational run info lives in the tool response only — the report stays
+    // findings-only.
+    expect(md).not.toContain("## Run Summary");
+    // Input parameters + criteria sources ARE recorded, as the Review Context.
+    expect(md).toContain("## Review Context");
+    expect(md).toContain("- Mode: commit diff (");
+    expect(md).toContain("- Rubric: ");
+    expect(md).toContain("### Files");
+    expect(md).toContain("- a.ts");
   });
 
   it("flags missing files as INCOMPLETE with a single-retry instruction", async () => {
@@ -531,9 +540,8 @@ describe("finalizeRun", () => {
 
     const path = /Partial report: (.+)$/m.exec(msg)![1];
     const md = readFileSync(join(d, path), "utf8");
-    expect(md).toContain("**INCOMPLETE**, missing: b.ts");
-    expect(md).toContain("Partial reviews (subagent cut off early): a.ts");
-    expect(md).toContain("Reviewed without exploration calls");
+    expect(md).toContain("## a.ts");
+    expect(md).not.toContain("## Run Summary"); // incompleteness is reported in msg only
   });
 
   it("keeps bounded-recovery and partial artifacts terminal but quality-incomplete", async () => {
@@ -567,9 +575,8 @@ describe("finalizeRun", () => {
 
     const path = /Report: (.+)$/.exec(msg)![1];
     const md = readFileSync(join(d, path), "utf8");
-    expect(md).toContain("QUALITY INCOMPLETE");
-    expect(md).toContain("Verdict: **FAIL** — quality incomplete");
-    expect(md).not.toContain("Verdict: PASS");
+    expect(md).not.toContain("## Run Summary"); // quality verdict is in msg only
+    expect(md).not.toContain("Verdict: PASS"); // failOn suppressed for incomplete runs
   });
 
   it("baseline is snapshotted at plan time — a finalize retry never marks this run's findings as pre-existing", async () => {

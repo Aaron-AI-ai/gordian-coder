@@ -848,9 +848,9 @@ export function buildReviewEvidence(cwd: string, ref: string | null, file: strin
   return reviewEvidence(cwd, ref, file).text;
 }
 
-/** What the evidence build actually opened, for the audit line the adapter
- * prints. Sources and docs are the two things a reviewer would otherwise have
- * had to fetch by hand. */
+/** What the evidence build actually opened. Sources and docs are the two
+ * things a reviewer would otherwise have had to fetch by hand; the structured
+ * lists let tests verify injection without parsing `text`. */
 export interface ReviewEvidence {
   text: string;
   /** Repository files whose source was injected. */
