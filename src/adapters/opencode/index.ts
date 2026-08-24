@@ -7,6 +7,7 @@ import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { VERSION } from "../../version";
 import { createModules } from "./modules";
+import { mergeSystemPrompts } from "./system-merge";
 import {
   cleanupMoebiusSession,
   moebiusAfterTool,
@@ -138,11 +139,13 @@ const OpenCodeAdapter: Plugin = async (input) => {
       for (const c of moduleConfigs) await c(cfg);
     },
 
-    // Run every module's system-prompt transform in order
+    // Run every module's system-prompt transform in order, then collapse the
+    // array to one entry for providers that reject multiple system messages.
     "experimental.chat.system.transform": async (hookInput, output) => {
       for (const transform of moduleTransforms) {
         await transform(hookInput, output);
       }
+      mergeSystemPrompts(hookInput, output.system);
     },
 
     // Event handler
