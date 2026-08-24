@@ -378,10 +378,15 @@ export function createReviewModule(input: PluginInput): {
             line: z.number().int().positive().optional(),
             rule: z.string(),
             message: z.string(),
+            // Stays .optional() at the schema level on purpose: a hard-required
+            // field would reject the whole submit and funnel a valid review into
+            // the failed-submit loop. The MUST lives in the prompts.
             suggestion: z
               .string()
               .optional()
-              .describe("Concrete fix (code or steps), when you can offer one"),
+              .describe(
+                "REQUIRED: the fix as an AS-IS / TO-BE pair — AS-IS: fenced block with the current problematic code, TO-BE: fenced block with the corrected code"
+              ),
           })
         )
         .describe("Issues found (may be empty)"),

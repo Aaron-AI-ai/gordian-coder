@@ -39,7 +39,7 @@ export const FindingSchema = z.object({
   line: z.number().int().positive().optional(),
   rule: capped(500), // which rule/checklist item this violates
   message: capped(2000),
-  suggestion: capped(4000).optional(), // concrete fix (code or steps), when the reviewer can offer one
+  suggestion: capped(4000).optional(), // AS-IS/TO-BE fix; prompt-mandated but schema-optional so a submit never hard-fails on it
 });
 
 export type Finding = z.infer<typeof FindingSchema>;
