@@ -16,9 +16,9 @@ import {
   violationsForTarget,
   type FcqFileViolation,
 } from "../fcq";
-import { finalizeRun, loadRun, planReview, writeFileReview } from "../run";
+import { finalizeRun, loadRun, planReview, readFileReviewResult, writeFileReview } from "../run";
 import { startReview, reviewPromptFor } from "../loop";
-import { judgeContext } from "../judge";
+import { judgeContext, submitJudge } from "../judge";
 import { clearState, getState } from "../state";
 import { REQUIRED_CATEGORIES } from "../contract";
 
@@ -216,6 +216,26 @@ describe("run-mode integration", () => {
     expect(report).toContain("fcq:mybatis-sql/FCQ-SQL-INJ-001");
     expect(report).toContain("## Static Analysis (fcq)");
     expect(report).toContain("Violations in reviewed files: 2 (+1 outside");
+  });
+
+  it("merging fcq findings does not unmatch recorded judgments (judge gate)", async () => {
+    const d = gitRepo();
+    fakeFcq(d);
+    const plan = await planReview({ commit: "HEAD", judge: true }, d);
+    const runId = /Run created: (\S+)/.exec(plan)![1];
+    for (const file of ["src/A.java", "src/B.java"]) {
+      await writeFileReview(runId, { file, assessed: [...REQUIRED_CATEGORIES], findings: [], explorationCalls: 1, partial: false }, "# r", d);
+      const verdict = await submitJudge(
+        { runId, file, findingJudgments: [], coverageGaps: [], score: 95, feedback: "" },
+        d
+      );
+      expect(verdict).toContain("Judge PASS");
+    }
+    const out = await finalizeRun(runId, d);
+    expect(out).not.toContain("unjudged");
+    expect(out).toContain("✅ Run complete");
+    // finalize must not have rewritten the review artifacts either
+    expect(readFileReviewResult(runId, "src/A.java", d)!.findings).toHaveLength(0);
   });
 
   it("fcq failure keeps the review going but fails closed on failOn", async () => {

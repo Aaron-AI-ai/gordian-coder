@@ -799,7 +799,10 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
   const targetResults = results.filter((result) => meta.targets.includes(result.file));
   const resultByFile = new Map(targetResults.map((result) => [result.file, result]));
   const findings: Record<string, Finding[]> = {};
-  for (const r of targetResults) findings[r.file] = r.findings;
+  // Copy: the fcq merge below appends to these arrays, and the judge check
+  // hashes the parsed review objects — mutating them would unmatch every
+  // recorded judgment and report the run as unjudged.
+  for (const r of targetResults) findings[r.file] = [...r.findings];
 
   // Static-analysis findings merge into the same per-file tables (rule `fcq:…`).
   const runRoot = runDir(runId, cwd);
