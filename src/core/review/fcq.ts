@@ -474,5 +474,6 @@ export function renderFcqSection(status: FcqRunStatus | undefined, summary: FcqS
         ]
       : []),
     "",
+    "", // blank line so the following "## Review Context" heading is not glued to the table
   ].join("\n");
 }
