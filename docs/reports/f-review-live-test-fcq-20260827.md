@@ -44,12 +44,29 @@ fcq finding을 `push`해서, judge 검증이 리뷰 artifact 해시를 계산하
 - 리포트: `## Static Analysis (fcq)` → `Status: **FAILED** — cannot start fcq …`, `fcq:` 행 0건
 - 오케스트레이터가 사용자에게 "fcq 설치하거나 `--fcq` 없이 재실행" 안내 — 설계대로 동작
 
+## Case C — fcq MAJOR 위반 파일에서 병합 검증 (2파일, 21분)
+
+```
+opencode run --command f-review -m openrouter/qwen/qwen3.8-27b -- \
+  "--fcq --files=…/qry/service/SONAQ002Service.java,…/upd/service/SONAU001Service.java"
+```
+
+fcq 6.7s, MAJOR 6건(`checkstyle/MapperCallTryCatchCheck`: SONAQ002 L135/232/280/335, SONAU001 L95/151).
+
+- **병합 3건 발생** (L135, L95, L151): 리뷰어가 fcq MAJOR 히트에 같은 line·ruleId 언급으로 후속 분석을 붙였고,
+  finalize가 fcq 행에 `리뷰어: …` 메시지와 **실제 try-catch TO-BE 코드**를 채웠다. 나머지 3건은 fcq-only 행
+  (TO-BE = 룰 description). 플레이스홀더 0건.
+- **오병합 없음**: SONAU001 L95에는 리뷰어의 별도 finding(check-then-act 경합, ruleId 미언급)도 있었는데
+  분리 유지됨 — line+ruleId 키가 의도대로 동작.
+- SONAQ002Service judge가 `4 merged finding window(s) plus the base exceed 18000` 로 terminal INCOMPLETE →
+  run INCOMPLETE. **Case 1 개선항목 #1과 동일한 기존 이슈**(change excerpt 상한), fcq 블록이 원인이 아님
+  (fcq 섹션은 change excerpt 밖). SONAU001은 judge 93 PASS.
+
 ## 관찰 / 개선 후보
 
 1. ~~**fcq finding의 TO-BE가 비어 있음**~~ — **해결(같은 날)**: TO-BE에 룰 description을 넣고,
    같은 line + ruleId 언급 LLM finding을 fcq 행에 병합(`mergeFcqFindings`). Case A run 재finalize로
-   플레이스홀더 0건·L89 무관 finding 비병합 확인. 실제 병합(리뷰어가 fcq CRITICAL을 후속 분석하는 경우)은
-   Case A에 해당 위반이 없어 단위 테스트로만 검증 — CRITICAL fcq 위반이 있는 파일로 재확인 필요.
+   플레이스홀더 0건·L89 무관 finding 비병합 확인. 실제 병합은 Case C에서 3건 실측 확인.
 2. **minor 홍수** — Case A 42건 중 fcq 29건이 전부 MINOR(checkstyle). 리포트 요약이 스타일 위반에
    묻힌다. `fcqOptions.maxSeverity`로 상한 조정 가능하나, 리포트에서 fcq 행을 심각도별로 접는
    렌더링(예: MINOR 이하는 건수만)을 고려.
