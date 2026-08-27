@@ -189,6 +189,9 @@ Parse the arguments into \`f_review_plan\` parameters (all optional):
 - \`--judge\` → \`judge: true\` (judge gate: an independent f-judge subagent scores
   each file's review; failing reviews are re-reviewed with feedback. Default
   comes from \`.f-review.json\` \`judge\`)
+- \`--fcq\` → \`fcq: true\` (static analysis: the fcq CLI runs once at plan time;
+  its violations become reviewer evidence and merge into the report. Default
+  comes from \`.f-review.json\` \`fcq\`; CLI options live in \`fcqOptions\`)
 - \`--sequential\` → do NOT use f_review_plan; instead call \`f_review_context\`
   with the same parameters (minus \`--sequential\`) and delegate the whole review
   to a single f-reviewer subagent that reviews every file in one session,
@@ -214,4 +217,5 @@ Parallel workflow (default):
    Do this retry AT MOST ONCE — if files are still missing afterwards, stop and
    report the INCOMPLETE result as-is.
 5. Relay the finalize summary (coverage, verdict, report path) to the user.
+   Do NOT read the report file back — the summary is all you relay.
 `;

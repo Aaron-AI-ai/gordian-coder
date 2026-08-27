@@ -75,6 +75,8 @@ import { reviewEvidence } from "./evidence";
 import { SEGMENT_THRESHOLD, inFileRelated, planSegments, targetPath, targetRange } from "./segment";
 import { dbg, dbgOnce, setReviewDebug } from "./debug";
 import { VERSION } from "../../version";
+import { readFcqFile, renderFcqEvidence, violationsForTarget } from "./fcq";
+import { runDir } from "./run";
 
 export const NO_ACTIVE_REVIEW = "No active review. Call f_review_context first.";
 
@@ -248,6 +250,7 @@ function startRunFileReview(
     deepPassDone: {},
     resumes: 0,
     runId,
+    fcqViolations: meta.fcq?.status === "ok" ? readFcqFile(runDir(runId, cwd), file) : undefined,
   };
   setState(sessionId, state);
 
@@ -1037,6 +1040,12 @@ export function reviewPromptFor(st: ReviewState): string | null {
   let evidence = st.evidenceCache[path];
   if (evidence === undefined) {
     evidence = st.evidenceCache[path] = reviewEvidence(st.cwd, st.ref, path).text;
+  }
+  // fcq evidence is per TARGET (a segment sees only its window), so it is
+  // composed here instead of cached with the per-file dossier.
+  if (st.fcqViolations?.length) {
+    const fcq = renderFcqEvidence(violationsForTarget(st.fcqViolations, target));
+    if (fcq) evidence = `${fcq}\n\n${evidence}`;
   }
 
   // Choose what goes in the review block: a segment slice (+ same-file related

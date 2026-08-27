@@ -10,6 +10,7 @@
 
 import type { Category, Finding, Severity } from "./contract";
 import type { ExtraRule } from "./rubric";
+import type { FcqFileViolation } from "./fcq";
 import { targetPath } from "./segment";
 
 export interface ReviewState {
@@ -26,6 +27,7 @@ export interface ReviewState {
   diffMap: Record<string, string>; // per-file diff snapshot for file_read_diff
   wholeFile: boolean; // review the full file content instead of just the diff
   runId?: string; // set when this session reviews ONE file of a parallel run (Model A)
+  fcqViolations?: FcqFileViolation[]; // run mode: this file's fcq violations (evidence)
   systemRule: string;
   frameworkRules: string; // authoritative framework conventions (always injected)
   extraRules: ExtraRule[]; // review/rules/*.md; glob-gated per file at prompt render

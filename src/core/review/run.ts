@@ -49,6 +49,15 @@ import {
   writeReport,
 } from "./output";
 import { DEFAULT_JUDGE_THRESHOLD, readRunJudgments } from "./judge";
+import {
+  FcqRunStatusSchema,
+  fcqFindings,
+  readFcqFile,
+  readFcqSummary,
+  renderFcqSection,
+  runFcq,
+  type FcqRunStatus,
+} from "./fcq";
 import { buildRubric, loadExtraRules, loadFrameworkGuide, rubricSources } from "./rubric";
 
 export const RUNS_DIR = "fcq/f-review/runs";
@@ -99,6 +108,8 @@ export interface RunMeta {
   /** Effective exclude globs (config + plan args), kept for the report's
    * Review Context appendix. */
   excludes?: string[];
+  /** Static analysis (fcq) step outcome; absent when not enabled for the run. */
+  fcq?: FcqRunStatus;
 }
 
 /** Persisted run metadata is external state, even though this process created it. */
@@ -122,6 +133,7 @@ export const RunMetaSchema: z.ZodType<RunMeta> = z.object({
   sourceIdentity: z.string().optional(),
   criteriaIdentity: z.string().optional(),
   excludes: z.array(z.string()).optional(),
+  fcq: FcqRunStatusSchema.optional(),
 });
 
 /**
@@ -499,6 +511,7 @@ export interface PlanReviewArgs {
   language?: string;
   deepPasses?: number; // review rounds per target (arg > config `deepPasses` > 1; clamp 1..5)
   judge?: boolean; // judge gate (arg > config `judge` > off)
+  fcq?: boolean; // static analysis step (arg > config `fcq` > off)
 }
 
 type PlannedRun = Omit<RunMeta, "runId" | "createdAt" | "baseline">;
@@ -697,10 +710,17 @@ export async function planReview(args: PlanReviewArgs, cwd: string): Promise<str
       );
     }
 
-    const meta = await createRun(
+    let meta = await createRun(
       { ...planned, baseline: [...loadBaseline(args.output, cwd)] },
       cwd
     );
+    // Static analysis runs BEFORE the fan-out so every reviewer gets the same
+    // evidence; the result (ok or failed) is pinned into run.json.
+    if (args.fcq ?? config.fcq === true) {
+      const fcq = await runFcq(cwd, targets, runDir(meta.runId, cwd));
+      meta = { ...meta, fcq };
+      await Bun.write(join(runDir(meta.runId, cwd), "run.json"), JSON.stringify(meta, null, 2));
+    }
     pruneRuns(cwd);
     return renderPlanInstructions(meta);
   } finally {
@@ -724,9 +744,15 @@ function renderPlanInstructions(meta: RunMeta): string {
         `3. When every file has been dispatched, call f_review_finalize with runId="${meta.runId}".`,
         `4. If finalize reports missing files, re-spawn subagents for ONLY those files ONCE, then finalize again.`,
       ];
+  const fcqLine = !meta.fcq
+    ? []
+    : meta.fcq.status === "ok"
+      ? [`Static analysis (fcq): done in ${(meta.fcq.durationMs / 1000).toFixed(1)}s — violations are injected into each reviewer as evidence and merged at finalize.`]
+      : [`⚠️ Static analysis (fcq) FAILED: ${meta.fcq.reason}. The LLM review proceeds without it; finalize fails closed on failOn.`];
   return [
     `Run created: ${meta.runId} — ${meta.targets.length} file(s), mode: ${meta.range ? `commit diff (${meta.range})` : "explicit files"}${meta.whole ? " · whole-file" : ""}${(meta.deepPasses ?? 1) > 1 ? ` · ${meta.deepPasses} review rounds/target` : ""}${meta.failOn ? ` · gate: failOn=${meta.failOn}` : ""}${meta.judge ? ` · judge gate on` : ""}.`,
     ...list,
+    ...fcqLine,
     "",
     `Fan-out instructions (follow exactly):`,
     `1. For EACH file above, spawn ONE f-reviewer subagent with this prompt:`,
@@ -775,6 +801,15 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
   const findings: Record<string, Finding[]> = {};
   for (const r of targetResults) findings[r.file] = r.findings;
 
+  // Static-analysis findings merge into the same per-file tables (rule `fcq:…`).
+  const runRoot = runDir(runId, cwd);
+  const fcqSummary = meta.fcq?.status === "ok" ? readFcqSummary(runRoot) : null;
+  if (meta.fcq?.status === "ok") {
+    for (const file of meta.targets) {
+      const rows = fcqFindings(file, readFcqFile(runRoot, file));
+      if (rows.length) (findings[file] ??= []).push(...rows);
+    }
+  }
   const all = Object.values(findings).flat();
   const partials = targetResults.filter((r) => r.partial).map((r) => r.file);
   const forced = targetResults.filter((r) => r.forced).map((r) => r.file);
@@ -839,6 +874,9 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
   if (judgeUnjudged.length) qualityReasons.push(`${judgeUnjudged.length} unjudged review(s)`);
   if (criteriaStale) qualityReasons.push("effective review rules changed after planning");
   if (sourceStale) qualityReasons.push("review source files changed after planning");
+  if (meta.fcq && (meta.fcq.status !== "ok" || !fcqSummary)) {
+    qualityReasons.push(`static analysis (fcq) did not complete: ${meta.fcq.reason ?? "no summary"}`);
+  }
   const qualityIncomplete = qualityReasons.length > 0;
 
   let gate = "";
@@ -878,7 +916,7 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
     qualityIncomplete ? undefined : meta.failOn,
     baseline,
     new Date(),
-    context
+    `${renderFcqSection(meta.fcq, fcqSummary)}${context}`
   );
 
   const forcedWarn = forced.length
@@ -897,7 +935,8 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
       `${qualityReasons.join("; ")}.${gate}${forcedWarn} Report: ${path}`
     );
   } else {
-    response = `✅ Run complete — ${reviewed.length} file(s), ${all.length} issue(s).${gate}${forcedWarn} Report: ${path}`;
+    const fcqNote = fcqSummary ? ` (incl. ${fcqSummary.targetViolations} from fcq)` : "";
+    response = `✅ Run complete — ${reviewed.length} file(s), ${all.length} issue(s)${fcqNote}.${gate}${forcedWarn} Report: ${path}`;
   }
   await Bun.write(
     cachePath,

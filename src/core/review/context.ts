@@ -53,6 +53,8 @@ export const ReviewConfigSchema = z.object({
   judge: field(z.boolean()), // run mode: judge each file's review with an independent agent
   judgeThreshold: field(z.number()), // judge pass score 0..100 (default 70)
   judgeRounds: field(z.number()), // max rework (re-review) rounds per file (0..5, default 2; 0 = judge once, never re-review)
+  fcq: field(z.boolean()), // run mode: run the fcq static analyzer at plan time and merge its report
+  fcqOptions: field(z.record(z.unknown())), // fcq CLI options (see fcq.ts FcqOptionsSchema)
 });
 export type ReviewConfig = z.infer<typeof ReviewConfigSchema>;
 

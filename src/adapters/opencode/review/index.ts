@@ -155,6 +155,12 @@ export function createReviewModule(input: PluginInput): {
         .describe(
           "Judge gate: after each file's review, an independent f-judge subagent scores it; below-threshold reviews are re-reviewed with feedback (default from .f-review.json `judge`)"
         ),
+      fcq: z
+        .boolean()
+        .optional()
+        .describe(
+          "Static analysis: run the fcq CLI over the targets before fan-out, inject its violations into each reviewer as evidence, and merge them into the final report (default from .f-review.json `fcq`; options in `fcqOptions`)"
+        ),
     },
     async execute(args) {
       return planReview(args, cwd);

@@ -166,6 +166,23 @@ function resolveManifestPath(label) {
 files-only 소스와 유효 룰의 hash를 저장하므로 작업 시작·종료 시점에 스냅샷이 달라지면 성공으로 finalize하지 않는다. 큰 파일 세그먼트는 **한 서브에이전트 안에서** 순차 처리 후
 파일당 1개 리뷰로 병합. `--sequential` 또는 runId 없는 `f_review_context` = 기존 단일 세션 순차 모드(불변).
 
+**정적분석 연동 (`fcq`)** — `--fcq` 또는 설정 `"fcq": true`이면 `f_review_plan`이 팬아웃 **전에**
+[fico-code-q](../../../fico/fico-code-q) CLI를 run당 1회 실행한다(`fcq analyze <cwd> --paths=<타깃 목록> …`).
+병렬이 아니라 선실행인 이유: fcq는 수 초, LLM 리뷰는 수 분이라 병렬화 이득이 없고, 결과를 리뷰어에게
+**증거로 주입**할 수 있기 때문이다. `report.json`(대상 프로젝트 `fcq.yaml`의 `report.output`)을 파싱해
+`runs/<runId>/fcq/files/<slug>.json`(파일별 위반)과 `summary.json`으로 샤딩하며, 원본은 복사하지 않는다.
+- 리뷰어(`f_review_context`)는 자기 파일 샤드만 읽어 `<review_evidence>` 맨 앞에 "이미 발견됨 — 재보고 금지,
+  단서로 활용" 섹션을 넣는다(세그먼트는 라인 창 안의 위반만). judge 컨텍스트에도 같은 블록이 들어가
+  coverage gap 감점을 막는다.
+- `f_review_finalize`는 샤드를 `Finding`(rule `fcq:<analyzer>/<ruleId>`, severity INFO→nit…CRITICAL/BLOCKER→blocker,
+  category bugs→correctness·sql/security→security·architecture/framework-*→framework·기타→maintainability)으로
+  변환해 같은 파일 표에 병합하고, `## Static Analysis (fcq)` 요약 섹션을 Review Context 앞에 붙인다.
+  fcq finding도 `failOn` verdict에 포함된다.
+- **실패 시**(바이너리 없음·종료코드 2·타임아웃·report.json 없음·`report:` 미설정): LLM 리뷰는 그대로 진행하되
+  run.json에 `fcq.status: failed`를 기록하고, `failOn`이 있으면 finalize가 fail-closed(`INCOMPLETE`)한다.
+- 옵션은 `.f-review.json` `fcqOptions` `{ bin, analyzers, module, config, maxSeverity, noBuild, buildTimeout, timeout }`.
+  run 모드 전용(`--sequential`/MCP 경로는 무시). fcq에 `--report-dir`가 생기면 `locateReport`만 교체하면 된다.
+
 **자동 주입 evidence 정책** — `{{review_evidence}}`의 **크로스파일 연관은 프리뷰를 넣지 않고 경로 목록만** 준다.
 앞부분 프리뷰는 대개 그 파일의 import/헤더라 리뷰 대상이 실제 호출하는 함수를 놓치기 때문. 대신
 "이 프로젝트 파일들에서 네가 쓰는 심볼은 `code_search(<symbol>)`/`file_read`로 정의부를 확인하라"는 recipe를
@@ -414,6 +431,7 @@ src/core/review/                ← 플랫폼 독립 (Cline/MCP 재사용 가능
   state.ts       # 세션별 리뷰 상태
   output.ts      # 출력 경로 해석 + 리포트 렌더·저장
   run.ts         # 병렬 run store: run.json·개별 리뷰(md+json)·커버리지·plan/finalize
+  fcq.ts         # fcq 정적분석: plan 시 실행·report.json 샤딩·evidence 렌더·finding 변환
 src/adapters/opencode/review/
   index.ts       # tool 10개 + system.transform + config/검증/가드 hook wiring
   prompts.ts     # 번들 내장 /f-review command + f-reviewer agent 정의
@@ -421,7 +439,7 @@ src/adapters/opencode/review/
 ```
 
 설정 파일: 프로젝트 루트 `.f-review.json`, 없으면 `fcq/config/.f-review.json`
-(`{ exclude, output, language, frameworkGuide, failOn, debug, deepPasses, maxIter, maxToolCalls, rulesDir, judge, judgeThreshold }`).
+(`{ exclude, output, language, frameworkGuide, failOn, debug, deepPasses, maxIter, maxToolCalls, rulesDir, judge, judgeThreshold, fcq, fcqOptions }`).
 Zod로 검증하며 타입이 틀린 필드는 unset으로 강등된다(파일 전체를 버리지 않음); 루트 파일이 파싱 불가면 fcq 폴백을 시도한다.
 
 **딥패스 반복 리뷰 (`deepPasses`)** — 타깃(파일/세그먼트)당 리뷰 라운드 수. 파라미터 `deepPasses` > 설정 `deepPasses` > 기본 1,

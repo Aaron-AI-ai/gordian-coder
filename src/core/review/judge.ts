@@ -26,6 +26,7 @@ import { capped, type Finding } from "./contract";
 import { buildDiffMap } from "./context";
 import { afterRef, readFileAt, renderFileContent } from "./reader";
 import { loadExtraRules, loadFrameworkGuide, renderExtraRules } from "./rubric";
+import { readFcqFile, renderFcqEvidence } from "./fcq";
 import {
   loadRun,
   readFileReviewResult,
@@ -445,6 +446,12 @@ function buildJudgePrompt(
 
   const round = judgment.attempts.length + 1;
   const threshold = meta.judgeThreshold ?? DEFAULT_JUDGE_THRESHOLD;
+  // The reviewer was told not to re-report fcq violations; the judge must see
+  // the same list or it scores that restraint as a coverage gap.
+  const fcq =
+    meta.fcq?.status === "ok"
+      ? renderFcqEvidence(readFcqFile(runDir(meta.runId, cwd), result.file))
+      : "";
   const prompt = [
     `You are judging the review of ${result.file} (run ${meta.runId}, judge round ${round}).`,
     `Score threshold: ${threshold} (score < ${threshold} ⇒ the review is sent back for rework).`,
@@ -453,6 +460,14 @@ function buildJudgePrompt(
     JUDGE_CRITERIA,
     ``,
     authoritativeRules(result.file, cwd),
+    ...(fcq
+      ? [
+          `### Static analysis already applied`,
+          `The reviewer was instructed NOT to re-report these; do not count them as coverage gaps.`,
+          fcq,
+          ``,
+        ]
+      : []),
     `### The change under review`,
     excerpt,
     ``,
