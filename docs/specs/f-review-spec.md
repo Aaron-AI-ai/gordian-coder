@@ -177,7 +177,11 @@ files-only 소스와 유효 룰의 hash를 저장하므로 작업 시작·종료
 - `f_review_finalize`는 샤드를 `Finding`(rule `fcq:<analyzer>/<ruleId>`, severity INFO→nit…CRITICAL/BLOCKER→blocker,
   category bugs→correctness·sql/security→security·architecture/framework-*→framework·기타→maintainability)으로
   변환해 같은 파일 표에 병합하고, `## Static Analysis (fcq)` 요약 섹션을 Review Context 앞에 붙인다.
-  fcq finding도 `failOn` verdict에 포함된다.
+  fcq finding도 `failOn` verdict에 포함된다. fcq는 수정안이 없으므로 suggestion은 위반 스니펫(AS-IS) +
+  룰 description(TO-BE)이다. **같은 line에 앵커되고 message/rule에 그 ruleId를 언급한** LLM finding은
+  리뷰어의 후속 분석으로 보고 fcq 행에 병합한다(`mergeFcqFindings`): rule은 fcq 것, severity는 둘 중
+  높은 쪽, message에 `리뷰어: …` 추가, suggestion은 LLM의 AS-IS/TO-BE로 교체. line만 같은 finding은
+  별개 행으로 남긴다(무관한 논리 결함이 LineLength 행에 섞이는 것 방지).
 - **실패 시**(바이너리 없음·종료코드 2·타임아웃·report.json 없음·`report:` 미설정): LLM 리뷰는 그대로 진행하되
   run.json에 `fcq.status: failed`를 기록하고, `failOn`이 있으면 finalize가 fail-closed(`INCOMPLETE`)한다.
 - 옵션은 `.f-review.json` `fcqOptions` `{ bin, analyzers, module, config, maxSeverity, noBuild, buildTimeout, timeout }`.

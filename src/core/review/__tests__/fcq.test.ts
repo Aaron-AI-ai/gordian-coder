@@ -8,6 +8,7 @@ import {
   fcqShardPath,
   locateReport,
   mapFcqCategory,
+  mergeFcqFindings,
   readFcqFile,
   readFcqSummary,
   renderFcqEvidence,
@@ -170,13 +171,36 @@ describe("evidence / findings rendering", () => {
 
   it("maps to findings with fcq: rule tags and category/severity mapping", () => {
     const f = fcqFindings("f.java", rows);
-    expect(f[1]).toMatchObject({ category: "security", severity: "blocker", rule: "fcq:sql/R2", line: 600, message: "d2 — m2" });
-    expect(f[1].suggestion).toContain("AS-IS");
+    expect(f[1]).toMatchObject({ category: "security", severity: "blocker", rule: "fcq:sql/R2", line: 600, message: "m2" });
+    expect(f[1].suggestion).toContain("AS-IS:\n```\nx\n```\nTO-BE: d2");
+    expect(f[0].suggestion).toBe("TO-BE: d1"); // no snippet → rule description alone
     expect(f[2]).toMatchObject({ category: "framework", severity: "major" });
     expect(f[2].line).toBeUndefined();
     expect(mapFcqCategory("bugs")).toBe("correctness");
     expect(mapFcqCategory("framework-common")).toBe("framework");
     expect(mapFcqCategory("comments")).toBe("maintainability");
+  });
+
+  it("merges an LLM finding on the same line into the fcq row", () => {
+    const fcq = fcqFindings("f.java", rows);
+    const llm = [
+      { category: "security" as const, severity: "major" as const, file: "f.java", line: 600, rule: "inj (fcq R2)", message: "user input reaches ${}", suggestion: "AS-IS:\n```\n${a}\n```\nTO-BE:\n```\n#{a}\n```" },
+      { category: "correctness" as const, severity: "blocker" as const, file: "f.java", line: 10, rule: "npe", message: "null deref — see r1" },
+      { category: "tests" as const, severity: "minor" as const, file: "f.java", line: 999, rule: "t", message: "no test" },
+      { category: "correctness" as const, severity: "major" as const, file: "f.java", line: 10, rule: "logic", message: "unrelated bug on the same line" },
+    ];
+    const out = mergeFcqFindings(llm, fcq);
+    expect(out).toHaveLength(5); // 4 llm + 3 fcq − 2 merged
+    expect(out[0]).toMatchObject({ rule: "t", line: 999 }); // unmerged LLM row passes through first
+    expect(out[1]).toMatchObject({ rule: "logic", line: 10 }); // same line but no rule id → NOT merged
+    const r2 = out.find((f) => f.rule === "fcq:sql/R2")!;
+    expect(r2.severity).toBe("blocker"); // fcq CRITICAL→blocker outranks LLM major
+    expect(r2.message).toBe("m2\n리뷰어: user input reaches ${}");
+    expect(r2.suggestion).toContain("#{a}"); // reviewer's TO-BE replaces the placeholder
+    const r1 = out.find((f) => f.rule === "fcq:pmd/R1")!;
+    expect(r1.severity).toBe("blocker"); // LLM blocker outranks fcq MINOR
+    expect(r1.suggestion).toBe("TO-BE: d1"); // LLM had no suggestion → fcq's stays
+    expect(out.find((f) => f.rule === "fcq:arch/R3")!.message).toBe("m3"); // unanchored: untouched
   });
 
   it("renders a failed section and an ok section", () => {

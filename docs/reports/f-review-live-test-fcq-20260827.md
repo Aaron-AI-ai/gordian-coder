@@ -46,9 +46,10 @@ fcq finding을 `push`해서, judge 검증이 리뷰 artifact 해시를 계산하
 
 ## 관찰 / 개선 후보
 
-1. **fcq finding의 TO-BE가 비어 있음** — `TO-BE: (apply <ruleId>)` 플레이스홀더뿐. fcq 위반은
-   기계적이라 대부분 자명하지만, 리뷰어가 CRITICAL/MAJOR fcq 히트에 AS-IS/TO-BE를 붙이는 경로는
-   프롬프트 지시에만 의존한다. 필요하면 finalize에서 같은 file+line의 LLM finding과 병합.
+1. ~~**fcq finding의 TO-BE가 비어 있음**~~ — **해결(같은 날)**: TO-BE에 룰 description을 넣고,
+   같은 line + ruleId 언급 LLM finding을 fcq 행에 병합(`mergeFcqFindings`). Case A run 재finalize로
+   플레이스홀더 0건·L89 무관 finding 비병합 확인. 실제 병합(리뷰어가 fcq CRITICAL을 후속 분석하는 경우)은
+   Case A에 해당 위반이 없어 단위 테스트로만 검증 — CRITICAL fcq 위반이 있는 파일로 재확인 필요.
 2. **minor 홍수** — Case A 42건 중 fcq 29건이 전부 MINOR(checkstyle). 리포트 요약이 스타일 위반에
    묻힌다. `fcqOptions.maxSeverity`로 상한 조정 가능하나, 리포트에서 fcq 행을 심각도별로 접는
    렌더링(예: MINOR 이하는 건수만)을 고려.

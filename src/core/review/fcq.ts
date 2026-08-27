@@ -391,9 +391,10 @@ export function renderFcqEvidence(violations: FcqFileViolation[]): string {
     "",
     "These are deterministic and already in the report — do NOT re-report them.",
     "Use them as leads: for CRITICAL/MAJOR hits, trace the actual data flow and",
-    "give an AS-IS/TO-BE fix or state why it is a false positive (reference the",
-    "rule id). Spend your budget on what the tools cannot see: logic, boundaries,",
-    "transactions, framework-rule violations.",
+    "give an AS-IS/TO-BE fix or state why it is a false positive. Anchor such a",
+    "finding on the SAME `line` as the fcq hit (it is merged into that row) and",
+    "name the rule id in `message`. Spend the rest of your budget on what the",
+    "tools cannot see: logic, boundaries, transactions, framework-rule violations.",
   ].join("\n");
   return body.length > FCQ_EVIDENCE_MAX_CHARS
     ? `${body.slice(0, FCQ_EVIDENCE_MAX_CHARS)}\n… (truncated)`
@@ -420,19 +421,59 @@ export function mapFcqCategory(c: string): Category {
   return "maintainability";
 }
 
-/** Findings for the report: one per violation, rule tagged `fcq:`. */
+/** Findings for the report: one per violation, rule tagged `fcq:`. The
+ * violation snippet is the AS-IS; fcq has no fix text, so the rule's own
+ * description (what the rule demands) stands in as the TO-BE. */
 export function fcqFindings(file: string, violations: FcqFileViolation[]): Finding[] {
-  return violations.map((v) => ({
-    category: mapFcqCategory(v.category),
-    severity: SEVERITY_MAP[v.severity],
-    file,
-    ...(v.line ? { line: v.line } : {}),
-    rule: `fcq:${v.analyzer}/${v.ruleId}`,
-    message: v.description && v.message !== v.description ? `${v.description} — ${v.message}` : v.message || v.description,
-    ...(v.snippet?.length
-      ? { suggestion: `AS-IS:\n\`\`\`\n${v.snippet.join("\n")}\n\`\`\`\nTO-BE: (apply ${v.ruleId})` }
-      : {}),
-  }));
+  return violations.map((v) => {
+    const tobe = v.description || `(apply ${v.ruleId})`;
+    const suggestion = v.snippet?.length
+      ? `AS-IS:\n\`\`\`\n${v.snippet.join("\n")}\n\`\`\`\nTO-BE: ${tobe}`
+      : `TO-BE: ${tobe}`;
+    return {
+      category: mapFcqCategory(v.category),
+      severity: SEVERITY_MAP[v.severity],
+      file,
+      ...(v.line ? { line: v.line } : {}),
+      rule: `fcq:${v.analyzer}/${v.ruleId}`,
+      message: v.message || v.description,
+      suggestion,
+    };
+  });
+}
+
+const SEV_ORDER: Severity[] = ["blocker", "major", "minor", "nit"];
+
+/**
+ * Merge the LLM review with fcq findings for one file. An LLM finding anchored
+ * on the SAME line as an fcq violation AND naming its rule id is the reviewer's
+ * follow-up on that hit (the prompt orders both), so the two collapse into one row: the
+ * fcq rule identity stays (deterministic), the reviewer's message and
+ * AS-IS/TO-BE fill in what fcq cannot say, and severity is the higher of the
+ * two — fcq's rating is a floor, the reviewer may have found it worse.
+ * Everything else passes through unchanged; LLM rows come first.
+ */
+export function mergeFcqFindings(llm: Finding[], fcq: Finding[]): Finding[] {
+  const rest = [...llm];
+  const merged = fcq.map((f) => {
+    if (f.line === undefined) return f;
+    // Same line alone is too loose (an unrelated logic finding can sit on a
+    // LineLength row); the reviewer must also name the rule it follows up on.
+    const ruleId = f.rule.slice(f.rule.lastIndexOf("/") + 1).toLowerCase();
+    const i = rest.findIndex(
+      (l) => l.line === f.line && `${l.rule} ${l.message}`.toLowerCase().includes(ruleId)
+    );
+    if (i < 0) return f;
+    const [l] = rest.splice(i, 1);
+    const severity = SEV_ORDER[Math.min(SEV_ORDER.indexOf(f.severity), SEV_ORDER.indexOf(l.severity))];
+    return {
+      ...f,
+      severity,
+      message: `${f.message}\n리뷰어: ${l.message}`,
+      suggestion: l.suggestion?.trim() ? l.suggestion : f.suggestion,
+    };
+  });
+  return [...rest, ...merged];
 }
 
 /** "## Static Analysis (fcq)" report section. */

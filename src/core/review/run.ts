@@ -52,6 +52,7 @@ import { DEFAULT_JUDGE_THRESHOLD, readRunJudgments } from "./judge";
 import {
   FcqRunStatusSchema,
   fcqFindings,
+  mergeFcqFindings,
   readFcqFile,
   readFcqSummary,
   renderFcqSection,
@@ -810,7 +811,7 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
   if (meta.fcq?.status === "ok") {
     for (const file of meta.targets) {
       const rows = fcqFindings(file, readFcqFile(runRoot, file));
-      if (rows.length) (findings[file] ??= []).push(...rows);
+      if (rows.length) findings[file] = mergeFcqFindings(findings[file] ?? [], rows);
     }
   }
   const all = Object.values(findings).flat();
