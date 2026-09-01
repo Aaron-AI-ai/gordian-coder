@@ -23,7 +23,6 @@
 
 import type { PluginInput, Hooks } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
-import { moebiusReviewerTerminal } from "../moebius-reporter";
 import {
   REQUIRED_CATEGORIES,
   SEVERITIES,
@@ -427,11 +426,8 @@ export function createReviewModule(input: PluginInput): {
         body: { parts: [{ type: "text", text: action.text }] },
       });
     }
-    if (action?.kind === "finalized") {
-      // The watchdog finalized outside f_review_submit, so no normal tool
-      // after-hook exists to close Moebius correlation state.
-      moebiusReviewerTerminal(sessionID, action.text);
-    }
+    // action.kind === "finalized" needs no further handling here: core already
+    // wrote the partial artifact/report inside onSessionIdle.
   };
 
   // Register the f-reviewer agent and /f-review command from the bundle.

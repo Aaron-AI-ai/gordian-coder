@@ -9,11 +9,6 @@ import { VERSION } from "../../version";
 import { createModules } from "./modules";
 import { mergeSystemPrompts } from "./system-merge";
 import {
-  cleanupMoebiusSession,
-  moebiusAfterTool,
-  moebiusBeforeTool,
-} from "./moebius-reporter";
-import {
   recordCall,
   shouldSuppressRepeatOutput,
   shouldSuppressIdempotentReplay,
@@ -151,12 +146,6 @@ const OpenCodeAdapter: Plugin = async (input) => {
     // Event handler
     event: async (hookInput) => {
       const { event } = hookInput;
-      // OpenCode's terminal lifecycle event is session.deleted and carries the
-      // session id under properties.info.id. Release per-subagent reporter
-      // correlation state even when no terminal tool result was observed.
-      if (event.type === "session.deleted") {
-        cleanupMoebiusSession(event.properties.info.id);
-      }
       await handleEvent(
         {
           type: event.type as "session.created" | "session.ended",
@@ -178,7 +167,6 @@ const OpenCodeAdapter: Plugin = async (input) => {
         if (budget.abort) await abortSession(sessionID);
         throw new Error(budget.message);
       }
-      moebiusBeforeTool(hookInput.tool, hookInput.sessionID ?? "", output.args as Record<string, unknown>);
       await beforeToolExecute(
         hookInput.tool,
         output.args as Record<string, unknown>,
@@ -188,7 +176,6 @@ const OpenCodeAdapter: Plugin = async (input) => {
 
     // Hook: after tool execution
     "tool.execute.after": async (hookInput, hookOutput) => {
-      moebiusAfterTool(hookInput.tool, hookInput.sessionID ?? "", hookOutput);
       await afterToolExecute(
         hookInput.tool,
         hookOutput,
