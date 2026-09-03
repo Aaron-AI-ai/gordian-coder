@@ -27,16 +27,10 @@ import {
   REQUIRED_CATEGORIES,
   SEVERITIES,
   getState,
-  fileRead,
-  fileReadDiff,
-  fileFind,
-  codeSearch,
-  renderRelatedCode,
-  gitHistory,
-  currentFilePath,
+  REVIEW_TOOLS,
+  runReviewTool,
   startReview,
   submitReview,
-  guardExploration,
   reviewPromptFor,
   languageInstructionFor,
   onSessionIdle,
@@ -45,7 +39,6 @@ import {
   finalizeRun,
   judgeContext,
   submitJudge,
-  ruleFileContent,
   resolveMaxToolCalls,
 } from "../../../core/review";
 import {
@@ -220,153 +213,43 @@ export function createReviewModule(input: PluginInput): {
     },
   });
 
-  const file_read = tool({
-    description:
-      "Read the after-version of a file (optionally a line range). Output is line-numbered for precise comments; capped at 500 lines. Use hunk headers @@ -x,y +m,n @@ to target start=m-50, end=m+n+50.",
-    args: {
-      file_path: z.string().min(1).describe("Relative path of the file to read"),
-      start_line: z.number().int().optional().describe("Start line (default 1; clamped to >=1)"),
-      end_line: z.number().int().positive().optional().describe("End line (default EOF)"),
-    },
-    async execute(args, ctx) {
-      const st = getState(ctx.sessionID);
-      if (!st?.active) return NO_ACTIVE_REVIEW;
-      // Reference-mode rule files are served from state: they live in the
-      // working tree, which the ref-scoped fileRead may not see.
-      return guardExploration(
-        st,
-        "file_read",
-        ruleFileContent(st, args.file_path, args.start_line, args.end_line) ??
-          fileRead(st.cwd, st.ref, args.file_path, args.start_line, args.end_line),
-        args
-      );
-    },
-  });
-
-  const file_read_diff = tool({
-    description:
-      "Read the diff of other changed files in this review (from the pre-parsed snapshot). Paths not in the change set are skipped.",
-    args: {
-      path_array: z.array(z.string()).min(1).describe("File paths whose diff to read"),
-    },
-    async execute(args, ctx) {
-      const st = getState(ctx.sessionID);
-      if (!st?.active) return NO_ACTIVE_REVIEW;
-      return guardExploration(st, "file_read_diff", fileReadDiff(st.diffMap, args.path_array), args);
-    },
-  });
-
-  const file_find = tool({
-    description:
-      "Find files by filename substring (not glob/regex; matches basename only). Use to locate files outside the change set.",
-    args: {
-      query_name: z.string().min(1).describe("Filename keyword (substring)"),
-      case_sensitive: z.boolean().optional().describe("Case-sensitive match (default false)"),
-    },
-    async execute(args, ctx) {
-      const st = getState(ctx.sessionID);
-      if (!st?.active) return NO_ACTIVE_REVIEW;
-      return guardExploration(
-        st,
-        "file_find",
-        fileFind(st.cwd, st.ref, args.query_name, args.case_sensitive),
-        args
-      );
-    },
-  });
-
-  const code_search = tool({
-    description:
-      "Search the codebase with git grep. Find symbols, call sites, patterns. Capped at 100 matches, grouped by file.",
-    args: {
-      search_text: z.string().min(1).describe("Search string or regex"),
-      file_patterns: z
-        .array(z.string())
-        .optional()
-        .describe("git pathspec, e.g. ['*.ts', ':(exclude)*.test.ts']"),
-      case_sensitive: z.boolean().optional().describe("Case-sensitive (default false)"),
-      use_perl_regexp: z
-        .boolean()
-        .optional()
-        .describe("true = Perl regex (-P), false = literal (-F, default)"),
-    },
-    async execute(args, ctx) {
-      const st = getState(ctx.sessionID);
-      if (!st?.active) return NO_ACTIVE_REVIEW;
-      return guardExploration(
-        st,
-        "code_search",
-        codeSearch(
-          st.cwd,
-          st.ref,
-          args.search_text,
-          args.file_patterns,
-          args.case_sensitive,
-          args.use_perl_regexp
+  // Every exploration tool comes from the core table (core/review/tools):
+  // one name, description, and body per tool, rendered here into zod args.
+  const explorationTools = Object.fromEntries(
+    REVIEW_TOOLS.map((spec) => [
+      spec.name,
+      tool({
+        description: spec.description,
+        args: Object.fromEntries(
+          Object.entries(spec.args).map(([name, arg]) => {
+            const build = () => {
+              if (arg.type === "boolean") return z.boolean();
+              if (arg.type === "array") {
+                const a = z.array(z.string());
+                return arg.required ? a.min(1) : a;
+              }
+              if (arg.type === "number") {
+                let n = z.number().int();
+                if (arg.min !== undefined) n = n.min(arg.min);
+                if (arg.max !== undefined) n = n.max(arg.max);
+                return n;
+              }
+              const str = z.string();
+              return arg.required ? str.min(1) : str;
+            };
+            const schema = build();
+            return [
+              name,
+              (arg.required ? schema : schema.optional()).describe(arg.description),
+            ];
+          })
         ),
-        args
-      );
-    },
-  });
-
-  const related_code = tool({
-    description:
-      "Find code related to the current file using imports, symbol usages, likely tests, and git co-change history. Results are ranked and can include bounded source previews.",
-    args: {
-      file_path: z
-        .string()
-        .optional()
-        .describe("Relative path (defaults to the file currently under review)"),
-      max_results: z.number().int().positive().max(30).optional().describe("Maximum candidates"),
-      include_preview: z
-        .boolean()
-        .optional()
-        .describe("Include first lines of top candidates (default true)"),
-    },
-    async execute(args, ctx) {
-      const st = getState(ctx.sessionID);
-      if (!st?.active) return NO_ACTIVE_REVIEW;
-      const file = args.file_path ?? currentFilePath(st);
-      if (!file) return "No current file under review.";
-      return guardExploration(
-        st,
-        "related_code",
-        renderRelatedCode(
-          st.cwd,
-          st.ref,
-          file,
-          args.max_results,
-          args.include_preview ?? true
-        ),
-        args
-      );
-    },
-  });
-
-  const git_history = tool({
-    description:
-      "Inspect recent git history for a review file, including commit intent and files changed together. Enable include_patch for historical diffs when checking regressions.",
-    args: {
-      file_path: z
-        .string()
-        .optional()
-        .describe("Relative path (defaults to the file currently under review)"),
-      max_commits: z.number().int().positive().max(10).optional().describe("Recent commits"),
-      include_patch: z.boolean().optional().describe("Include bounded historical patches"),
-    },
-    async execute(args, ctx) {
-      const st = getState(ctx.sessionID);
-      if (!st?.active) return NO_ACTIVE_REVIEW;
-      const file = args.file_path ?? currentFilePath(st);
-      if (!file) return "No current file under review.";
-      return guardExploration(
-        st,
-        "git_history",
-        gitHistory(st.cwd, file, args.max_commits, args.include_patch, st.ref),
-        args
-      );
-    },
-  });
+        async execute(args, ctx) {
+          return runReviewTool(getState(ctx.sessionID), spec.name, args as Record<string, unknown>);
+        },
+      }),
+    ])
+  );
 
   const f_review_submit = tool({
     description:
@@ -462,12 +345,7 @@ export function createReviewModule(input: PluginInput): {
     tools: {
       f_review_plan,
       f_review_context,
-      file_read,
-      file_read_diff,
-      file_find,
-      code_search,
-      related_code,
-      git_history,
+      ...explorationTools,
       f_review_submit,
       f_review_finalize,
       f_review_judge_context,

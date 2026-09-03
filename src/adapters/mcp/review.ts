@@ -10,20 +10,13 @@
 import type { ToolDefinition, ToolResult } from "../../core/types";
 import {
   getState,
-  fileRead,
-  fileReadDiff,
-  fileFind,
-  codeSearch,
-  renderRelatedCode,
-  gitHistory,
-  currentFilePath,
+  REVIEW_TOOLS,
+  runReviewTool,
   startReview,
   submitReview,
-  guardExploration,
   reviewPromptFor,
   languageInstructionFor,
   NO_ACTIVE_REVIEW,
-  ruleFileContent,
   type StartReviewArgs,
 } from "../../core/review";
 
@@ -84,187 +77,19 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
     },
   };
 
-  const file_read: ToolDefinition = {
-    name: "file_read",
-    description:
-      "Read the after-version of a file under review (optionally a line range). Line-numbered; capped at 500 lines.",
-    parameters: {
-      file_path: { type: "string", description: "Relative path of the file to read", required: true },
-      start_line: { type: "number", description: "Start line (default 1; clamped to >=1)" },
-      end_line: { type: "number", description: "End line (default EOF)" },
-    },
-    execute: async (params) => {
-      const st = getState(SESSION);
-      if (!st?.active) return ok(NO_ACTIVE_REVIEW);
-      // Reference-mode rule files are served from state: they live in the
-      // working tree, which the ref-scoped fileRead may not see.
-      return ok(
-        guardExploration(
-          st,
-          "file_read",
-          ruleFileContent(
-            st,
-            params.file_path as string,
-            params.start_line as number | undefined,
-            params.end_line as number | undefined
-          ) ??
-            fileRead(
-              st.cwd,
-              st.ref,
-              params.file_path as string,
-              params.start_line as number | undefined,
-              params.end_line as number | undefined
-            ),
-          params
-        )
-      );
-    },
-  };
-
-  const file_read_diff: ToolDefinition = {
-    name: "file_read_diff",
-    description:
-      "Read the diff of other changed files in this review (from the pre-parsed snapshot).",
-    parameters: {
-      path_array: { type: "array", description: "File paths whose diff to read", required: true },
-    },
-    execute: async (params) => {
-      const st = getState(SESSION);
-      if (!st?.active) return ok(NO_ACTIVE_REVIEW);
-      return ok(
-        guardExploration(st, "file_read_diff", fileReadDiff(st.diffMap, (params.path_array as string[]) ?? []), params)
-      );
-    },
-  };
-
-  const file_find: ToolDefinition = {
-    name: "file_find",
-    description: "Find files by filename substring (matches basename only).",
-    parameters: {
-      query_name: { type: "string", description: "Filename keyword (substring)", required: true },
-      case_sensitive: { type: "boolean", description: "Case-sensitive match (default false)" },
-    },
-    execute: async (params) => {
-      const st = getState(SESSION);
-      if (!st?.active) return ok(NO_ACTIVE_REVIEW);
-      return ok(
-        guardExploration(
-          st,
-          "file_find",
-          fileFind(st.cwd, st.ref, params.query_name as string, params.case_sensitive as boolean),
-          params
-        )
-      );
-    },
-  };
-
-  const code_search: ToolDefinition = {
-    name: "code_search",
-    description:
-      "Search the codebase with git grep. Capped at 100 matches, grouped by file.",
-    parameters: {
-      search_text: { type: "string", description: "Search string or regex", required: true },
-      file_patterns: {
-        type: "array",
-        description: "git pathspec, e.g. ['*.ts', ':(exclude)*.test.ts']",
-      },
-      case_sensitive: { type: "boolean", description: "Case-sensitive (default false)" },
-      use_perl_regexp: {
-        type: "boolean",
-        description: "true = Perl regex (-P), false = literal (-F, default)",
-      },
-    },
-    execute: async (params) => {
-      const st = getState(SESSION);
-      if (!st?.active) return ok(NO_ACTIVE_REVIEW);
-      return ok(
-        guardExploration(
-          st,
-          "code_search",
-          codeSearch(
-            st.cwd,
-            st.ref,
-            params.search_text as string,
-            (params.file_patterns as string[]) ?? [],
-            params.case_sensitive as boolean,
-            params.use_perl_regexp as boolean
-          ),
-          params
-        )
-      );
-    },
-  };
-
-  const related_code: ToolDefinition = {
-    name: "related_code",
-    description:
-      "Find code related to the current review file using imports, symbol usages, likely tests, and git co-change history. Ranked results can include bounded previews.",
-    parameters: {
-      file_path: {
-        type: "string",
-        description: "Relative path (defaults to the file currently under review)",
-      },
-      max_results: { type: "number", description: "Maximum candidates (default 12, max 30)" },
-      include_preview: {
-        type: "boolean",
-        description: "Include first lines of top candidates (default true)",
-      },
-    },
-    execute: async (params) => {
-      const st = getState(SESSION);
-      if (!st?.active) return ok(NO_ACTIVE_REVIEW);
-      const file = (params.file_path as string | undefined) ?? currentFilePath(st);
-      if (!file) return ok("No current file under review.");
-      return ok(
-        guardExploration(
-          st,
-          "related_code",
-          renderRelatedCode(
-            st.cwd,
-            st.ref,
-            file,
-            params.max_results as number | undefined,
-            (params.include_preview as boolean | undefined) ?? true
-          ),
-          params
-        )
-      );
-    },
-  };
-
-  const git_history: ToolDefinition = {
-    name: "git_history",
-    description:
-      "Inspect recent git history for a review file, including commit intent and files changed together. Can include bounded historical patches.",
-    parameters: {
-      file_path: {
-        type: "string",
-        description: "Relative path (defaults to the file currently under review)",
-      },
-      max_commits: { type: "number", description: "Recent commits (default 5, max 10)" },
-      include_patch: { type: "boolean", description: "Include historical patches" },
-    },
-    execute: async (params) => {
-      const st = getState(SESSION);
-      if (!st?.active) return ok(NO_ACTIVE_REVIEW);
-      const file = (params.file_path as string | undefined) ?? currentFilePath(st);
-      if (!file) return ok("No current file under review.");
-      return ok(
-        guardExploration(
-          st,
-          "git_history",
-          gitHistory(
-            st.cwd,
-            file,
-            params.max_commits as number | undefined,
-            (params.include_patch as boolean | undefined) ?? false,
-            st.ref
-          ),
-          params
-        )
-      );
-    },
-  };
+  // Every exploration tool comes from the core table (core/review/tools):
+  // one name, description, and body per tool, rendered here into MCP's schema.
+  const explorationTools: ToolDefinition[] = REVIEW_TOOLS.map((spec) => ({
+    name: spec.name,
+    description: spec.description,
+    parameters: Object.fromEntries(
+      Object.entries(spec.args).map(([name, arg]) => [
+        name,
+        { type: arg.type, description: arg.description, ...(arg.required ? { required: true } : {}) },
+      ])
+    ),
+    execute: async (params) => ok(runReviewTool(getState(SESSION), spec.name, params)),
+  }));
 
   const f_review_submit: ToolDefinition = {
     name: "f_review_submit",
@@ -287,12 +112,7 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
 
   return [
     f_review_context,
-    file_read,
-    file_read_diff,
-    file_find,
-    code_search,
-    related_code,
-    git_history,
+    ...explorationTools,
     f_review_submit,
   ];
 }

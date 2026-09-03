@@ -11,6 +11,7 @@ export * from "./evidence/template";
 export * from "./evidence/rubric";
 export * from "./report/output";
 export * from "./pipeline/state";
+export * from "./tools";
 export * from "./tools/read";
 export * from "./tools/related";
 export * from "./pipeline/loop";
