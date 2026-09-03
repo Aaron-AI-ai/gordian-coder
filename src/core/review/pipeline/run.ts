@@ -454,6 +454,25 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
   const forcedWarn = forced.length
     ? ` ⚠️ ${forced.length} file(s) force-advanced by bounded recovery: ${forced.join(", ")}.`
     : "";
+
+  // fcqFix promises real code for every violation. When the fix pass did not
+  // run — a spawn that never reached f-fixer, a subagent that gave up — those
+  // rows ship with the rule's own text and nothing says so. An unrun pass was
+  // observed twice before anyone noticed, because finalize reported normally.
+  const fixWarn =
+    meta.fcqFix && meta.fcq?.status === "ok"
+      ? (() => {
+          const cov = fixCoverage(runId, meta.targets, cwd).filter((c) => c.violations > 0);
+          const unfixed = cov.reduce((n, c) => n + (c.violations - c.fixed), 0);
+          if (!unfixed) return "";
+          const never = cov.filter((c) => c.fixed === 0).map((c) => c.file);
+          return (
+            ` ⚠️ fcqFix is on but ${unfixed} violation(s) have no fix — they ship with the rule text only` +
+            (never.length ? `; the fix pass produced nothing for ${never.length} file(s)` : "") +
+            `. Spawn an f-fixer subagent per file (f_review_fix_context / f_review_fix_submit), then finalize again.`
+          );
+        })()
+      : "";
   let response: string;
   if (missing.length) {
     response = (
@@ -464,11 +483,11 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
   } else if (qualityIncomplete) {
     response = (
       `⚠️ Run terminated — INCOMPLETE: ${reviewed.length}/${meta.targets.length} review artifact(s) present; ` +
-      `${qualityReasons.join("; ")}.${gate}${forcedWarn} Report: ${path}`
+      `${qualityReasons.join("; ")}.${gate}${forcedWarn}${fixWarn} Report: ${path}`
     );
   } else {
     const fcqNote = fcqSummary ? ` (incl. ${fcqSummary.targetViolations} from fcq)` : "";
-    response = `✅ Run complete — ${reviewed.length} file(s), ${all.length} issue(s)${fcqNote}.${gate}${forcedWarn} Report: ${path}`;
+    response = `✅ Run complete — ${reviewed.length} file(s), ${all.length} issue(s)${fcqNote}.${gate}${forcedWarn}${fixWarn} Report: ${path}`;
   }
   await Bun.write(
     cachePath,

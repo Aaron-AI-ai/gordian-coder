@@ -22,6 +22,8 @@ import { writeFileReview } from "../../pipeline/run-store";
 import { loadRun } from "../../pipeline/artifact";
 import { readFileReviewResult } from "../../pipeline/artifact";
 import { startReview } from "../../pipeline/start";
+import { submitFix } from "../../pipeline/fixer";
+import { runDir } from "../../pipeline/artifact";
 import { guardExploration, submitReview } from "../../pipeline/loop";
 import { reviewPromptFor } from "../../pipeline/prompt";
 import { judgeContext, submitJudge } from "../../pipeline/judge";
@@ -374,6 +376,45 @@ describe("run-mode integration", () => {
     expect(ctx).toContain("separate fix pass");
     expect(ctx).toContain("owed you");
     expect(ctx).not.toContain("Use them as leads: for CRITICAL/MAJOR");
+  });
+
+  it("says so at finalize when the fix pass never ran", async () => {
+    // Twice on a real project the fix pass never reached f-fixer, and finalize
+    // reported "Run complete" as if nothing were missing — the violations
+    // simply shipped with the rule's own text as their fix.
+    const d = gitRepo();
+    fakeFcq(d);
+    writeFileSync(join(d, ".f-review.json"), JSON.stringify({ fcq: true, fcqFix: true, fcqOptions: { bin: join(d, "fcq-bin"), timeout: 30 } }));
+    const plan = await planReview({ commit: "HEAD" }, d);
+    const runId = /Run created: (\S+)/.exec(plan)![1];
+    for (const file of ["src/A.java", "src/B.java"]) {
+      await writeFileReview(runId, { file, assessed: [...REQUIRED_CATEGORIES], findings: [], explorationCalls: 1, partial: false }, "# r", d);
+    }
+    const out = await finalizeRun(runId, d);
+    expect(out).toContain("fcqFix is on but");
+    expect(out).toContain("the fix pass produced nothing");
+    expect(out).toContain("f_review_fix_context");
+  });
+
+  it("stays quiet at finalize once every violation has a fix", async () => {
+    const d = gitRepo();
+    fakeFcq(d);
+    writeFileSync(join(d, ".f-review.json"), JSON.stringify({ fcq: true, fcqFix: true, fcqOptions: { bin: join(d, "fcq-bin"), timeout: 30 } }));
+    const plan = await planReview({ commit: "HEAD" }, d);
+    const runId = /Run created: (\S+)/.exec(plan)![1];
+    for (const file of ["src/A.java", "src/B.java"]) {
+      await writeFileReview(runId, { file, assessed: [...REQUIRED_CATEGORIES], findings: [], explorationCalls: 1, partial: false }, "# r", d);
+      const rows = readFcqFile(runDir(runId, d), file);
+      if (rows.length) {
+        await submitFix(
+          { runId, file, fixes: rows.map((v) => ({ line: v.line ?? 0, ruleId: v.ruleId, toBe: "// fixed" })) },
+          d
+        );
+      }
+    }
+    const out = await finalizeRun(runId, d);
+    expect(out).toContain("Run complete");
+    expect(out).not.toContain("fcqFix is on but");
   });
 
   it("merging fcq findings does not unmatch recorded judgments (judge gate)", async () => {
