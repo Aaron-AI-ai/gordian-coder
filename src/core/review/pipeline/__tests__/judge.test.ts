@@ -8,21 +8,9 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  DEFAULT_JUDGE_THRESHOLD,
-  JUDGE_CONTEXT_MAX_CHARS,
-  MAX_INVALID_JUDGE_SUBMISSIONS,
-  MAX_JUDGE_ROUNDS,
-  JUDGE_CRITERIA,
-  judgeContext,
-  judgeFeedbackFor,
-  loadJudgment,
-  readRunJudgments,
-  submitJudge,
-  type FileJudgment,
-  type JudgeAttempt,
-  type JudgeSubmitPayload,
-} from "../judge";
+import { judgeContext, judgeFeedbackFor, loadJudgment, readRunJudgments, submitJudge } from "../judge";
+import { DEFAULT_JUDGE_THRESHOLD, MAX_INVALID_JUDGE_SUBMISSIONS, MAX_JUDGE_ROUNDS, type FileJudgment, type JudgeAttempt, type JudgeSubmitPayload } from "../judge-store";
+import { JUDGE_CONTEXT_MAX_CHARS, JUDGE_CRITERIA } from "../judge-prompt";
 import { planReview, finalizeRun } from "../run";
 import { createRun, loadRun, readFileReviewResult, reviewSlug, runDir, writeFileReview, type FileReviewResult, type RunMeta } from "../run-store";
 import { startReview } from "../loop";

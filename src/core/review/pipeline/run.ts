@@ -23,7 +23,8 @@ import { collectTargets, resolveDiffRange, type CommitSpec } from "./context";
 import { FinalizeCacheSchema, MAX_RUN_TARGETS, RUNS_DIR, MAX_UNFINISHED_RUNS, RUN_BATCH_SIZE, absoluteOutputPath, createRun, diskTextHash, filesSnapshotIdentity, finalizeFingerprint, loadRun, pruneRuns, readRunResults, reviewArtifactHash, reviewCriteriaIdentity, runCoverage, runDir, runFreshness, unfinishedRuns, type RunMeta } from "./run-store";
 import { loadConfig, resolveDeepPasses } from "../config";
 import { defaultLabel, loadBaseline, manifestTimestamp, renderReviewContext, resolveOutputPath, writeReport } from "../report/output";
-import { DEFAULT_JUDGE_THRESHOLD, readRunJudgments } from "./judge";
+import { readRunJudgments } from "./judge";
+import { DEFAULT_JUDGE_THRESHOLD } from "./judge-store";
 import { fcqFindings, mergeFcqFindings, readFcqFile, readFcqSummary, renderFcqSection, runFcq } from "../evidence/fcq";
 import { rubricSources } from "../evidence/rubric";
 

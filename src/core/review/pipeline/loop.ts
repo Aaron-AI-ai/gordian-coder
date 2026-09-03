@@ -38,13 +38,8 @@ import {
   renderReport,
 } from "../report/output";
 import { loadRun, readFileReviewResult, runFreshness, writeFileReview, type FileReviewResult } from "./run-store";
-import {
-  judgeFeedbackFor,
-  currentReviewTerminal,
-  reworkCount,
-  reviewReworkStatus,
-  MAX_JUDGE_ROUNDS,
-} from "./judge";
+import { judgeFeedbackFor, currentReviewTerminal, reworkCount, reviewReworkStatus } from "./judge";
+import { MAX_JUDGE_ROUNDS } from "./judge-store";
 import {
   setState,
   getState,

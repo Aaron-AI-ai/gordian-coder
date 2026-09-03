@@ -18,146 +18,42 @@
  * finalizeRun reports per-file judge outcomes.
  */
 
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { z } from "zod";
-import { capped, type Finding } from "../contract";
-import { buildDiffMap } from "./context";
-import { afterRef, readFileAt, renderFileContent } from "../tools/read";
-import { loadExtraRules, loadFrameworkGuide, renderExtraRules } from "../evidence/rubric";
-import { readFcqFile, renderFcqEvidence } from "../evidence/fcq";
-import { loadRun, readFileReviewResult, reviewArtifactHash, reviewSlug, runDir, type PersistedFileReviewResult, type RunMeta } from "./run-store";
-
-/** Max rework (re-review) instructions per file — after that judging becomes
- * terminal INCOMPLETE and is flagged fail-closed in the final report.
- * Default only; `.f-review.json` `judgeRounds` overrides it per run. */
-export const MAX_JUDGE_ROUNDS = 2;
+import { type Finding } from "../contract";
+import { loadRun, readFileReviewResult, reviewSlug, runDir, type PersistedFileReviewResult } from "./run-store";
+import {
+  DEFAULT_JUDGE_THRESHOLD,
+  FileJudgmentSchema,
+  JudgeIdentitySchema,
+  JudgeSubmitSchema,
+  MAX_INVALID_JUDGE_SUBMISSIONS,
+  MAX_JUDGE_ROUNDS,
+  artifactIdentity,
+  attemptMatchesReview,
+  judgmentPath,
+  persistJudgment,
+  persistJudgmentSync,
+  submissionHash,
+  terminalMatchesReview,
+  terminalMessage,
+  type FileJudgment,
+  type FindingJudgment,
+  type JudgeAttempt,
+  type JudgeSubmitPayload,
+  type JudgeTerminal,
+} from "./judge-store";
+import {
+  buildJudgePrompt,
+  contextOverflowTerminal,
+  isContextOverflow,
+  overflowContext,
+} from "./judge-prompt";
 
 /** Effective rework cap for a run: `judgeRounds` snapshotted into the run
  * meta at plan time, else MAX_JUDGE_ROUNDS. */
 function reworkCap(meta: { judgeRounds?: number } | null | undefined): number {
   return meta?.judgeRounds ?? MAX_JUDGE_ROUNDS;
-}
-/** Malformed submissions for one review revision before judging terminates
- * fail-closed. This is separate from (and never consumes) rework rounds. */
-export const MAX_INVALID_JUDGE_SUBMISSIONS = 3;
-export const DEFAULT_JUDGE_THRESHOLD = 70;
-
-/** Cap on the change excerpt embedded in the judge context. */
-const JUDGE_DIFF_MAX_CHARS = 10_000;
-/** Whole-file lines shown to the judge before falling back to per-finding windows. */
-const JUDGE_FILE_MAX_LINES = 2000;
-/** Context lines around a finding whose line the capped excerpt did not show. */
-const JUDGE_WINDOW = 25;
-/** Hard ceiling for the complete judge prompt returned to a small model.
- * Raised with the authoritative-rules section rather than shrinking the
- * findings/change budgets: those shrink into contextOverflow, which is
- * terminal, so trading evidence for rules would buy one fix with a regression. */
-export const JUDGE_CONTEXT_MAX_CHARS = 48_000;
-/** Section budgets leave room for the rules, identities, and instructions. */
-const JUDGE_FINDINGS_MAX_CHARS = 18_000;
-const JUDGE_CHANGE_MAX_CHARS = 18_000;
-/** Cap on the authoritative-rules section (framework guide + glob-gated
- * project rules). Truncated, never rejected: a review judged against partial
- * rules still beats one judged against none. */
-const JUDGE_RULES_MAX_CHARS = 8_000;
-const JUDGE_BASE_MAX_CHARS = 10_000;
-
-// Judge text is truncated (never rejected) at the same kind of caps the
-// reviewer's findings get — a looping judge's runaway feedback would otherwise
-// be persisted and re-injected into every rework reviewer prompt.
-export const FindingJudgmentSchema = z.object({
-  index: z.number().int().nonnegative(), // position in the submitted findings array
-  valid: z.boolean(), // matches the actual code (survived refutation)
-  evidenced: z.boolean(), // concrete failure scenario given
-  severityFit: z.boolean(), // neither inflated nor buried
-  actionable: z.boolean(), // suggestion applicable (blocker/major)
-  note: capped(500), // one-line justification
-});
-export type FindingJudgment = z.infer<typeof FindingJudgmentSchema>;
-
-export const JudgeSubmitSchema = z.object({
-  runId: z.string(),
-  file: z.string(),
-  // Do not truncate this array: segmented reviews can legitimately merge more
-  // than 60 findings, and every persisted finding must receive a judgment.
-  findingJudgments: z.array(FindingJudgmentSchema),
-  // significant change areas the review never examined
-  coverageGaps: z.array(capped(500)).transform((a) => a.slice(0, 20)),
-  score: z.number().min(0).max(100),
-  feedback: capped(4000), // concrete rework instructions (used when the verdict is rework)
-});
-export type JudgeSubmitPayload = z.infer<typeof JudgeSubmitSchema>;
-
-// Persisted judgment shape — validated on every load: judgment files are
-// external state (CLAUDE.md: runtime validation), and a shape-corrupt file
-// must degrade to "never judged", not crash the rework round or finalize.
-export const JudgeAttemptSchema = z.object({
-  /** Monotonic FileReviewResult revision this attempt judged. */
-  reviewRevision: z.number().int().positive().default(1),
-  /** Hash of the exact review artifact judged. Legacy attempts may omit it for
-   * shape compatibility, but intentionally never match the current artifact:
-   * an unverifiable legacy verdict fails closed as unjudged. */
-  reviewArtifactHash: z.string().optional(),
-  /** Deterministic hash of the normalized judge payload (audit/idempotency). */
-  submissionHash: z.string().default("legacy"),
-  score: z.number(),
-  verdict: z.enum(["pass", "rework"]),
-  feedback: z.string(),
-  coverageGaps: z.array(z.string()),
-  findingJudgments: z.array(FindingJudgmentSchema),
-  at: z.string(), // ISO timestamp
-});
-export type JudgeAttempt = z.infer<typeof JudgeAttemptSchema>;
-
-export const InvalidJudgeSubmissionSchema = z.object({
-  reviewRevision: z.number().int().positive(),
-  reviewArtifactHash: z.string().optional(),
-  submissionHash: z.string(),
-  error: z.string(),
-  at: z.string(),
-});
-export type InvalidJudgeSubmission = z.infer<typeof InvalidJudgeSubmissionSchema>;
-
-export const JudgeTerminalSchema = z.object({
-  status: z.literal("judge-incomplete"),
-  reviewRevision: z.number().int().positive(),
-  reviewArtifactHash: z.string().optional(),
-  reason: z.string(),
-  at: z.string(),
-});
-export type JudgeTerminal = z.infer<typeof JudgeTerminalSchema>;
-
-export const FileJudgmentSchema = z.object({
-  file: z.string(),
-  attempts: z.array(JudgeAttemptSchema),
-  invalidSubmissions: z.array(InvalidJudgeSubmissionSchema).default([]),
-  terminal: JudgeTerminalSchema.optional(),
-});
-export type FileJudgment = z.infer<typeof FileJudgmentSchema>;
-
-/** The judging rubric injected into every judge context. Kept as data so an
- * offline evaluation script can reuse the exact same criteria. */
-export const JUDGE_CRITERIA = [
-  `Evaluate the REVIEW, not the code. Score 0-100:`,
-  `1. Validity (40%) — try to REFUTE each finding against the actual code shown.`,
-  `   A finding whose line/claim does not match the code is invalid.`,
-  `2. Evidence (15%) — each finding states a concrete failure scenario`,
-  `   (input/state → wrong outcome), not just "this could be a problem".`,
-  `3. Severity calibration (15%) — blockers/majors are truly that severe, and`,
-  `   real defects are not buried as minor/nit.`,
-  `4. Actionability (10%) — every blocker/major carries an applicable suggestion.`,
-  `5. Coverage (20%) — every significant part of the change was actually`,
-  `   examined; list unexamined areas in coverageGaps.`,
-  ``,
-  `Do NOT reward finding count — a clean file with zero findings can score 100.`,
-  `Penalize noise: duplicates, style nits inflated to issues, hallucinated lines.`,
-  `Prefer false negatives over false positives, matching the review's own rules.`,
-].join("\n");
-
-function judgmentPath(runId: string, file: string, cwd: string): string {
-  return join(runDir(runId, cwd), "judgments", `${reviewSlug(file)}.json`);
 }
 
 /** All recorded judgments for one file (empty attempts when never judged or
@@ -242,240 +138,6 @@ function loadReviewResult(
   return readFileReviewResult(runId, file, cwd);
 }
 
-interface JudgeContextOverflow {
-  reason: string;
-}
-
-function contextOverflow(reason: string): JudgeContextOverflow {
-  return { reason };
-}
-
-function isContextOverflow(value: string | JudgeContextOverflow): value is JudgeContextOverflow {
-  return typeof value !== "string";
-}
-
-/** Merge overlapping finding windows so nearby anchors do not inject the same
- * source lines repeatedly. */
-function findingWindows(lines: number[], total: number): { start: number; end: number }[] {
-  const windows: { start: number; end: number }[] = [];
-  for (const line of [...new Set(lines)].sort((a, b) => a - b)) {
-    const next = {
-      start: Math.max(1, line - JUDGE_WINDOW),
-      end: Math.min(total, line + JUDGE_WINDOW),
-    };
-    const previous = windows.at(-1);
-    if (previous && next.start <= previous.end + 1) previous.end = Math.max(previous.end, next.end);
-    else windows.push(next);
-  }
-  return windows;
-}
-
-/** The change being reviewed, as shown to the judge: a bounded base plus
- * merged windows around every finding anchor hidden by that base. If all
- * anchors cannot fit, fail closed instead of silently omitting evidence and
- * allowing a misleading PASS. */
-function changeExcerpt(
-  meta: RunMeta,
-  file: string,
-  cwd: string,
-  findings: Finding[]
-): string | JudgeContextOverflow {
-  const ref = afterRef(meta.range);
-  const content = readFileAt(cwd, ref, file);
-  const totalLines = content === null ? 0 : content.replace(/\n$/, "").split("\n").length;
-  let base = "";
-  let visibleTo = 0;
-  let needsWindows = false;
-
-  if (meta.range && !meta.whole) {
-    const diff = buildDiffMap(meta.range, [file], cwd)[file] ?? "";
-    if (diff) {
-      needsWindows = diff.length > JUDGE_DIFF_MAX_CHARS;
-      base = needsWindows
-        ? `${diff.slice(0, JUDGE_DIFF_MAX_CHARS)}\n… (diff truncated)`
-        : diff;
-    }
-  }
-
-  if (!base) {
-    if (content === null) {
-      base = `Error: file not found: ${file}. The reviewed source is unavailable.`;
-    } else {
-      const shownLines = Math.min(totalLines, JUDGE_FILE_MAX_LINES);
-      base = renderFileContent(file, content, 1, shownLines, JUDGE_FILE_MAX_LINES, JUDGE_BASE_MAX_CHARS);
-      const characterTruncated = base.includes("IS_TRUNCATED: true");
-      // A character-truncated line-numbered block may end midway through an
-      // early line even though its header names the requested end. Treat none
-      // of its lines as reliably visible and add windows for every anchor.
-      visibleTo = characterTruncated ? 0 : shownLines;
-      needsWindows = shownLines < totalLines || characterTruncated;
-    }
-  }
-
-  if (base.length > JUDGE_CHANGE_MAX_CHARS) {
-    return contextOverflow(`the base change excerpt exceeds ${JUDGE_CHANGE_MAX_CHARS} characters`);
-  }
-  if (!needsWindows) return base;
-  if (content === null) {
-    return contextOverflow("the capped change excerpt requires finding windows but source is unavailable");
-  }
-
-  // Once any part of the change is hidden, a clean review has no anchors from
-  // which to recover the omitted code, and an unanchored finding cannot be
-  // checked against a targeted window. Letting either case continue would let
-  // a judge see only the prefix and still award PASS/complete coverage.
-  if (!findings.length) {
-    return contextOverflow(
-      "the change excerpt is truncated and the zero-finding review has no anchors for the omitted code"
-    );
-  }
-  const unanchored = findings.filter((finding) => finding.line === undefined).length;
-  if (unanchored) {
-    return contextOverflow(
-      `the change excerpt is truncated and ${unanchored} finding(s) have no line anchor`
-    );
-  }
-
-  // A truncated diff has no reliable line coverage, so every anchored finding
-  // receives a source window. A capped whole-file base needs only later lines.
-  const hiddenLines = findings
-    .map((finding) => finding.line)
-    .filter((line): line is number => line !== undefined && line > visibleTo);
-  if (!hiddenLines.length) return base;
-
-  const windows = findingWindows(hiddenLines, totalLines).map(({ start, end }) =>
-    renderFileContent(file, content, start, end, end - start + 1, JUDGE_CHANGE_MAX_CHARS)
-  );
-  const excerpt = [
-    base,
-    `### Excerpts around finding lines the capped excerpt above does not show`,
-    `(judge these findings against the windows below, not against absence)`,
-    ...windows,
-  ].join("\n\n");
-  if (excerpt.length > JUDGE_CHANGE_MAX_CHARS) {
-    return contextOverflow(
-      `${windows.length} merged finding window(s) plus the base exceed ${JUDGE_CHANGE_MAX_CHARS} characters`
-    );
-  }
-  return excerpt;
-}
-
-function overflowContext(file: string, revision: number, reason: string): string {
-  return (
-    `⚠️ Judge context INCOMPLETE for ${file} review revision ${revision}: ${reason}. ` +
-    `The bounded context cannot show every finding and its evidence within ${JUDGE_CONTEXT_MAX_CHARS} characters. ` +
-    `This artifact is now terminal Judge INCOMPLETE — Do NOT call f_review_judge or re-spawn it, ` +
-    `because a partial judgment must never PASS. Continue with the remaining files, then call ` +
-    `f_review_finalize; the run fails closed as INCOMPLETE.`
-  );
-}
-
-function contextOverflowTerminal(
-  review: PersistedFileReviewResult,
-  reason: string
-): JudgeTerminal {
-  return {
-    status: "judge-incomplete",
-    reviewRevision: review.revision,
-    reviewArtifactHash: artifactIdentity(review),
-    reason: `bounded judge context unavailable: ${reason}`,
-    at: new Date().toISOString(),
-  };
-}
-
-/**
- * The rulebook the reviewer was held to, as shown to the judge.
- *
- * Without it the judge scores against general best practice and rejects
- * correct rule-based findings as style preferences — observed as "Spring
- * supports @RequiredArgsConstructor, this is not a blocker" against a project
- * whose authoritative guide forbids exactly that, sinking every file below the
- * threshold no matter how many rework rounds ran.
- *
- * Mirrors what the reviewer's prompt injects (framework guide + glob-gated
- * project rules) minus the category rubric: `JUDGE_CRITERIA` already defines
- * scoring, and handing the judge the review checklist invites it to re-review
- * the code instead of judging the review.
- */
-function authoritativeRules(file: string, cwd: string): string {
-  const body = [loadFrameworkGuide(cwd), renderExtraRules(loadExtraRules(cwd), file)]
-    .map((section) => section.trim())
-    .filter(Boolean)
-    .join("\n\n");
-  if (!body) return "";
-  const capped =
-    body.length > JUDGE_RULES_MAX_CHARS
-      ? `${body.slice(0, JUDGE_RULES_MAX_CHARS)}\n… (rules truncated)`
-      : body;
-  return [
-    `### Authoritative project rules (the reviewer was REQUIRED to follow these)`,
-    `A finding that correctly applies a rule below is VALID even when it`,
-    `contradicts general best practice. Do not penalize it as a style`,
-    `preference, an outdated pattern, or a framework misunderstanding. These`,
-    `rules are not up for debate — judge only whether the reviewer applied them`,
-    `correctly to this file.`,
-    ``,
-    capped,
-    ``,
-  ].join("\n");
-}
-
-function buildJudgePrompt(
-  meta: RunMeta,
-  result: PersistedFileReviewResult,
-  judgment: FileJudgment,
-  cwd: string
-): string | JudgeContextOverflow {
-  const findingsJson = JSON.stringify(result.findings, null, 2);
-  if (findingsJson.length > JUDGE_FINDINGS_MAX_CHARS) {
-    return contextOverflow(
-      `${result.findings.length} serialized finding(s) exceed ${JUDGE_FINDINGS_MAX_CHARS} characters`
-    );
-  }
-
-  const excerpt = changeExcerpt(meta, result.file, cwd, result.findings);
-  if (isContextOverflow(excerpt)) return excerpt;
-
-  const round = judgment.attempts.length + 1;
-  const threshold = meta.judgeThreshold ?? DEFAULT_JUDGE_THRESHOLD;
-  // The reviewer was told not to re-report fcq violations; the judge must see
-  // the same list or it scores that restraint as a coverage gap.
-  const fcq =
-    meta.fcq?.status === "ok"
-      ? renderFcqEvidence(readFcqFile(runDir(meta.runId, cwd), result.file))
-      : "";
-  const prompt = [
-    `You are judging the review of ${result.file} (run ${meta.runId}, judge round ${round}).`,
-    `Score threshold: ${threshold} (score < ${threshold} ⇒ the review is sent back for rework).`,
-    ``,
-    `### Criteria`,
-    JUDGE_CRITERIA,
-    ``,
-    authoritativeRules(result.file, cwd),
-    ...(fcq
-      ? [
-          `### Static analysis already applied`,
-          `The reviewer was instructed NOT to re-report these; do not count them as coverage gaps.`,
-          fcq,
-          ``,
-        ]
-      : []),
-    `### The change under review`,
-    excerpt,
-    ``,
-    `### The submitted review (findings to judge, by index)`,
-    findingsJson,
-    ``,
-    `Judge every finding by its index, list coverage gaps, then call f_review_judge`,
-    `with runId="${meta.runId}", file="${result.file}", your findingJudgments, coverageGaps,`,
-    `score, and feedback. Feedback must be concrete, numbered instructions the`,
-    `next reviewer can follow (required when the score is below the threshold).`,
-  ].join("\n");
-  return prompt.length <= JUDGE_CONTEXT_MAX_CHARS
-    ? prompt
-    : contextOverflow(`the assembled judge prompt is ${prompt.length} characters`);
-}
-
 /** Everything a judge subagent needs: the change, the submitted review, the
  * criteria, and the submission instructions. Stateless — no session joins. */
 export function judgeContext(runId: string, file: string, cwd: string): string {
@@ -528,40 +190,6 @@ export function judgeContext(runId: string, file: string, cwd: string): string {
   return overflowContext(file, result.revision, terminal.reason);
 }
 
-const JudgeIdentitySchema = z.object({ runId: z.string(), file: z.string() });
-
-function submissionHash(payload: unknown): string {
-  let serialized: string;
-  try {
-    serialized = JSON.stringify(payload);
-  } catch {
-    serialized = String(payload);
-  }
-  return createHash("sha256").update(serialized).digest("hex");
-}
-
-async function persistJudgment(
-  runId: string,
-  file: string,
-  cwd: string,
-  judgment: FileJudgment
-): Promise<void> {
-  await Bun.write(judgmentPath(runId, file, cwd), JSON.stringify(judgment, null, 2));
-}
-
-/** judgeContext is intentionally synchronous for both adapters. Persist its
- * deterministic context-overflow terminal before returning so a Qwen agent
- * cannot spin on context retries while finalize still sees the file unjudged. */
-function persistJudgmentSync(
-  runId: string,
-  file: string,
-  cwd: string,
-  judgment: FileJudgment
-): void {
-  mkdirSync(join(runDir(runId, cwd), "judgments"), { recursive: true });
-  writeFileSync(judgmentPath(runId, file, cwd), JSON.stringify(judgment, null, 2));
-}
-
 // One promise gate per active judgment artifact serializes the complete
 // read-modify-write transaction. The final waiter removes the gate, so a
 // long-lived server retains no keys after submissions settle.
@@ -586,37 +214,6 @@ async function serializeJudgeSubmission<T>(
       judgeSubmissionGates.delete(key);
     }
   }
-}
-
-
-function terminalMessage(file: string, terminal: JudgeTerminal): string {
-  return (
-    `⚠️ Judge INCOMPLETE for ${file} review revision ${terminal.reviewRevision}: ${terminal.reason}. ` +
-    `This file is terminal — do NOT re-spawn or judge it again; continue with the remaining files, then f_review_finalize.`
-  );
-}
-
-function artifactIdentity(review: PersistedFileReviewResult): string {
-  return reviewArtifactHash(review);
-}
-
-function attemptMatchesReview(
-  attempt: JudgeAttempt,
-  review: PersistedFileReviewResult
-): boolean {
-  return (
-    attempt.reviewRevision === review.revision &&
-    attempt.reviewArtifactHash === artifactIdentity(review)
-  );
-}
-
-function terminalMatchesReview(
-  terminal: JudgeTerminal | undefined,
-  review: PersistedFileReviewResult
-): boolean {
-  return !!terminal &&
-    terminal.reviewRevision === review.revision &&
-    terminal.reviewArtifactHash === artifactIdentity(review);
 }
 
 /** Current artifact-bound attempt, newest first. Legacy attempts without an
