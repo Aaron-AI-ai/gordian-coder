@@ -19,7 +19,8 @@ import {
 } from "../fcq";
 import { finalizeRun, planReview } from "../../pipeline/run";
 import { loadRun, readFileReviewResult, writeFileReview } from "../../pipeline/run-store";
-import { startReview, reviewPromptFor } from "../../pipeline/loop";
+import { startReview } from "../../pipeline/start";
+import { reviewPromptFor } from "../../pipeline/prompt";
 import { judgeContext, submitJudge } from "../../pipeline/judge";
 import { clearState, getState } from "../../pipeline/state";
 import { REQUIRED_CATEGORIES } from "../../contract";

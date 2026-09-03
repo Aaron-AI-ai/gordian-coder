@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { finalizeRun, planReview } from "../run";
 import { MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, UNFINISHED_RUN_TTL_MS, RUN_BATCH_SIZE, RUNS_DIR, createRun, loadRun, pruneRuns, readRunResults, reviewCriteriaIdentity, reviewSlug, runCoverage, runDir, writeFileReview, type FileReviewResult, type RunMeta } from "../run-store";
-import { startReview, submitReview, guardExploration, onSessionIdle, MAX_RESUMES } from "../loop";
+import { submitReview, guardExploration, onSessionIdle, MAX_RESUMES } from "../loop";
+import { startReview } from "../start";
 import { getState, clearState } from "../state";
 import { REQUIRED_CATEGORIES } from "../../contract";
 

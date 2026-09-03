@@ -14,6 +14,8 @@ export * from "./pipeline/state";
 export * from "./tools";
 export * from "./tools/read";
 export * from "./tools/related";
+export * from "./pipeline/start";
+export * from "./pipeline/prompt";
 export * from "./pipeline/loop";
 export * from "./evidence/dossier";
 export * from "./pipeline/run-store";

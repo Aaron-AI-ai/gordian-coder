@@ -13,7 +13,7 @@ import { DEFAULT_JUDGE_THRESHOLD, MAX_INVALID_JUDGE_SUBMISSIONS, MAX_JUDGE_ROUND
 import { JUDGE_CONTEXT_MAX_CHARS, JUDGE_CRITERIA } from "../judge-prompt";
 import { planReview, finalizeRun } from "../run";
 import { createRun, loadRun, readFileReviewResult, reviewSlug, runDir, writeFileReview, type FileReviewResult, type RunMeta } from "../run-store";
-import { startReview } from "../loop";
+import { startReview } from "../start";
 import { clearState, getState } from "../state";
 import { REQUIRED_CATEGORIES } from "../../contract";
 

@@ -12,17 +12,9 @@ import {
   type ReviewState,
 } from "../state";
 import { MAX_ITER } from "../../tools/read";
-import {
-  startReview,
-  submitReview,
-  reviewPromptFor,
-  guardExploration,
-  onSessionIdle,
-  MAX_RESUMES,
-  MAX_MISS_STREAK,
-  MAX_FAILED_SUBMITS,
-  NO_ACTIVE_REVIEW,
-} from "../loop";
+import { submitReview, guardExploration, onSessionIdle, MAX_RESUMES, MAX_MISS_STREAK, MAX_FAILED_SUBMITS, NO_ACTIVE_REVIEW } from "../loop";
+import { startReview } from "../start";
+import { reviewPromptFor } from "../prompt";
 import { REQUIRED_CATEGORIES } from "../../contract";
 
 function baseState(over: Partial<ReviewState> = {}): ReviewState {
