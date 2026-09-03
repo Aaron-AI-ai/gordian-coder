@@ -62,7 +62,8 @@ export const JUDGE_CRITERIA = [
   `   (input/state → wrong outcome), not just "this could be a problem".`,
   `3. Severity calibration (15%) — blockers/majors are truly that severe, and`,
   `   real defects are not buried as minor/nit.`,
-  `4. Actionability (10%) — every blocker/major carries an applicable suggestion.`,
+  `4. Actionability (10%) — every blocker/major carries an applicable fix`,
+  `   (\`asIs\` + \`toBe\`), not just a description of the problem.`,
   `5. Coverage (20%) — every significant part of the change was actually`,
   `   examined; list unexamined areas in coverageGaps.`,
   ``,
@@ -267,11 +268,13 @@ export function buildJudgePrompt(
 
   const round = judgment.attempts.length + 1;
   const threshold = meta.judgeThreshold ?? DEFAULT_JUDGE_THRESHOLD;
-  // The reviewer was told not to re-report fcq violations; the judge must see
-  // the same list or it scores that restraint as a coverage gap.
+  // The judge must see the list AND the same instructions the reviewer was
+  // given — `meta.fcqFix` included. Without the flag it read "give the fix for
+  // CRITICAL/MAJOR hits" while the reviewer had been told a separate pass owns
+  // every fix, and scored the reviewer against an instruction it never got.
   const fcq =
     meta.fcq?.status === "ok"
-      ? renderFcqEvidence(readFcqFile(runDir(meta.runId, cwd), result.file))
+      ? renderFcqEvidence(readFcqFile(runDir(meta.runId, cwd), result.file), meta.fcqFix)
       : "";
   const prompt = [
     `You are judging the review of ${result.file} (run ${meta.runId}, judge round ${round}).`,
@@ -285,6 +288,13 @@ export function buildJudgePrompt(
       ? [
           `### Static analysis already applied`,
           `The reviewer was instructed NOT to re-report these; do not count them as coverage gaps.`,
+          ...(meta.fcqFix
+            ? [
+                `A separate fix pass writes their corrected code, so the reviewer owed you`,
+                `NO fix for them. A review that only restates these rules, however, has`,
+                `added nothing this run did not already have — score it accordingly.`,
+              ]
+            : []),
           fcq,
           ``,
         ]

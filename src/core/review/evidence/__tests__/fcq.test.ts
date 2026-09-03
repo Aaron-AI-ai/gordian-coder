@@ -358,6 +358,24 @@ describe("run-mode integration", () => {
     clearState("own");
   });
 
+  it("shows the judge the same fcq instructions the reviewer was given", async () => {
+    // The judge scores the reviewer against these. Built without meta.fcqFix it
+    // read "give the fix for CRITICAL/MAJOR hits" while the reviewer had been
+    // told a separate pass owns every fix — penalising an instruction it never
+    // received.
+    const d = gitRepo();
+    fakeFcq(d);
+    writeFileSync(join(d, ".f-review.json"), JSON.stringify({ fcq: true, fcqFix: true, fcqOptions: { bin: join(d, "fcq-bin"), timeout: 30 } }));
+    const plan = await planReview({ commit: "HEAD" }, d);
+    const runId = /Run created: (\S+)/.exec(plan)![1];
+    expect(loadRun(runId, d)!.fcqFix).toBe(true);
+    await writeFileReview(runId, { file: "src/A.java", assessed: [...REQUIRED_CATEGORIES], findings: [], explorationCalls: 1, partial: false }, "# r", d);
+    const ctx = judgeContext(runId, "src/A.java", d);
+    expect(ctx).toContain("separate fix pass");
+    expect(ctx).toContain("owed you");
+    expect(ctx).not.toContain("Use them as leads: for CRITICAL/MAJOR");
+  });
+
   it("merging fcq findings does not unmatch recorded judgments (judge gate)", async () => {
     const d = gitRepo();
     fakeFcq(d);
