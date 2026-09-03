@@ -18,7 +18,7 @@
  * the machine-readable artifact that loadBaseline parses back.
  */
 
-import { SEVERITIES, verdict, type Finding, type Severity } from "../contract";
+import { SEVERITIES, splitFix, verdict, type Finding, type Severity } from "../contract";
 import TEMPLATE_HTML from "./report.template.html" with { type: "text" };
 
 // bun-types types every *.html import as an HTMLBundle (its fullstack server);
@@ -77,6 +77,8 @@ interface HtmlLabels {
   count: string;
   topSeverity: string;
   suggestion: string;
+  asIs: string;
+  toBe: string;
   all: string;
   severity: string;
   search: string;
@@ -110,6 +112,8 @@ const LABELS: Record<string, HtmlLabels> = {
     count: "지적",
     topSeverity: "최고 심각도",
     suggestion: "제안",
+    asIs: "현재 코드 (AS-IS)",
+    toBe: "수정 코드 (TO-BE)",
     all: "전체",
     severity: "심각도",
     search: "검색 (파일·규칙·내용)",
@@ -141,6 +145,8 @@ const LABELS: Record<string, HtmlLabels> = {
     count: "findings",
     topSeverity: "top severity",
     suggestion: "suggestion",
+    asIs: "AS-IS",
+    toBe: "TO-BE",
     all: "All",
     severity: "Severity",
     search: "Search (file, rule, message)",
@@ -172,6 +178,8 @@ const LABELS: Record<string, HtmlLabels> = {
     count: "指摘",
     topSeverity: "最高深刻度",
     suggestion: "提案",
+    asIs: "現状 (AS-IS)",
+    toBe: "修正後 (TO-BE)",
     all: "すべて",
     severity: "深刻度",
     search: "検索 (ファイル・ルール・内容)",
@@ -245,15 +253,21 @@ function unfence(s: string): string {
 /** One finding as a list item, shared by the by-file and by-rule tabs. `head`
  * identifies it within that tab's grouping (the other coordinate). */
 function findingItem(f: Finding, head: string, old: boolean, L: HtmlLabels): string {
+  // Two boxes, not one: the corrected code is what a reader acts on, so it
+  // gets its own labelled block instead of trailing the offending code.
+  const fix = splitFix(f);
   return [
-    `<li data-sev="${f.severity}" data-cat="${esc(f.category)}" data-q="${q(head, f.rule, f.message, f.suggestion && unfence(f.suggestion), f.category)}">`,
+    `<li data-sev="${f.severity}" data-cat="${esc(f.category)}" data-q="${q(head, f.rule, f.message, fix.asIs && unfence(fix.asIs), fix.toBe && unfence(fix.toBe), f.category)}">`,
     `<code>${esc(head)}</code>`,
     `<span class="sev ${f.severity}">${f.severity}</span>`,
     `<code>${esc(f.category)}</code>`,
     old ? `<span class="badge old">${esc(L.existing)}</span>` : "",
     `<b>${esc(f.rule)}</b> &mdash; ${esc(f.message)}`,
-    f.suggestion
-      ? `<span class="fix"><span class="fixlbl">${esc(L.suggestion)}</span>${esc(unfence(f.suggestion))}</span>`
+    fix.asIs
+      ? `<span class="fix asis"><span class="fixlbl">${esc(L.asIs)}</span>${esc(unfence(fix.asIs))}</span>`
+      : "",
+    fix.toBe
+      ? `<span class="fix tobe"><span class="fixlbl">${esc(L.toBe)}</span>${esc(unfence(fix.toBe))}</span>`
       : "",
     `</li>`,
   ]

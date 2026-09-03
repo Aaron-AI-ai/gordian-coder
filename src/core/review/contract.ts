@@ -39,10 +39,51 @@ export const FindingSchema = z.object({
   line: z.number().int().positive().optional(),
   rule: capped(500), // which rule/checklist item this violates
   message: capped(2000),
-  suggestion: capped(4000).optional(), // AS-IS/TO-BE fix; prompt-mandated but schema-optional so a submit never hard-fails on it
+  // The fix, in two fields with SEPARATE budgets. They used to share one
+  // `suggestion`, and a long AS-IS starved the part that matters: a real
+  // review was observed cut at exactly 4000 characters mid-token — `...```\nTO`
+  // — losing the entire corrected code. `suggestion` stays accepted so a model
+  // (or an artifact written before the split) that sends one still works;
+  // splitFix() below turns it into the two fields.
+  asIs: capped(3000).optional(), // the offending code as it stands
+  toBe: capped(4000).optional(), // the corrected code — never truncated to fit AS-IS
+  suggestion: capped(7000).optional(), // legacy single field: "AS-IS: … TO-BE: …"
 });
 
 export type Finding = z.infer<typeof FindingSchema>;
+
+/**
+ * The fix of a finding, however it was supplied.
+ *
+ * Prefers the explicit fields; falls back to parsing a legacy `suggestion` on
+ * its AS-IS/TO-BE markers. A `suggestion` with no marker is all TO-BE: that is
+ * what a bare suggestion has always meant to a reader.
+ */
+export function splitFix(f: {
+  asIs?: string;
+  toBe?: string;
+  suggestion?: string;
+}): { asIs?: string; toBe?: string } {
+  if (f.asIs || f.toBe) return { asIs: f.asIs, toBe: f.toBe };
+  const s = f.suggestion?.trim();
+  if (!s) return {};
+  // Tolerate what models actually write around the markers: bold, headings,
+  // list bullets, a missing hyphen or colon. Anchored to a line start so the
+  // words cannot match inside prose or inside the code itself.
+  const TO_BE = /(?:^|\n)[ \t]*(?:[*_#>-]+[ \t]*)*TO[ _-]?BE[ \t]*:?[*_]*[ \t]*\r?\n?/i;
+  const AS_IS = /^[ \t]*(?:[*_#>-]+[ \t]*)*AS[ _-]?IS[ \t]*:?[*_]*[ \t]*\r?\n?/i;
+  const m = TO_BE.exec(s);
+  if (!m) return { toBe: s };
+  const head = s.slice(0, m.index).replace(AS_IS, "").trim();
+  const tail = s.slice(m.index + m[0].length).trim();
+  return { ...(head ? { asIs: head } : {}), ...(tail ? { toBe: tail } : {}) };
+}
+
+/** True when a finding carries any fix text at all. */
+export function hasFix(f: { asIs?: string; toBe?: string; suggestion?: string }): boolean {
+  const { asIs, toBe } = splitFix(f);
+  return !!(asIs || toBe);
+}
 
 export const SubmitSchema = z.object({
   // Opaque identity injected for the current target/round. It prevents a

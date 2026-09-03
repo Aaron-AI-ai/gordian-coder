@@ -2,6 +2,8 @@ import { describe, it, expect } from "bun:test";
 import {
   REQUIRED_CATEGORIES,
   FindingSchema,
+  splitFix,
+  hasFix,
   SubmitSchema,
   coverage,
   atLeast,
@@ -59,6 +61,45 @@ describe("coverage", () => {
   });
 });
 
+describe("splitFix", () => {
+  it("splits the markers models actually write", () => {
+    // Every shape below came out of a real review: fenced fcq output, bare
+    // LLM code, bold markers, and the spaced/hyphenless spellings.
+    expect(splitFix({ suggestion: "AS-IS:\n```\nint a;\n```\nTO-BE: use long" }))
+      .toEqual({ asIs: "```\nint a;\n```", toBe: "use long" });
+    expect(splitFix({ suggestion: "**AS-IS:**\nfoo()\n**TO-BE:**\nbar()" }))
+      .toEqual({ asIs: "foo()", toBe: "bar()" });
+    expect(splitFix({ suggestion: "as is:\nfoo()\nto be:\nbar()" }))
+      .toEqual({ asIs: "foo()", toBe: "bar()" });
+  });
+
+  it("treats an unmarked suggestion as the corrected code", () => {
+    // A bare suggestion has always read as "do this", never as "here is the bug".
+    expect(splitFix({ suggestion: "wrap it in a try/catch" })).toEqual({
+      toBe: "wrap it in a try/catch",
+    });
+    expect(splitFix({ suggestion: "TO-BE: use Optional" })).toEqual({ toBe: "use Optional" });
+  });
+
+  it("does not match the markers inside code or prose", () => {
+    // The words must start a line: `String toBe = ...` is code, not a marker.
+    const code = "int x;\nString toBe = compute();";
+    expect(splitFix({ suggestion: code })).toEqual({ toBe: code });
+  });
+
+  it("prefers the explicit fields over the legacy one", () => {
+    expect(splitFix({ asIs: "a", toBe: "b", suggestion: "AS-IS: x\nTO-BE: y" }))
+      .toEqual({ asIs: "a", toBe: "b" });
+  });
+
+  it("reports whether a finding carries any fix at all", () => {
+    expect(hasFix({})).toBe(false);
+    expect(hasFix({ suggestion: "   " })).toBe(false);
+    expect(hasFix({ toBe: "x" })).toBe(true);
+    expect(hasFix({ suggestion: "AS-IS: x" })).toBe(true);
+  });
+});
+
 describe("FindingSchema", () => {
   it("accepts a valid finding", () => {
     expect(FindingSchema.safeParse(finding()).success).toBe(true);
@@ -79,12 +120,22 @@ describe("FindingSchema", () => {
 
   it("truncates runaway-length text instead of rejecting the finding", () => {
     const r = FindingSchema.safeParse(
-      finding({ message: "x".repeat(2001), rule: "x".repeat(501), suggestion: "x".repeat(4001) })
+      finding({
+        message: "x".repeat(2001),
+        rule: "x".repeat(501),
+        asIs: "x".repeat(3001),
+        toBe: "x".repeat(4001),
+        suggestion: "x".repeat(7001),
+      })
     );
     expect(r.success).toBe(true);
     expect(r.data!.message).toHaveLength(2000);
     expect(r.data!.rule).toHaveLength(500);
-    expect(r.data!.suggestion).toHaveLength(4000);
+    // asIs and toBe are budgeted separately: a long AS-IS must never be able
+    // to eat into the corrected code.
+    expect(r.data!.asIs).toHaveLength(3000);
+    expect(r.data!.toBe).toHaveLength(4000);
+    expect(r.data!.suggestion).toHaveLength(7000);
   });
 });
 

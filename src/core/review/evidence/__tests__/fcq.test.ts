@@ -202,8 +202,12 @@ describe("evidence / findings rendering", () => {
   it("maps to findings with fcq: rule tags and category/severity mapping", () => {
     const f = fcqFindings("f.java", rows);
     expect(f[1]).toMatchObject({ category: "security", severity: "blocker", rule: "fcq:sql/R2", line: 600, message: "m2" });
-    expect(f[1].suggestion).toContain("AS-IS:\n```\nx\n```\nTO-BE: d2");
-    expect(f[0].suggestion).toBe("TO-BE: d1"); // no snippet → rule description alone
+    // Separate fields, separate budgets: the snippet can no longer crowd out
+    // the fix the way it did when both shared one 4000-char `suggestion`.
+    expect(f[1].asIs).toBe("x");
+    expect(f[1].toBe).toBe("d2");
+    expect(f[0].asIs).toBeUndefined(); // no snippet
+    expect(f[0].toBe).toBe("d1"); // rule description stands in as the fix
     expect(f[2]).toMatchObject({ category: "framework", severity: "major" });
     expect(f[2].line).toBeUndefined();
     expect(mapFcqCategory("bugs")).toBe("correctness");
@@ -214,7 +218,7 @@ describe("evidence / findings rendering", () => {
   it("merges an LLM finding on the same line into the fcq row", () => {
     const fcq = fcqFindings("f.java", rows);
     const llm = [
-      { category: "security" as const, severity: "major" as const, file: "f.java", line: 600, rule: "inj (fcq R2)", message: "user input reaches ${}", suggestion: "AS-IS:\n```\n${a}\n```\nTO-BE:\n```\n#{a}\n```" },
+      { category: "security" as const, severity: "major" as const, file: "f.java", line: 600, rule: "inj (fcq R2)", message: "user input reaches ${}", asIs: "${a}", toBe: "#{a}" },
       { category: "correctness" as const, severity: "blocker" as const, file: "f.java", line: 10, rule: "npe", message: "null deref — see r1" },
       { category: "tests" as const, severity: "minor" as const, file: "f.java", line: 999, rule: "t", message: "no test" },
       { category: "correctness" as const, severity: "major" as const, file: "f.java", line: 10, rule: "logic", message: "unrelated bug on the same line" },
@@ -226,10 +230,11 @@ describe("evidence / findings rendering", () => {
     const r2 = out.find((f) => f.rule === "fcq:sql/R2")!;
     expect(r2.severity).toBe("blocker"); // fcq CRITICAL→blocker outranks LLM major
     expect(r2.message).toBe("m2\n리뷰어: user input reaches ${}");
-    expect(r2.suggestion).toContain("#{a}"); // reviewer's TO-BE replaces the placeholder
+    expect(r2.toBe).toBe("#{a}"); // reviewer's real fix replaces the rule-description placeholder
+    expect(r2.asIs).toBe("${a}");
     const r1 = out.find((f) => f.rule === "fcq:pmd/R1")!;
     expect(r1.severity).toBe("blocker"); // LLM blocker outranks fcq MINOR
-    expect(r1.suggestion).toBe("TO-BE: d1"); // LLM had no suggestion → fcq's stays
+    expect(r1.toBe).toBe("d1"); // LLM wrote no fix → fcq's placeholder stays
     expect(out.find((f) => f.rule === "fcq:arch/R3")!.message).toBe("m3"); // unanchored: untouched
   });
 

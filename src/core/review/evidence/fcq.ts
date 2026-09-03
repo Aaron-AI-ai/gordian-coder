@@ -26,7 +26,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { z } from "zod";
-import { type Category, type Finding, type Severity } from "../contract";
+import { splitFix, type Category, type Finding, type Severity } from "../contract";
 import { loadConfig } from "../config";
 import { targetRange } from "../pipeline/segment";
 
@@ -35,7 +35,7 @@ export const FCQ_DEFAULT_TIMEOUT_S = 900;
 /** Violations rendered per file in the reviewer prompt (rest is counted). */
 export const FCQ_EVIDENCE_MAX_ITEMS = 40;
 export const FCQ_EVIDENCE_MAX_CHARS = 6_000;
-/** Cap on the `code.lines` snippet turned into an AS-IS suggestion. */
+/** Cap on the `code.lines` snippet used as a violation's `asIs`. */
 const FCQ_SNIPPET_MAX_LINES = 12;
 
 export const FCQ_SEVERITIES = ["INFO", "MINOR", "MAJOR", "CRITICAL", "BLOCKER"] as const;
@@ -372,12 +372,12 @@ export function renderFcqEvidence(violations: FcqFileViolation[], fixAll = false
   const scope = fixAll
     ? [
         "Use them as leads: for EVERY hit above, write the corrected code as a",
-        "concrete AS-IS/TO-BE fix — or state why it is a false positive. fcq has",
+        "concrete fix in `asIs`/`toBe` — or state why it is a false positive. fcq has",
         "no fix text, so a hit you skip ships with only the rule description.",
       ]
     : [
         "Use them as leads: for CRITICAL/MAJOR hits, trace the actual data flow",
-        "and give an AS-IS/TO-BE fix or state why it is a false positive.",
+        "and give the fix in `asIs`/`toBe`, or state why it is a false positive.",
       ];
   const head = ["## Static analysis (fcq, already run for you)"];
   const tail = [
@@ -429,13 +429,13 @@ export function mapFcqCategory(c: string): Category {
 
 /** Findings for the report: one per violation, rule tagged `fcq:`. The
  * violation snippet is the AS-IS; fcq has no fix text, so the rule's own
- * description (what the rule demands) stands in as the TO-BE. */
+ * description (what the rule demands) stands in as the TO-BE — a placeholder a
+ * reviewer's real correction replaces at merge. The two are separate fields:
+ * concatenated, a long snippet used to truncate away the fix entirely. */
 export function fcqFindings(file: string, violations: FcqFileViolation[]): Finding[] {
   return violations.map((v) => {
-    const tobe = v.description || `(apply ${v.ruleId})`;
-    const suggestion = v.snippet?.length
-      ? `AS-IS:\n\`\`\`\n${v.snippet.join("\n")}\n\`\`\`\nTO-BE: ${tobe}`
-      : `TO-BE: ${tobe}`;
+    const toBe = v.description || `(apply ${v.ruleId})`;
+    const asIs = v.snippet?.length ? v.snippet.join("\n") : undefined;
     return {
       category: mapFcqCategory(v.category),
       severity: SEVERITY_MAP[v.severity],
@@ -443,7 +443,8 @@ export function fcqFindings(file: string, violations: FcqFileViolation[]): Findi
       ...(v.line ? { line: v.line } : {}),
       rule: `fcq:${v.analyzer}/${v.ruleId}`,
       message: v.message || v.description,
-      suggestion,
+      ...(asIs ? { asIs } : {}),
+      toBe,
     };
   });
 }
@@ -472,11 +473,17 @@ export function mergeFcqFindings(llm: Finding[], fcq: Finding[]): Finding[] {
     if (i < 0) return f;
     const [l] = rest.splice(i, 1);
     const severity = SEV_ORDER[Math.min(SEV_ORDER.indexOf(f.severity), SEV_ORDER.indexOf(l.severity))];
+    // Per field, not wholesale: a reviewer who wrote only the corrected code
+    // keeps fcq's snippet as the AS-IS instead of losing it.
+    const mine = splitFix(l);
+    const theirs = splitFix(f);
     return {
       ...f,
       severity,
       message: `${f.message}\n리뷰어: ${l.message}`,
-      suggestion: l.suggestion?.trim() ? l.suggestion : f.suggestion,
+      ...(mine.asIs || theirs.asIs ? { asIs: mine.asIs ?? theirs.asIs } : {}),
+      ...(mine.toBe || theirs.toBe ? { toBe: mine.toBe ?? theirs.toBe } : {}),
+      suggestion: undefined,
     };
   });
   return [...rest, ...merged];

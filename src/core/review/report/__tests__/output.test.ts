@@ -419,3 +419,40 @@ describe("multi-line suggestions", () => {
     expect(html).not.toContain("```");
   });
 });
+
+describe("AS-IS / TO-BE rendering", () => {
+  const f = (extra: Partial<Finding>): Finding => ({
+    category: "correctness", severity: "major", file: "src/A.java",
+    rule: "r", message: "m", ...extra,
+  } as Finding);
+
+  it("renders the two halves as separate labelled, fenced blocks", () => {
+    // One box was unreadable: the fix trailed the offending code with no
+    // separation, and unfenced code lost its indentation entirely.
+    const md = renderReport({ "src/A.java": [f({ asIs: "int a;\nint b;", toBe: "long a;\nlong b;" })] }, "t", "en");
+    expect(md).toContain("**AS-IS**");
+    expect(md).toContain("**TO-BE**");
+    expect(md).toContain("```java\nint a;\nint b;\n```");
+    expect(md).toContain("```java\nlong a;\nlong b;\n```");
+    expect(md.indexOf("**AS-IS**")).toBeLessThan(md.indexOf("**TO-BE**"));
+  });
+
+  it("does not double-fence code the model already fenced", () => {
+    const md = renderReport({ "src/A.java": [f({ toBe: "```java\nint a;\n```" })] }, "t", "en");
+    expect(md).not.toContain("``````");
+  });
+
+  it("still renders a legacy single suggestion, split on its markers", () => {
+    // Artifacts written before the split, and models that keep sending one field.
+    const md = renderReport({ "src/A.java": [f({ suggestion: "AS-IS:\nint a;\nTO-BE:\nlong a;" })] }, "t", "en");
+    expect(md).toContain("**AS-IS**");
+    expect(md).toContain("**TO-BE**");
+    expect(md).toContain("long a;");
+  });
+
+  it("keeps a one-line fix inline in the table", () => {
+    const md = renderReport({ "src/A.java": [f({ toBe: "use long" })] }, "t", "en");
+    expect(md).toContain("| use long |");
+    expect(md).not.toContain("**TO-BE**");
+  });
+});

@@ -13,7 +13,9 @@
  * Starting a session is start.ts; the per-round prompt is prompt.ts.
  */
 
-import { REQUIRED_CATEGORIES, SubmitSchema, coverage, degenerateReason, verdict, type Finding, type Severity } from "../contract";
+import { REQUIRED_CATEGORIES, SubmitSchema, coverage, degenerateReason, verdict, type Finding, type Severity,
+  hasFix,
+} from "../contract";
 
 import { resolveOutputPath, writeReport, renderReport } from "../report/output";
 import { writeFileReview } from "./run-store";
@@ -132,7 +134,7 @@ export function ruleFileContent(
 function finalCheckNotes(
   st: ReviewState,
   file: string,
-  findings: { severity: Severity; suggestion?: string }[]
+  findings: { severity: Severity; asIs?: string; toBe?: string; suggestion?: string }[]
 ): string[] {
   const notes: string[] = [];
   if (!Object.keys(st.callLog[file] ?? {}).length) {
@@ -142,7 +144,7 @@ function finalCheckNotes(
     );
   }
   const noFix = findings.filter(
-    (f) => (f.severity === "blocker" || f.severity === "major") && !f.suggestion
+    (f) => (f.severity === "blocker" || f.severity === "major") && !hasFix(f)
   ).length;
   if (noFix) notes.push(`- ${noFix} blocker/major finding(s) lack a concrete \`suggestion\`.`);
   return notes;

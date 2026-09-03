@@ -266,15 +266,23 @@ export function createReviewModule(input: PluginInput): {
             line: z.number().int().positive().optional(),
             rule: z.string(),
             message: z.string(),
-            // Stays .optional() at the schema level on purpose: a hard-required
-            // field would reject the whole submit and funnel a valid review into
-            // the failed-submit loop. The MUST lives in the prompts.
+            // Two fields with separate budgets. As one, a long AS-IS truncated
+            // the corrected code away entirely. Both stay .optional() at the
+            // schema level on purpose: a hard-required field would reject the
+            // whole submit and funnel a valid review into the failed-submit
+            // loop. The MUST lives in the prompts.
+            asIs: z
+              .string()
+              .optional()
+              .describe("REQUIRED: the current problematic code, verbatim"),
+            toBe: z
+              .string()
+              .optional()
+              .describe("REQUIRED: the corrected code, ready to paste over the AS-IS"),
             suggestion: z
               .string()
               .optional()
-              .describe(
-                "REQUIRED: the fix as an AS-IS / TO-BE pair — AS-IS: fenced block with the current problematic code, TO-BE: fenced block with the corrected code"
-              ),
+              .describe("Deprecated — send asIs/toBe instead; an AS-IS/TO-BE string still parses"),
           })
         )
         .describe("Issues found (may be empty)"),

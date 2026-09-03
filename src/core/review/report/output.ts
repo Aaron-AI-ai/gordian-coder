@@ -14,7 +14,7 @@
 import { existsSync, statSync, readdirSync, readFileSync, renameSync } from "node:fs";
 import { join, isAbsolute, dirname, basename } from "node:path";
 import { loadConfig } from "../config";
-import { SEVERITIES, verdict, type Finding, type Severity } from "../contract";
+import { SEVERITIES, splitFix, verdict, type Finding, type Severity } from "../contract";
 import { renderHtmlReport } from "./html";
 
 const DEFAULT_REPORT_DIR = "fcq/report/f-review/";
@@ -79,6 +79,8 @@ interface ReportLabels {
   existing: string; // marker for findings already present in the baseline report
   seeBelow: string; // table cell standing in for a multi-line suggestion
   detailsTitle: string; // heading of the section holding those suggestions
+  asIs: string; // label above the offending code
+  toBe: string; // label above the corrected code
 }
 
 const LABELS: Record<string, ReportLabels> = {
@@ -90,6 +92,8 @@ const LABELS: Record<string, ReportLabels> = {
     existing: "기존",
     seeBelow: "↓ 아래 참조",
     detailsTitle: "제안 상세",
+    asIs: "현재 코드 (AS-IS)",
+    toBe: "수정 코드 (TO-BE)",
   },
   en: {
     title: "# Code Review Report",
@@ -99,6 +103,8 @@ const LABELS: Record<string, ReportLabels> = {
     existing: "existing",
     seeBelow: "↓ see below",
     detailsTitle: "Suggestions",
+    asIs: "AS-IS",
+    toBe: "TO-BE",
   },
   ja: {
     title: "# コードレビューレポート",
@@ -108,6 +114,8 @@ const LABELS: Record<string, ReportLabels> = {
     existing: "既存",
     seeBelow: "↓ 下記参照",
     detailsTitle: "提案の詳細",
+    asIs: "現状 (AS-IS)",
+    toBe: "修正後 (TO-BE)",
   },
 };
 
@@ -116,12 +124,41 @@ function cell(s: string): string {
   return s.replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
 }
 
-/** A suggestion carrying real code (or any multi-line text) cannot live in a
- * table cell: markdown has no cell newline, so cell() flattens it into a wall
- * of `<br>` that is unreadable and unpastable. Those move under the table as
- * their own block; single-line suggestions stay inline where they read fine. */
+/** A fix carrying real code (or any multi-line text) cannot live in a table
+ * cell: markdown has no cell newline, so cell() flattens it into a wall of
+ * `<br>` that is unreadable and unpastable. Those move under the table as
+ * their own block; single-line fixes stay inline where they read fine. */
 function isBlockSuggestion(s: string | undefined): s is string {
   return !!s && /\r?\n/.test(s);
+}
+
+/** Fence a code block, unless the model already fenced it. Models emit both
+ * shapes, and a double fence renders the backticks as literal text. */
+function fenced(code: string, lang: string): string {
+  const t = code.trim();
+  return /^```/.test(t) ? t : `\`\`\`${lang}\n${t}\n\`\`\``;
+}
+
+/** Language tag for the fence, from the reviewed file's extension. */
+function fenceLang(file: string): string {
+  const ext = file.slice(file.lastIndexOf(".") + 1).toLowerCase();
+  return { java: "java", ts: "ts", tsx: "tsx", js: "js", jsx: "jsx", py: "python",
+    kt: "kotlin", go: "go", rb: "ruby", cs: "csharp", sql: "sql", xml: "xml",
+    yml: "yaml", yaml: "yaml", json: "json" }[ext] ?? "";
+}
+
+/** AS-IS and TO-BE as separate labelled blocks.
+ *
+ * They used to be one string in one box: unreadable, and the corrected code
+ * was the half that got cut when the shared budget ran out. Each is now its
+ * own fenced block, so the fix can be read and pasted on its own. */
+function fixBlocks(f: Finding, L: ReportLabels): string[] {
+  const { asIs, toBe } = splitFix(f);
+  const lang = fenceLang(f.file);
+  const out: string[] = [];
+  if (asIs) out.push(`**${L.asIs}**`, "", fenced(asIs, lang), "");
+  if (toBe) out.push(`**${L.toBe}**`, "", fenced(toBe, lang), "");
+  return out;
 }
 
 // ── baseline (previous-report) support ───────────────────────────
@@ -224,26 +261,25 @@ export function renderReport(
     }
     lines.push(L.header);
     lines.push("| --- | --- | --- | --- | --- | --- |");
-    const blocks: (Finding & { suggestion: string })[] = [];
+    const blocks: Finding[] = [];
     for (const x of fs) {
       const old = baseline?.has(baselineKey(file, x.rule)) ? `**[${L.existing}]** ` : "";
-      if (isBlockSuggestion(x.suggestion)) blocks.push({ ...x, suggestion: x.suggestion });
-      const suggestion = !x.suggestion
-        ? "-"
-        : isBlockSuggestion(x.suggestion)
-          ? L.seeBelow
-          : cell(x.suggestion);
+      const fix = splitFix(x);
+      // An AS-IS always means there is code to show, so those go below too.
+      const inline = !fix.asIs && fix.toBe && !isBlockSuggestion(fix.toBe) ? fix.toBe : undefined;
+      if (!inline && (fix.asIs || fix.toBe)) blocks.push(x);
+      const suggestion = inline ? cell(inline) : fix.asIs || fix.toBe ? L.seeBelow : "-";
       lines.push(
         `| ${x.severity} | ${x.category} | ${x.line ?? "-"} | ${cell(x.rule)} | ${old}${cell(x.message)} | ${suggestion} |`
       );
     }
     lines.push("");
-    // Kept verbatim: the model writes these as markdown (usually a fenced code
-    // block), and the point of moving them here is that they stay pastable.
+    // Kept verbatim inside the fences: the point of moving them here is that
+    // they stay pastable.
     if (blocks.length) {
       lines.push(`### ${L.detailsTitle}`, "");
       for (const x of blocks) {
-        lines.push(`#### ${x.rule}${x.line ? ` (L${x.line})` : ""}`, "", x.suggestion.trim(), "");
+        lines.push(`#### ${x.rule}${x.line ? ` (L${x.line})` : ""}`, "", ...fixBlocks(x, L));
       }
     }
   }

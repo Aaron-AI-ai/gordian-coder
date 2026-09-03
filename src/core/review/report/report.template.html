@@ -126,7 +126,12 @@ details.vblk ul { margin:0; padding:10px 16px 14px 30px; font-size:13px; list-st
 details.vblk li { margin:10px 0; line-height:1.65; }
 details.vblk li::before { content:'\25B8'; color:var(--graphite); margin-right:7px; }
 .fix { display:block; margin:6px 0 0 16px; padding:8px 11px; background:#f7f6f1; border-left:3px solid var(--line);
-  border-radius:0 6px 6px 0; font-size:12px; white-space:pre-wrap; }
+  border-radius:0 6px 6px 0; font-size:12px; white-space:pre-wrap; overflow-x:auto; }
+/* The corrected code is what a reader acts on — it reads as the answer, while
+   the offending code is context. Muting one and accenting the other keeps a
+   long AS-IS from burying the fix that follows it. */
+.fix.asis { background:#faf9f6; color:var(--graphite); }
+.fix.tobe { background:#f2f6f1; border-left-color:#5c8a5c; }
 .fix .fixlbl { font-family:var(--mono); font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--graphite); display:block; margin-bottom:3px; }
 .viol-controls { display:flex; gap:7px; margin:0 0 12px; }
 .empty-note { color:var(--graphite); font-family:var(--mono); font-size:13px; padding:18px 4px; }
