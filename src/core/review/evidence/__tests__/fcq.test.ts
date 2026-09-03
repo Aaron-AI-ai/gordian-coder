@@ -396,6 +396,44 @@ describe("run-mode integration", () => {
     expect(out).toContain("f_review_fix_context");
   });
 
+  it("gates finalize on the fix pass when fcqFix is on", async () => {
+    const d = gitRepo();
+    fakeFcq(d);
+    writeFileSync(join(d, ".f-review.json"), JSON.stringify({ fcq: true, fcqFix: true, fcqOptions: { bin: join(d, "fcq-bin"), timeout: 30 } }));
+    const plan = await planReview({ commit: "HEAD" }, d);
+    expect(plan).toContain("FIX PASS");
+    expect(plan).toContain("WAIT for every fix subagent to return");
+    expect(plan).toContain("every fix subagent has returned");
+  });
+
+  it("rewrites the report when a fix lands after the first finalize", async () => {
+    // Observed: a fixer returned 24 seconds after finalize, and its 18 fixes
+    // never reached the report — the fingerprint did not include fixes, so
+    // the retry the warning asks for returned the cached answer forever.
+    const d = gitRepo();
+    fakeFcq(d);
+    writeFileSync(join(d, ".f-review.json"), JSON.stringify({ fcq: true, fcqFix: true, fcqOptions: { bin: join(d, "fcq-bin"), timeout: 30 } }));
+    const plan = await planReview({ commit: "HEAD" }, d);
+    const runId = /Run created: (\S+)/.exec(plan)![1];
+    for (const file of ["src/A.java", "src/B.java"]) {
+      await writeFileReview(runId, { file, assessed: [...REQUIRED_CATEGORIES], findings: [], explorationCalls: 1, partial: false }, "# r", d);
+    }
+    const first = await finalizeRun(runId, d);
+    expect(first).toContain("fcqFix is on but");
+    const firstReport = readFileSync(join(d, /Report: (\S+\.md)/.exec(first)![1]), "utf8");
+    expect(firstReport).not.toContain("// fixed late");
+
+    // The fix arrives now, after the report was written.
+    const rows = readFcqFile(runDir(runId, d), "src/A.java");
+    await submitFix(
+      { runId, file: "src/A.java", fixes: rows.map((v) => ({ line: v.line ?? 0, ruleId: v.ruleId, toBe: "// fixed late" })) },
+      d
+    );
+    const second = await finalizeRun(runId, d);
+    const secondReport = readFileSync(join(d, /Report: (\S+\.md)/.exec(second)![1]), "utf8");
+    expect(secondReport).toContain("// fixed late");
+  });
+
   it("stays quiet at finalize once every violation has a fix", async () => {
     const d = gitRepo();
     fakeFcq(d);

@@ -345,6 +345,16 @@ describe("planReview", () => {
     expect(msg2).not.toContain("whole-file");
   });
 
+  it("tells the orchestrator to wait for the fix pass before finalizing", async () => {
+    // Without this the orchestrator finalizes when judging is done, and a fix
+    // still in flight misses the report entirely.
+    const d = gitRepo();
+    writeFileSync(join(d, ".f-review.json"), JSON.stringify({ fcq: false }));
+    const plain = await planReview({ commit: "HEAD" }, d);
+    expect(plain).not.toContain("every fix subagent has returned");
+    expect(plain).not.toContain("FIX PASS");
+  });
+
   it("refuses runs above MAX_RUN_TARGETS", async () => {
     const d = dir();
     const files = Array.from({ length: MAX_RUN_TARGETS + 1 }, (_, i) => `f${i}.ts`);

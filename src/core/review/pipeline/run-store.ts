@@ -21,6 +21,7 @@ import { z } from "zod";
 
 import { buildRubric, loadExtraRules, loadFrameworkGuide } from "../evidence/rubric";
 import { readRunJudgments } from "./judge-store";
+import { loadAllFixes } from "./fixer";
 import { RUNS_DIR, loadRun, type RunMeta, FileReviewResultSchema, readFileReviewResult, reviewArtifactHash, reviewSlug, runDir, type FileReviewResult, type PersistedFileReviewResult } from "./artifact";
 
 /** Hard cap on targets per run — refuse larger fan-outs (split the range instead). */
@@ -65,7 +66,11 @@ export function finalizeFingerprint(
   results: PersistedFileReviewResult[],
   judgments: ReturnType<typeof readRunJudgments>,
   currentCriteriaIdentity: string,
-  currentSourceIdentity: string
+  currentSourceIdentity: string,
+  /** Recorded fcq fixes, per file. They change the report's TO-BE column, so a
+   * fix that lands after a finalize must invalidate its cache — otherwise the
+   * retry the warning asks for returns the stale report forever. */
+  fixes: { file: string; fixes: unknown[] }[] = []
 ): string {
   return Bun.hash(
     JSON.stringify({
@@ -83,6 +88,9 @@ export function finalizeFingerprint(
       // reuse a stale PASS response.
       judgments: judgments
         .map((judgment) => judgment)
+        .sort((a, b) => a.file.localeCompare(b.file)),
+      fixes: fixes
+        .map((f) => ({ file: f.file, fixes: f.fixes }))
         .sort((a, b) => a.file.localeCompare(b.file)),
     })
   ).toString();
@@ -253,7 +261,8 @@ export function runIsTerminal(runId: string, cwd: string): boolean {
           results,
           judgments,
           freshness.currentCriteriaIdentity,
-          freshness.currentSourceIdentity
+          freshness.currentSourceIdentity,
+          loadAllFixes(runId, meta.targets, cwd)
         ) &&
       diskTextHash(absoluteOutputPath(parsed.data.reportPath, cwd)) === parsed.data.reportHash
     );

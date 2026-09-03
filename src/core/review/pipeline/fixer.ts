@@ -188,6 +188,11 @@ export function applyFixes<T extends { line?: number; rule: string; asIs?: strin
   });
 }
 
+/** Every file's recorded fixes, for the finalize fingerprint. */
+export function loadAllFixes(runId: string, files: string[], cwd: string): FileFixes[] {
+  return files.map((file) => loadFixes(runId, file, cwd));
+}
+
 /** Per-file fix coverage for the finalize summary. */
 export function fixCoverage(
   runId: string,

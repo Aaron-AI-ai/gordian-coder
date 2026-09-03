@@ -28,7 +28,7 @@ import { defaultLabel, loadBaseline, manifestTimestamp, renderReviewContext, res
 import { readRunJudgments } from "./judge-store";
 import { DEFAULT_JUDGE_THRESHOLD } from "./judge-store";
 import { fcqFindings, mergeFcqFindings, readFcqFile, readFcqSummary, renderFcqSection, runFcq } from "../evidence/fcq";
-import { applyFixes, fixCoverage, loadFixes } from "./fixer";
+import { applyFixes, fixCoverage, loadAllFixes, loadFixes } from "./fixer";
 import { rubricSources } from "../evidence/rubric";
 
 export interface PlanReviewArgs {
@@ -239,7 +239,7 @@ function renderPlanInstructions(meta: RunMeta): string {
           [
             `FIX PASS — for EACH file above, spawn ONE subagent of type \`f-fixer\` (NOT f-reviewer, NOT f-judge — only f-fixer can call these tools) with this prompt:`,
             `   "Call f_review_fix_context with runId=\"${meta.runId}\" and file=\"<file>\", write the corrected code for every violation, then call f_review_fix_submit."`,
-            `   It runs independently of the review — same batch limit — and writes the fixes finalize merges onto the fcq rows.`,
+            `   It runs independently of the review — same batch limit. WAIT for every fix subagent to return before you finalize: finalize merges whatever is on disk at that moment, and a fix that lands afterwards is not in the report.`,
           ].join("\n"),
         ]
       : [];
@@ -250,11 +250,11 @@ function renderPlanInstructions(meta: RunMeta): string {
           `   "Call f_review_judge_context with runId=\"${meta.runId}\" and file=\"<file>\", evaluate that review, then call f_review_judge."`,
         ].join("\n"),
         `Follow the message f_review_judge returns EXACTLY: it either accepts the file, or tells you to re-spawn the f-reviewer for that file (judge feedback is injected automatically) and judge again. The rework cap is enforced by the tool — never re-spawn beyond what it instructs.`,
-        `When every file is accepted, call f_review_finalize with runId="${meta.runId}".`,
+        `When every file is accepted${meta.fcqFix && meta.fcq?.status === "ok" ? " AND every fix subagent has returned" : ""}, call f_review_finalize with runId="${meta.runId}".`,
         `If finalize reports missing files, re-spawn subagents for ONLY those files ONCE (judging each again), then finalize again.`,
       ]
     : [
-        `When every file has been dispatched, call f_review_finalize with runId="${meta.runId}".`,
+        `When every file has been dispatched${meta.fcqFix && meta.fcq?.status === "ok" ? " AND every fix subagent has returned" : ""}, call f_review_finalize with runId="${meta.runId}".`,
         `If finalize reports missing files, re-spawn subagents for ONLY those files ONCE, then finalize again.`,
       ];
   const fcqLine = !meta.fcq
@@ -301,7 +301,8 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
     results,
     allJudgments,
     freshness.currentCriteriaIdentity,
-    freshness.currentSourceIdentity
+    freshness.currentSourceIdentity,
+    loadAllFixes(runId, meta.targets, cwd)
   );
   const cachePath = join(runDir(runId, cwd), "finalize.json");
   if (existsSync(cachePath)) {
@@ -467,9 +468,11 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
           if (!unfixed) return "";
           const never = cov.filter((c) => c.fixed === 0).map((c) => c.file);
           return (
-            ` ⚠️ fcqFix is on but ${unfixed} violation(s) have no fix — they ship with the rule text only` +
-            (never.length ? `; the fix pass produced nothing for ${never.length} file(s)` : "") +
-            `. Spawn an f-fixer subagent per file (f_review_fix_context / f_review_fix_submit), then finalize again.`
+            `\n⚠️ fcqFix is on but ${unfixed} violation(s) have no fix — they ship with the rule text only` +
+            (never.length ? `; the fix pass produced nothing for ${never.join(", ")}` : "") +
+            `.\nSpawn ONE subagent of type \`f-fixer\` for each of those files (f_review_fix_context / ` +
+            `f_review_fix_submit), WAIT for them to return, then call f_review_finalize again — ` +
+            `the report is rewritten with the fixes. Do this at most once.`
           );
         })()
       : "";
