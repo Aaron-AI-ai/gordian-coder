@@ -16,7 +16,8 @@ import { buildDiffMap } from "./context";
 import { afterRef, readFileAt, renderFileContent } from "../tools/read";
 import { loadExtraRules, loadFrameworkGuide, renderExtraRules } from "../evidence/rubric";
 import { readFcqFile, renderFcqEvidence } from "../evidence/fcq";
-import { loadRun, runDir, type PersistedFileReviewResult, type RunMeta } from "./run-store";
+import { loadRun, type RunMeta } from "./artifact";
+import { runDir, type PersistedFileReviewResult } from "./artifact";
 import {
   DEFAULT_JUDGE_THRESHOLD,
   artifactIdentity,

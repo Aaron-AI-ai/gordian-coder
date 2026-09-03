@@ -19,7 +19,9 @@ import { loadConfig, resolveDeepPasses, resolveMaxIter, resolveMaxToolCalls } fr
 import { buildRubric, loadFrameworkGuide, loadExtraRules, rubricSources } from "../evidence/rubric";
 
 import { renderReviewContext, resolveOutputPath, resolveManifestPath, writeManifest, loadBaseline, defaultLabel, manifestTimestamp } from "../report/output";
-import { loadRun, readFileReviewResult, runFreshness } from "./run-store";
+import { runFreshness } from "./run-store";
+import { loadRun } from "./artifact";
+import { readFileReviewResult } from "./artifact";
 import { judgeFeedbackFor, currentReviewTerminal, reworkCount, reviewReworkStatus } from "./judge";
 import { MAX_JUDGE_ROUNDS } from "./judge-store";
 import { setState, getState, currentFile, activeStates, type ReviewState } from "./state";
@@ -29,7 +31,7 @@ import { SEGMENT_THRESHOLD, planSegments, targetRange } from "./segment";
 import { dbg, setReviewDebug } from "../debug";
 import { VERSION } from "../../../version";
 import { readFcqFile } from "../evidence/fcq";
-import { runDir } from "./run-store";
+import { runDir } from "./artifact";
 
 /** Sequential single-session loop: past this many files context degrades. */
 export const LARGE_REVIEW_WARN_AT = 30;

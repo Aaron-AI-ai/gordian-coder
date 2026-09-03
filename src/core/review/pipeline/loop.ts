@@ -16,7 +16,8 @@
 import { REQUIRED_CATEGORIES, SubmitSchema, coverage, degenerateReason, verdict, type Finding, type Severity } from "../contract";
 
 import { resolveOutputPath, writeReport, renderReport } from "../report/output";
-import { writeFileReview, type FileReviewResult } from "./run-store";
+import { writeFileReview } from "./run-store";
+import { type FileReviewResult } from "./artifact";
 
 import { getState, clearState, currentFile, isDone, rotateSubmitToken, type ReviewState } from "./state";
 import { fileRead, renderFileContent, sanitizeFindingLines, MAX_ITER } from "../tools/read";

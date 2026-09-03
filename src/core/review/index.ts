@@ -18,6 +18,7 @@ export * from "./pipeline/start";
 export * from "./pipeline/prompt";
 export * from "./pipeline/loop";
 export * from "./evidence/dossier";
+export * from "./pipeline/artifact";
 export * from "./pipeline/run-store";
 export * from "./pipeline/run";
 export * from "./pipeline/judge-store";

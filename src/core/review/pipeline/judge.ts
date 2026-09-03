@@ -18,78 +18,17 @@
  * finalizeRun reports per-file judge outcomes.
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { type Finding } from "../contract";
-import { loadRun, readFileReviewResult, reviewSlug, runDir, type PersistedFileReviewResult } from "./run-store";
-import {
-  DEFAULT_JUDGE_THRESHOLD,
-  FileJudgmentSchema,
-  JudgeIdentitySchema,
-  JudgeSubmitSchema,
-  MAX_INVALID_JUDGE_SUBMISSIONS,
-  MAX_JUDGE_ROUNDS,
-  artifactIdentity,
-  attemptMatchesReview,
-  judgmentPath,
-  persistJudgment,
-  persistJudgmentSync,
-  submissionHash,
-  terminalMatchesReview,
-  terminalMessage,
-  type FileJudgment,
-  type FindingJudgment,
-  type JudgeAttempt,
-  type JudgeSubmitPayload,
-  type JudgeTerminal,
-} from "./judge-store";
-import {
-  buildJudgePrompt,
-  contextOverflowTerminal,
-  isContextOverflow,
-  overflowContext,
-} from "./judge-prompt";
+
+import { loadRun } from "./artifact";
+import { runDir, type PersistedFileReviewResult } from "./artifact";
+import { DEFAULT_JUDGE_THRESHOLD, JudgeIdentitySchema, JudgeSubmitSchema, MAX_INVALID_JUDGE_SUBMISSIONS, MAX_JUDGE_ROUNDS, artifactIdentity, attemptMatchesReview, judgmentPath, consistencyValidationError, indexValidationError, loadJudgment, loadReviewResult, persistJudgment, persistJudgmentSync, submissionHash, terminalMatchesReview, terminalMessage, type FileJudgment, type JudgeAttempt, type JudgeTerminal } from "./judge-store";
+import { buildJudgePrompt, contextOverflowTerminal, isContextOverflow, overflowContext } from "./judge-prompt";
 
 /** Effective rework cap for a run: `judgeRounds` snapshotted into the run
  * meta at plan time, else MAX_JUDGE_ROUNDS. */
 function reworkCap(meta: { judgeRounds?: number } | null | undefined): number {
   return meta?.judgeRounds ?? MAX_JUDGE_ROUNDS;
-}
-
-/** All recorded judgments for one file (empty attempts when never judged or
- * the file on disk is unreadable/shape-corrupt). */
-export function loadJudgment(runId: string, file: string, cwd: string): FileJudgment {
-  const p = judgmentPath(runId, file, cwd);
-  if (existsSync(p)) {
-    try {
-      const parsed = FileJudgmentSchema.safeParse(JSON.parse(readFileSync(p, "utf8")));
-      if (parsed.success && parsed.data.file === file) {
-        return validatePersistedAttempts(parsed.data, runId, cwd);
-      }
-    } catch {
-      /* fall through to empty */
-    }
-  }
-  return { file, attempts: [], invalidSubmissions: [] };
-}
-
-/** Every file's judgment for a run (finalize summary input). */
-export function readRunJudgments(runId: string, cwd: string): FileJudgment[] {
-  const dir = join(runDir(runId, cwd), "judgments");
-  if (!existsSync(dir)) return [];
-  const out: FileJudgment[] = [];
-  for (const f of readdirSync(dir)) {
-    if (!f.endsWith(".json")) continue;
-    try {
-      const parsed = FileJudgmentSchema.safeParse(JSON.parse(readFileSync(join(dir, f), "utf8")));
-      if (parsed.success && f === `${reviewSlug(parsed.data.file)}.json`) {
-        out.push(validatePersistedAttempts(parsed.data, runId, cwd));
-      }
-    } catch {
-      /* skip unreadable partial writes */
-    }
-  }
-  return out;
 }
 
 /** Rework verdicts recorded so far for a file — the judge-cap driver. */
@@ -128,14 +67,6 @@ export function reviewReworkStatus(
   const attempt = judgment.attempts.findLast((entry) => attemptMatchesReview(entry, review));
   if (!attempt) return "unjudged";
   return attempt.verdict;
-}
-
-function loadReviewResult(
-  runId: string,
-  file: string,
-  cwd: string
-): PersistedFileReviewResult | null {
-  return readFileReviewResult(runId, file, cwd);
 }
 
 /** Everything a judge subagent needs: the change, the submitted review, the
@@ -272,111 +203,6 @@ function attemptMessage(
     `  "Call f_review_context with runId=\"${runId}\" and files=[\"${file}\"], review that single file addressing the judge feedback injected into your instructions, and call f_review_submit."`,
     `After it completes, spawn a NEW f-judge subagent for ${file} again (fresh session).`,
   ].join("\n");
-}
-
-function indexValidationError(
-  findings: readonly Finding[],
-  judgments: readonly FindingJudgment[]
-): string | null {
-  const indices = judgments.map((j) => j.index);
-  const unique = new Set(indices);
-  const expected = findings.length;
-  if (
-    indices.length === expected &&
-    unique.size === expected &&
-    indices.every((index) => index >= 0 && index < expected)
-  ) {
-    return null;
-  }
-  return (
-    `findingJudgments must contain every index 0..${Math.max(0, expected - 1)} exactly once ` +
-    `(expected ${expected}, received [${indices.join(", ")}])`
-  );
-}
-
-function consistencyValidationError(
-  payload: JudgeSubmitPayload,
-  findings: readonly Finding[],
-  threshold: number
-): string | null {
-  if (payload.score < threshold && payload.feedback.trim().length === 0) {
-    return `score ${payload.score} requires concrete non-empty rework feedback`;
-  }
-  if (payload.score >= threshold) {
-    const rejected = payload.findingJudgments.filter(
-      (judgment) =>
-        !judgment.valid ||
-        !judgment.evidenced ||
-        !judgment.severityFit ||
-        ((findings[judgment.index]?.severity === "blocker" ||
-          findings[judgment.index]?.severity === "major") &&
-          !judgment.actionable)
-    );
-    if (rejected.length) {
-      return (
-        `score ${payload.score} cannot pass while ${rejected.length} finding judgment(s) ` +
-        `fail validity/evidence/severity/actionability checks`
-      );
-    }
-    if (payload.coverageGaps.length) {
-      return `score ${payload.score} cannot pass while coverageGaps is non-empty`;
-    }
-  }
-  return null;
-}
-
-/** Persisted attempts are external state, so shape validation alone is not
- * enough. Re-run every cross-field invariant that guards a current artifact;
- * a tampered or legacy attempt is ignored and the artifact remains unjudged. */
-function persistedAttemptValidationError(
-  attempt: JudgeAttempt,
-  review: PersistedFileReviewResult,
-  threshold: number
-): string | null {
-  if (!Number.isFinite(attempt.score) || attempt.score < 0 || attempt.score > 100) {
-    return `score ${attempt.score} is outside 0..100`;
-  }
-  const expectedVerdict: JudgeAttempt["verdict"] =
-    attempt.score >= threshold ? "pass" : "rework";
-  if (attempt.verdict !== expectedVerdict) {
-    return (
-      `verdict ${attempt.verdict} disagrees with score ${attempt.score} ` +
-      `and threshold ${threshold}`
-    );
-  }
-  const invalidIndices = indexValidationError(review.findings, attempt.findingJudgments);
-  if (invalidIndices) return invalidIndices;
-  return consistencyValidationError(
-    {
-      runId: "",
-      file: review.file,
-      findingJudgments: attempt.findingJudgments,
-      coverageGaps: attempt.coverageGaps,
-      score: attempt.score,
-      feedback: attempt.feedback,
-    },
-    review.findings,
-    threshold
-  );
-}
-
-function validatePersistedAttempts(
-  judgment: FileJudgment,
-  runId: string,
-  cwd: string
-): FileJudgment {
-  const review = loadReviewResult(runId, judgment.file, cwd);
-  const meta = loadRun(runId, cwd);
-  if (!review || !meta) return judgment;
-  const threshold = meta.judgeThreshold ?? DEFAULT_JUDGE_THRESHOLD;
-  const attempts = judgment.attempts.filter(
-    (attempt) =>
-      !attemptMatchesReview(attempt, review) ||
-      persistedAttemptValidationError(attempt, review, threshold) === null
-  );
-  return attempts.length === judgment.attempts.length
-    ? judgment
-    : { ...judgment, attempts };
 }
 
 async function recordInvalidSubmission(

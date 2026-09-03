@@ -18,7 +18,9 @@ import {
   type FcqFileViolation,
 } from "../fcq";
 import { finalizeRun, planReview } from "../../pipeline/run";
-import { loadRun, readFileReviewResult, writeFileReview } from "../../pipeline/run-store";
+import { writeFileReview } from "../../pipeline/run-store";
+import { loadRun } from "../../pipeline/artifact";
+import { readFileReviewResult } from "../../pipeline/artifact";
 import { startReview } from "../../pipeline/start";
 import { reviewPromptFor } from "../../pipeline/prompt";
 import { judgeContext, submitJudge } from "../../pipeline/judge";

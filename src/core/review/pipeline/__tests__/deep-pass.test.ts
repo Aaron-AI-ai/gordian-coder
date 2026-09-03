@@ -9,7 +9,8 @@ import { MAX_ITER } from "../../tools/read";
 import { getState, clearState } from "../state";
 import { REQUIRED_CATEGORIES } from "../../contract";
 import { planReview, finalizeRun } from "../run";
-import { createRun, loadRun, readRunResults } from "../run-store";
+import { createRun, readRunResults } from "../run-store";
+import { loadRun } from "../artifact";
 
 const tmps: string[] = [];
 afterEach(() => {

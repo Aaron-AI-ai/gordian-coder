@@ -12,11 +12,11 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { capped } from "../contract";
-import { reviewArtifactHash, reviewSlug, runDir, type PersistedFileReviewResult } from "./run-store";
+import { capped, type Finding } from "../contract";
+import { loadRun, readFileReviewResult, reviewArtifactHash, reviewSlug, runDir, type PersistedFileReviewResult } from "./artifact";
 
 /** Max rework (re-review) instructions per file — after that judging becomes
  * terminal INCOMPLETE and is flagged fail-closed in the final report.
@@ -174,4 +174,153 @@ export function terminalMessage(file: string, terminal: JudgeTerminal): string {
     `⚠️ Judge INCOMPLETE for ${file} review revision ${terminal.reviewRevision}: ${terminal.reason}. ` +
     `This file is terminal — do NOT re-spawn or judge it again; continue with the remaining files, then f_review_finalize.`
   );
+}
+
+export function loadReviewResult(
+  runId: string,
+  file: string,
+  cwd: string
+): PersistedFileReviewResult | null {
+  return readFileReviewResult(runId, file, cwd);
+}
+
+export function indexValidationError(
+  findings: readonly Finding[],
+  judgments: readonly FindingJudgment[]
+): string | null {
+  const indices = judgments.map((j) => j.index);
+  const unique = new Set(indices);
+  const expected = findings.length;
+  if (
+    indices.length === expected &&
+    unique.size === expected &&
+    indices.every((index) => index >= 0 && index < expected)
+  ) {
+    return null;
+  }
+  return (
+    `findingJudgments must contain every index 0..${Math.max(0, expected - 1)} exactly once ` +
+    `(expected ${expected}, received [${indices.join(", ")}])`
+  );
+}
+
+export function consistencyValidationError(
+  payload: JudgeSubmitPayload,
+  findings: readonly Finding[],
+  threshold: number
+): string | null {
+  if (payload.score < threshold && payload.feedback.trim().length === 0) {
+    return `score ${payload.score} requires concrete non-empty rework feedback`;
+  }
+  if (payload.score >= threshold) {
+    const rejected = payload.findingJudgments.filter(
+      (judgment) =>
+        !judgment.valid ||
+        !judgment.evidenced ||
+        !judgment.severityFit ||
+        ((findings[judgment.index]?.severity === "blocker" ||
+          findings[judgment.index]?.severity === "major") &&
+          !judgment.actionable)
+    );
+    if (rejected.length) {
+      return (
+        `score ${payload.score} cannot pass while ${rejected.length} finding judgment(s) ` +
+        `fail validity/evidence/severity/actionability checks`
+      );
+    }
+    if (payload.coverageGaps.length) {
+      return `score ${payload.score} cannot pass while coverageGaps is non-empty`;
+    }
+  }
+  return null;
+}
+
+/** Persisted attempts are external state, so shape validation alone is not
+ * enough. Re-run every cross-field invariant that guards a current artifact;
+ * a tampered or legacy attempt is ignored and the artifact remains unjudged. */
+export function persistedAttemptValidationError(
+  attempt: JudgeAttempt,
+  review: PersistedFileReviewResult,
+  threshold: number
+): string | null {
+  if (!Number.isFinite(attempt.score) || attempt.score < 0 || attempt.score > 100) {
+    return `score ${attempt.score} is outside 0..100`;
+  }
+  const expectedVerdict: JudgeAttempt["verdict"] =
+    attempt.score >= threshold ? "pass" : "rework";
+  if (attempt.verdict !== expectedVerdict) {
+    return (
+      `verdict ${attempt.verdict} disagrees with score ${attempt.score} ` +
+      `and threshold ${threshold}`
+    );
+  }
+  const invalidIndices = indexValidationError(review.findings, attempt.findingJudgments);
+  if (invalidIndices) return invalidIndices;
+  return consistencyValidationError(
+    {
+      runId: "",
+      file: review.file,
+      findingJudgments: attempt.findingJudgments,
+      coverageGaps: attempt.coverageGaps,
+      score: attempt.score,
+      feedback: attempt.feedback,
+    },
+    review.findings,
+    threshold
+  );
+}
+
+export function validatePersistedAttempts(
+  judgment: FileJudgment,
+  runId: string,
+  cwd: string
+): FileJudgment {
+  const review = loadReviewResult(runId, judgment.file, cwd);
+  const meta = loadRun(runId, cwd);
+  if (!review || !meta) return judgment;
+  const threshold = meta.judgeThreshold ?? DEFAULT_JUDGE_THRESHOLD;
+  const attempts = judgment.attempts.filter(
+    (attempt) =>
+      !attemptMatchesReview(attempt, review) ||
+      persistedAttemptValidationError(attempt, review, threshold) === null
+  );
+  return attempts.length === judgment.attempts.length
+    ? judgment
+    : { ...judgment, attempts };
+}
+
+/** All recorded judgments for one file (empty attempts when never judged or
+ * the file on disk is unreadable/shape-corrupt). */
+export function loadJudgment(runId: string, file: string, cwd: string): FileJudgment {
+  const p = judgmentPath(runId, file, cwd);
+  if (existsSync(p)) {
+    try {
+      const parsed = FileJudgmentSchema.safeParse(JSON.parse(readFileSync(p, "utf8")));
+      if (parsed.success && parsed.data.file === file) {
+        return validatePersistedAttempts(parsed.data, runId, cwd);
+      }
+    } catch {
+      /* fall through to empty */
+    }
+  }
+  return { file, attempts: [], invalidSubmissions: [] };
+}
+
+/** Every file's judgment for a run (finalize summary input). */
+export function readRunJudgments(runId: string, cwd: string): FileJudgment[] {
+  const dir = join(runDir(runId, cwd), "judgments");
+  if (!existsSync(dir)) return [];
+  const out: FileJudgment[] = [];
+  for (const f of readdirSync(dir)) {
+    if (!f.endsWith(".json")) continue;
+    try {
+      const parsed = FileJudgmentSchema.safeParse(JSON.parse(readFileSync(join(dir, f), "utf8")));
+      if (parsed.success && f === `${reviewSlug(parsed.data.file)}.json`) {
+        out.push(validatePersistedAttempts(parsed.data, runId, cwd));
+      }
+    } catch {
+      /* skip unreadable partial writes */
+    }
+  }
+  return out;
 }
