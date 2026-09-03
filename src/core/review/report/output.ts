@@ -132,11 +132,17 @@ function isBlockSuggestion(s: string | undefined): s is string {
   return !!s && /\r?\n/.test(s);
 }
 
-/** Fence a code block, unless the model already fenced it. Models emit both
- * shapes, and a double fence renders the backticks as literal text. */
+/** Fence a code block, unless the model already fenced it (a double fence
+ * renders the backticks as literal text).
+ *
+ * A single line is left unfenced: fcq has no fix text, so a violation's TO-BE
+ * is the rule's own description — prose like "블록 주석 사용 금지" — and putting
+ * that in a ```java block presents a requirement as code to paste. Real code
+ * fixes worth fencing run to more than one line. */
 function fenced(code: string, lang: string): string {
   const t = code.trim();
-  return /^```/.test(t) ? t : `\`\`\`${lang}\n${t}\n\`\`\``;
+  if (/^```/.test(t)) return t;
+  return t.includes("\n") ? `\`\`\`${lang}\n${t}\n\`\`\`` : t;
 }
 
 /** Language tag for the fence, from the reviewed file's extension. */

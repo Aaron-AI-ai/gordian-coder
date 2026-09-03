@@ -437,6 +437,19 @@ describe("AS-IS / TO-BE rendering", () => {
     expect(md.indexOf("**AS-IS**")).toBeLessThan(md.indexOf("**TO-BE**"));
   });
 
+  it("leaves a one-line fix unfenced — fcq's TO-BE is prose, not code", () => {
+    // fcq has no fix text, so a violation's TO-BE is the rule description.
+    // Fencing it as java presented a requirement as code to paste over.
+    const md = renderReport(
+      { "src/A.java": [f({ asIs: "int a;\nint b;", toBe: "블록 주석 사용 금지" })] },
+      "t",
+      "en"
+    );
+    expect(md).toContain("블록 주석 사용 금지");
+    expect(md).not.toContain("```java\n블록 주석");
+    expect(md).toContain("```java\nint a;"); // the multi-line half still fences
+  });
+
   it("does not double-fence code the model already fenced", () => {
     const md = renderReport({ "src/A.java": [f({ toBe: "```java\nint a;\n```" })] }, "t", "en");
     expect(md).not.toContain("``````");
