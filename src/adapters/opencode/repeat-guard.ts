@@ -14,9 +14,9 @@
  * O(sessions) with tiny entries, capped by MAX_SESSIONS eviction.
  */
 
-import { getState } from "../../core/review/state";
-import { MAX_ITER } from "../../core/review/reader";
-import { guardExploration } from "../../core/review/loop";
+import { getState } from "../../core/review/pipeline/state";
+import { MAX_ITER } from "../../core/review/tools/read";
+import { guardExploration } from "../../core/review/pipeline/loop";
 
 // ponytail: streak of IDENTICAL calls only — legit polling (same bash command
 // 3× while waiting on a build) trips it too; raise REPEAT_LIMIT if that bites.

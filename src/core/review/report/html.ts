@@ -18,7 +18,7 @@
  * the machine-readable artifact that loadBaseline parses back.
  */
 
-import { SEVERITIES, verdict, type Finding, type Severity } from "./contract";
+import { SEVERITIES, verdict, type Finding, type Severity } from "../contract";
 import TEMPLATE_HTML from "./report.template.html" with { type: "text" };
 
 // bun-types types every *.html import as an HTMLBundle (its fullstack server);

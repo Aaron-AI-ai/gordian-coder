@@ -12,7 +12,7 @@
  * `targetRange` decode them, and every other module treats a target as opaque.
  */
 
-import { fileLineCount, fileRead, readFileAt } from "./reader";
+import { fileLineCount, fileRead, readFileAt } from "../tools/read";
 
 /** Files at or below this line count are reviewed whole (unsplit). */
 export const SEGMENT_THRESHOLD = 1000;

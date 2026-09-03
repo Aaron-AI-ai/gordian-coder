@@ -13,7 +13,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative } from "node:path";
 import { z } from "zod";
-import { MAX_ITER } from "./reader";
+import { MAX_ITER } from "../tools/read";
 
 export const CommitSpec = z.union([
   z.string(), // single ref ("HEAD", "<sha>") or range ("A..B")

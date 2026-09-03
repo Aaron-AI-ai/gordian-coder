@@ -32,7 +32,7 @@ import {
   type Category,
   type Finding,
   type Severity,
-} from "./contract";
+} from "../contract";
 import {
   collectTargets,
   loadConfig,
@@ -47,7 +47,7 @@ import {
   renderReviewContext,
   resolveOutputPath,
   writeReport,
-} from "./output";
+} from "../report/output";
 import { DEFAULT_JUDGE_THRESHOLD, readRunJudgments } from "./judge";
 import {
   FcqRunStatusSchema,
@@ -58,8 +58,8 @@ import {
   renderFcqSection,
   runFcq,
   type FcqRunStatus,
-} from "./fcq";
-import { buildRubric, loadExtraRules, loadFrameworkGuide, rubricSources } from "./rubric";
+} from "../evidence/fcq";
+import { buildRubric, loadExtraRules, loadFrameworkGuide, rubricSources } from "../evidence/rubric";
 
 export const RUNS_DIR = "fcq/f-review/runs";
 /** Hard cap on targets per run — refuse larger fan-outs (split the range instead). */

@@ -22,11 +22,11 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
-import { capped, type Finding } from "./contract";
+import { capped, type Finding } from "../contract";
 import { buildDiffMap } from "./context";
-import { afterRef, readFileAt, renderFileContent } from "./reader";
-import { loadExtraRules, loadFrameworkGuide, renderExtraRules } from "./rubric";
-import { readFcqFile, renderFcqEvidence } from "./fcq";
+import { afterRef, readFileAt, renderFileContent } from "../tools/read";
+import { loadExtraRules, loadFrameworkGuide, renderExtraRules } from "../evidence/rubric";
+import { readFcqFile, renderFcqEvidence } from "../evidence/fcq";
 import {
   loadRun,
   readFileReviewResult,

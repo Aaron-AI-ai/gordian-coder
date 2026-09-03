@@ -37,7 +37,7 @@ import {
 } from "../run";
 import { startReview } from "../loop";
 import { clearState, getState } from "../state";
-import { REQUIRED_CATEGORIES } from "../contract";
+import { REQUIRED_CATEGORIES } from "../../contract";
 
 const SESSION = "js";
 const tmps: string[] = [];

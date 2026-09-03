@@ -15,7 +15,7 @@ import {
   loadBaseline,
   htmlReportPath,
 } from "../output";
-import type { Finding } from "../contract";
+import type { Finding } from "../../contract";
 
 const tmps: string[] = [];
 function tmp(): string {

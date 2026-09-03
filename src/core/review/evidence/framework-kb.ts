@@ -30,7 +30,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, posix, relative, sep } from "node:path";
-import { loadConfig } from "./context";
+import { loadConfig } from "../pipeline/context";
 
 /** Per-document cap. KB pages are hand-written prose; a runaway one must not
  * crowd out the code under review. */

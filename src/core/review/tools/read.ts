@@ -12,7 +12,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, basename } from "node:path";
-import type { Finding } from "./contract";
+import type { Finding } from "../contract";
 
 export const FILE_READ_MAX_LINES = 500;
 export const FILE_READ_MAX_CHARS = 16_000;

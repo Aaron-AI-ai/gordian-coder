@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAX_DEEP_PASSES, resolveDeepPasses } from "../context";
 import { startReview, submitReview, guardExploration } from "../loop";
-import { MAX_ITER } from "../reader";
+import { MAX_ITER } from "../../tools/read";
 import { getState, clearState } from "../state";
-import { REQUIRED_CATEGORIES } from "../contract";
+import { REQUIRED_CATEGORIES } from "../../contract";
 import { createRun, planReview, loadRun, readRunResults, finalizeRun } from "../run";
 
 const tmps: string[] = [];

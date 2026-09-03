@@ -5,7 +5,7 @@
  */
 
 import { extname, posix } from "node:path";
-import { codeSearch, isGitRepo, listFilesAt, readFileAt } from "./reader";
+import { codeSearch, isGitRepo, listFilesAt, readFileAt } from "../tools/read";
 import { frameworkKbDocs, type KbDoc } from "./framework-kb";
 
 const RELATED_MAX = 12;

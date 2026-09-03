@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hooks, PluginInput } from "@opencode-ai/plugin";
 import { REQUIRED_CATEGORIES } from "../../../core/review";
-import { getState } from "../../../core/review/state";
+import { getState } from "../../../core/review/pipeline/state";
 import { GRACE_CALLS } from "../repeat-guard";
 import OpenCodeAdapter from "../index";
 

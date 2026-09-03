@@ -18,11 +18,11 @@ import {
   violationsForTarget,
   type FcqFileViolation,
 } from "../fcq";
-import { finalizeRun, loadRun, planReview, readFileReviewResult, writeFileReview } from "../run";
-import { startReview, reviewPromptFor } from "../loop";
-import { judgeContext, submitJudge } from "../judge";
-import { clearState, getState } from "../state";
-import { REQUIRED_CATEGORIES } from "../contract";
+import { finalizeRun, loadRun, planReview, readFileReviewResult, writeFileReview } from "../../pipeline/run";
+import { startReview, reviewPromptFor } from "../../pipeline/loop";
+import { judgeContext, submitJudge } from "../../pipeline/judge";
+import { clearState, getState } from "../../pipeline/state";
+import { REQUIRED_CATEGORIES } from "../../contract";
 
 const tmps: string[] = [];
 afterEach(() => {

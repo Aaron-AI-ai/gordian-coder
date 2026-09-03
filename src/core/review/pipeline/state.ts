@@ -8,9 +8,9 @@
  * ponytail: in-memory Map — review sessions are short-lived and single-process.
  */
 
-import type { Category, Finding, Severity } from "./contract";
-import type { ExtraRule } from "./rubric";
-import type { FcqFileViolation } from "./fcq";
+import type { Category, Finding, Severity } from "../contract";
+import type { ExtraRule } from "../evidence/rubric";
+import type { FcqFileViolation } from "../evidence/fcq";
 import { targetPath } from "./segment";
 
 export interface ReviewState {

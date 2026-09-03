@@ -9,7 +9,7 @@ import {
   renderRelatedCode,
   unresolvedImports,
   reviewEvidence,
-} from "../evidence";
+} from "../dossier";
 
 const tmps: string[] = [];
 

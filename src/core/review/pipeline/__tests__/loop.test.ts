@@ -11,7 +11,7 @@ import {
   isDone,
   type ReviewState,
 } from "../state";
-import { MAX_ITER } from "../reader";
+import { MAX_ITER } from "../../tools/read";
 import {
   startReview,
   submitReview,
@@ -23,7 +23,7 @@ import {
   MAX_FAILED_SUBMITS,
   NO_ACTIVE_REVIEW,
 } from "../loop";
-import { REQUIRED_CATEGORIES } from "../contract";
+import { REQUIRED_CATEGORIES } from "../../contract";
 
 function baseState(over: Partial<ReviewState> = {}): ReviewState {
   return {

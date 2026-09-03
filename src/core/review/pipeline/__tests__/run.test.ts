@@ -24,7 +24,7 @@ import {
 } from "../run";
 import { startReview, submitReview, guardExploration, onSessionIdle, MAX_RESUMES } from "../loop";
 import { getState, clearState } from "../state";
-import { REQUIRED_CATEGORIES } from "../contract";
+import { REQUIRED_CATEGORIES } from "../../contract";
 
 const tmps: string[] = [];
 afterEach(() => {
@@ -582,7 +582,7 @@ describe("finalizeRun", () => {
   it("baseline is snapshotted at plan time — a finalize retry never marks this run's findings as pre-existing", async () => {
     const d = gitRepo();
     // A prior report exists with rule "old-rule" on a.ts.
-    const { writeReport } = await import("../output");
+    const { writeReport } = await import("../../report/output");
     await writeReport(
       "fcq/report/f-review/review-prev.md",
       { "a.ts": [{ category: "correctness", severity: "major", file: "a.ts", rule: "old-rule", message: "m" }] },

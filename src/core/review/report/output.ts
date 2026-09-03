@@ -13,8 +13,8 @@
 
 import { existsSync, statSync, readdirSync, readFileSync, renameSync } from "node:fs";
 import { join, isAbsolute, dirname, basename } from "node:path";
-import { loadConfig } from "./context";
-import { SEVERITIES, verdict, type Finding, type Severity } from "./contract";
+import { loadConfig } from "../pipeline/context";
+import { SEVERITIES, verdict, type Finding, type Severity } from "../contract";
 import { renderHtmlReport } from "./html";
 
 const DEFAULT_REPORT_DIR = "fcq/report/f-review/";

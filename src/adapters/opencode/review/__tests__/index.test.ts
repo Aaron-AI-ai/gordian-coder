@@ -26,7 +26,7 @@ import {
   REVIEW_COMMAND_NAME,
 } from "../prompts";
 import { MAX_RESUMES, DEFAULT_MAX_TOOL_CALLS } from "../../../../core/review";
-import { clearState, getState } from "../../../../core/review/state";
+import { clearState, getState } from "../../../../core/review/pipeline/state";
 
 const SESSION = "oc";
 const tmps: string[] = [];

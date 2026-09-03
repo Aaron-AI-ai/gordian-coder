@@ -13,8 +13,8 @@ import {
   fileLineCount,
   renderFileContent,
   sanitizeFindingLines,
-} from "../reader";
-import type { Finding } from "../contract";
+} from "../read";
+import type { Finding } from "../../contract";
 
 const tmps: string[] = [];
 function tmp(): string {

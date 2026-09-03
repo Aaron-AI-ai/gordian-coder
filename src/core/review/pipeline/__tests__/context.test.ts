@@ -14,7 +14,7 @@ import {
   buildDiffMap,
   ReviewInputSchema,
 } from "../context";
-import { MAX_ITER } from "../reader";
+import { MAX_ITER } from "../../tools/read";
 
 function gitRepo(): string {
   const d = mkdtempSync(join(tmpdir(), "k-git-"));

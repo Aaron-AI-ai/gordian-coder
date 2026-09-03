@@ -13,9 +13,9 @@ import {
   HARD_LIMIT,
   MAX_SESSIONS,
 } from "../repeat-guard";
-import { setState, getState, clearState, type ReviewState } from "../../../core/review/state";
-import { guardExploration, MAX_DUP_CALLS } from "../../../core/review/loop";
-import { MAX_ITER } from "../../../core/review/reader";
+import { setState, getState, clearState, type ReviewState } from "../../../core/review/pipeline/state";
+import { guardExploration, MAX_DUP_CALLS } from "../../../core/review/pipeline/loop";
+import { MAX_ITER } from "../../../core/review/tools/read";
 
 /** Minimal active-review state — escalateLoop touches active/iterations,
  * guardExploration additionally needs the loop-bookkeeping fields. */

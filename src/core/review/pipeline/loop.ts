@@ -15,7 +15,7 @@ import {
   verdict,
   type Finding,
   type Severity,
-} from "./contract";
+} from "../contract";
 import {
   collectTargets,
   loadConfig,
@@ -32,8 +32,8 @@ import {
   loadExtraRules,
   renderExtraRules,
   rubricSources,
-} from "./rubric";
-import { buildReviewPrompt, targetVars } from "./template";
+} from "../evidence/rubric";
+import { buildReviewPrompt, targetVars } from "../evidence/template";
 import {
   renderReviewContext,
   resolveOutputPath,
@@ -44,7 +44,7 @@ import {
   defaultLabel,
   manifestTimestamp,
   renderReport,
-} from "./output";
+} from "../report/output";
 import {
   loadRun,
   readFileReviewResult,
@@ -70,12 +70,12 @@ import {
   rotateSubmitToken,
   type ReviewState,
 } from "./state";
-import { afterRef, fileRead, renderFileContent, sanitizeFindingLines, MAX_ITER } from "./reader";
-import { reviewEvidence } from "./evidence";
+import { afterRef, fileRead, renderFileContent, sanitizeFindingLines, MAX_ITER } from "../tools/read";
+import { reviewEvidence } from "../evidence/dossier";
 import { SEGMENT_THRESHOLD, inFileRelated, planSegments, targetPath, targetRange } from "./segment";
-import { dbg, dbgOnce, setReviewDebug } from "./debug";
-import { VERSION } from "../../version";
-import { readFcqFile, renderFcqEvidence, violationsForTarget } from "./fcq";
+import { dbg, dbgOnce, setReviewDebug } from "../debug";
+import { VERSION } from "../../../version";
+import { readFcqFile, renderFcqEvidence, violationsForTarget } from "../evidence/fcq";
 import { runDir } from "./run";
 
 export const NO_ACTIVE_REVIEW = "No active review. Call f_review_context first.";
