@@ -9,6 +9,7 @@ import {
   loadFixes,
   submitFix,
   FIX_MAX_ITEMS,
+  FIX_FILE_MAX_LINES,
 } from "../fixer";
 import { createRun } from "../run-store";
 import { runDir } from "../artifact";
@@ -86,6 +87,66 @@ describe("fixContext", () => {
     const ctx = fixContext(runId, "src/A.java", cwd);
     expect(ctx).toContain("This is the complete file");
     expect(ctx).toContain("no read tools");
+  });
+
+  it("shows the file up to FIX_FILE_MAX_LINES, not the reader's default", async () => {
+    // Regression: FIX_FILE_MAX_LINES was passed as end_line only, so fileRead's
+    // own 500-line default still applied and the constant was a lie.
+    const cwd = repo();
+    writeFileSync(
+      join(cwd, "src/Big.java"),
+      Array.from({ length: 900 }, (_, i) => `int v${i} = ${i};`).join("\n") + "\n"
+    );
+    const meta = await createRun(
+      {
+        targets: ["src/Big.java"],
+        range: null,
+        whole: true,
+        label: "t",
+        language: "en",
+        fcq: { status: "ok", command: "fcq", durationMs: 1, reportPath: "r" },
+      } as never,
+      cwd
+    );
+    const { fcqShardPath } = await import("../../evidence/fcq");
+    mkdirSync(join(runDir(meta.runId, cwd), "fcq", "files"), { recursive: true });
+    writeFileSync(
+      fcqShardPath(runDir(meta.runId, cwd), "src/Big.java"),
+      JSON.stringify([{ ...VIOLATION, line: 800 }])
+    );
+    const ctx = fixContext(meta.runId, "src/Big.java", cwd);
+    expect(ctx).toContain("LINE_RANGE: 1-900");
+    expect(ctx).toContain("int v899");
+    expect(ctx).toContain("This is the complete file");
+  });
+
+  it("warns when the file is longer than the fixer can be shown", async () => {
+    const cwd = repo();
+    writeFileSync(
+      join(cwd, "src/Huge.java"),
+      Array.from({ length: FIX_FILE_MAX_LINES + 50 }, (_, i) => `int v${i} = ${i};`).join("\n") + "\n"
+    );
+    const meta = await createRun(
+      {
+        targets: ["src/Huge.java"],
+        range: null,
+        whole: true,
+        label: "t",
+        language: "en",
+        fcq: { status: "ok", command: "fcq", durationMs: 1, reportPath: "r" },
+      } as never,
+      cwd
+    );
+    const { fcqShardPath } = await import("../../evidence/fcq");
+    mkdirSync(join(runDir(meta.runId, cwd), "fcq", "files"), { recursive: true });
+    writeFileSync(
+      fcqShardPath(runDir(meta.runId, cwd), "src/Huge.java"),
+      JSON.stringify([{ ...VIOLATION, line: 10 }])
+    );
+    const ctx = fixContext(meta.runId, "src/Huge.java", cwd);
+    // Silence here would have the fixer inventing code for lines it never saw.
+    expect(ctx).toContain("Only the first");
+    expect(ctx).toContain("leave the rest out");
   });
 
   it("refuses a file that is not a target, and a run without fcq", async () => {

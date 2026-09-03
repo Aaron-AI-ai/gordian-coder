@@ -24,7 +24,7 @@ import { z } from "zod";
 import { capped } from "../contract";
 import { loadRun, reviewSlug, runDir } from "./artifact";
 import { FCQ_SEVERITIES, readFcqFile, type FcqFileViolation } from "../evidence/fcq";
-import { fileRead } from "../tools/read";
+import { fileLineCount, fileRead } from "../tools/read";
 
 /** Violations shown per request. Beyond this the file is a lint failure, not a
  * review target, and a fixer session cannot hold them all anyway. */
@@ -91,8 +91,14 @@ export function fixContext(runId: string, file: string, cwd: string): string {
 
   const shown = rows.slice(0, FIX_MAX_ITEMS);
   // Working tree, not the ref: the fix is written against the code as it is now.
-  const source = fileRead(cwd, null, file, 1, FIX_FILE_MAX_LINES);
-  const truncated = source.includes("IS_TRUNCATED: true");
+  // The 6th argument is the line cap; passing FIX_FILE_MAX_LINES only as
+  // end_line left the reader's 500-line default in force and truncated a
+  // 900-line file despite the constant saying 2000.
+  const source = fileRead(cwd, null, file, 1, FIX_FILE_MAX_LINES, FIX_FILE_MAX_LINES);
+  // Counted, not read off the rendered header: asking for lines 1..2000 of a
+  // 2050-line file is "exactly what you asked for" to the reader, so its
+  // IS_TRUNCATED says false while 50 lines are missing.
+  const truncated = (fileLineCount(cwd, null, file) ?? 0) > FIX_FILE_MAX_LINES;
   return [
     `# Fix pass — ${file} (run ${runId})`,
     "",
