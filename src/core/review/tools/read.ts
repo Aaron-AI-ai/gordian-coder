@@ -25,9 +25,20 @@ export const MAX_ITER = 20;
 
 // ── low-level ────────────────────────────────────────────────────
 
-function sh(cmd: string[], cwd: string): { code: number; stdout: string } {
+/** Run a command under the shared timeout. Exported for the other repo-access
+ * modules (tools/related, imports) so the timeout lives in one place. */
+export function sh(cmd: string[], cwd: string): { code: number; stdout: string } {
   const p = Bun.spawnSync(cmd, { cwd, timeout: TIMEOUT_MS });
   return { code: p.exitCode ?? 1, stdout: p.stdout.toString() };
+}
+
+/** Bound text to a character budget, reserving room for the marker so the
+ * result never exceeds `maxChars`. `cap` below overshoots by the marker's
+ * length; sections that must fit an exact budget use this one. */
+export function capText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const suffix = "\n… (truncated)";
+  return text.slice(0, maxChars - suffix.length) + suffix;
 }
 
 /** Bound output by lines and chars to keep the prompt from blowing up. */
