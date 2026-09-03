@@ -6,7 +6,6 @@ import {
   fcqCommand,
   fcqFindings,
   fcqShardPath,
-  locateReport,
   mapFcqCategory,
   mergeFcqFindings,
   readFcqFile,
@@ -80,17 +79,20 @@ const REPORT = {
   ],
 };
 
-/** Install a fake `fcq` that writes REPORT into the yaml's report.output. */
-function fakeFcq(d: string, opts: { exit?: number; noReport?: boolean; yaml?: boolean } = {}): void {
-  mkdirSync(join(d, "fcq/config"), { recursive: true });
-  if (opts.yaml !== false) {
-    writeFileSync(join(d, "fcq/config/fcq.yaml"), "version: 1\nreport:\n  enabled: true\n  output: fcq/report/static\n");
-  }
+/** Install a fake `fcq` that honours --report-output, like the real CLI. No
+ * fcq.yaml is written: the point of --report-output is that the target needs
+ * no `report:` section of its own. */
+function fakeFcq(d: string, opts: { exit?: number; noReport?: boolean } = {}): void {
   const bin = join(d, "fcq-bin");
   const script = [
     "#!/bin/sh",
     `echo "$@" > ${JSON.stringify(join(d, "fcq-args"))}`,
-    ...(opts.noReport ? [] : [`mkdir -p fcq/report/static && cat > fcq/report/static/report.json <<'EOF'\n${JSON.stringify(REPORT)}\nEOF`]),
+    // Parse --report-output=DIR out of the args the way the real CLI would.
+    'out=""',
+    'for a in "$@"; do case "$a" in --report-output=*) out="${a#--report-output=}";; esac; done',
+    ...(opts.noReport
+      ? []
+      : [`mkdir -p "$out" && cat > "$out/report.json" <<'EOF'\n${JSON.stringify(REPORT)}\nEOF`]),
     `exit ${opts.exit ?? 1}`,
   ].join("\n");
   writeFileSync(bin, script);
@@ -98,20 +100,18 @@ function fakeFcq(d: string, opts: { exit?: number; noReport?: boolean; yaml?: bo
   writeFileSync(join(d, ".f-review.json"), JSON.stringify({ fcq: true, fcqOptions: { bin, module: "m", timeout: 30 } }));
 }
 
-describe("fcqCommand / locateReport", () => {
+describe("fcqCommand", () => {
   it("maps options to fcq CLI flags and scopes to the targets", () => {
-    const cmd = fcqCommand("/p", ["a.java", "b.java"], { analyzers: ["pmd"], module: "m", maxSeverity: "MAJOR", noBuild: true, buildTimeout: 42 });
-    expect(cmd).toEqual(["fcq", "analyze", "/p", "--paths=a.java,b.java", "--analyzers=pmd", "--module=m", "--max-severity=MAJOR", "--no-build", "--build-timeout=42"]);
+    const cmd = fcqCommand("/p", ["a.java", "b.java"], { analyzers: ["pmd"], module: "m", maxSeverity: "MAJOR", noBuild: true, buildTimeout: 42 }, "/r/fcq/raw");
+    expect(cmd).toEqual(["fcq", "analyze", "/p", "--paths=a.java,b.java", "--report-output=/r/fcq/raw", "--report-formats=json", "--analyzers=pmd", "--module=m", "--max-severity=MAJOR", "--no-build", "--build-timeout=42"]);
   });
 
-  it("reads report.output from fcq.yaml and rejects a missing report section", () => {
-    const d = dir();
-    expect(locateReport(d)).toMatchObject({ error: expect.stringContaining("no fcq.yaml") });
-    mkdirSync(join(d, "fcq/config"), { recursive: true });
-    writeFileSync(join(d, "fcq/config/fcq.yaml"), "version: 1\n");
-    expect(locateReport(d)).toMatchObject({ error: expect.stringContaining("report:") });
-    writeFileSync(join(d, "fcq/config/fcq.yaml"), "report:\n  output: out/x\n");
-    expect(locateReport(d)).toEqual({ path: join(d, "out/x/report.json") });
+  it("always directs the report into the run dir and skips the html/md views", () => {
+    // Without these the report would land wherever the TARGET's fcq.yaml says
+    // — shared between runs, and absent entirely when it has no report section.
+    const cmd = fcqCommand("/p", ["a.java"], {}, "/r/fcq/raw");
+    expect(cmd).toContain("--report-output=/r/fcq/raw");
+    expect(cmd).toContain("--report-formats=json");
   });
 });
 
@@ -135,17 +135,24 @@ describe("runFcq", () => {
     expect(s.files).toEqual(["src/A.java"]);
   });
 
-  it("fails (never throws) on usage error, missing report, or missing yaml", async () => {
+  it("needs no fcq.yaml in the target", async () => {
+    // The target here has no `report:` section — no fcq.yaml at all — which
+    // used to be a hard failure because the report path came from that file.
+    const d = dir();
+    fakeFcq(d);
+    expect(existsSync(join(d, "fcq/config/fcq.yaml"))).toBe(false);
+    const status = await runFcq(d, ["src/A.java"], join(d, "run"));
+    expect(status.status).toBe("ok");
+    expect(status.reportPath).toBe(join(d, "run/fcq/raw/report.json"));
+  });
+
+  it("fails (never throws) on usage error, missing report, or a missing binary", async () => {
     const d = dir();
     fakeFcq(d, { exit: 2 });
     expect((await runFcq(d, ["src/A.java"], join(d, "r1"))).reason).toContain("exit 2");
     fakeFcq(d, { noReport: true, exit: 0 });
-    rmSync(join(d, "fcq/report"), { recursive: true, force: true });
     expect((await runFcq(d, ["src/A.java"], join(d, "r2"))).reason).toContain("wrote no");
-    rmSync(join(d, "fcq/config/fcq.yaml"));
-    expect((await runFcq(d, ["src/A.java"], join(d, "r3"))).reason).toContain("no fcq.yaml");
     writeFileSync(join(d, ".f-review.json"), JSON.stringify({ fcqOptions: { bin: "/nonexistent/fcq" } }));
-    writeFileSync(join(d, "fcq/config/fcq.yaml"), "report: {}\n");
     expect((await runFcq(d, ["src/A.java"], join(d, "r4"))).status).toBe("failed");
   });
 });

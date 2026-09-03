@@ -16,14 +16,15 @@
  * evidence section is simply absent, and finalize fails closed on `failOn`
  * (an unverified static-analysis gate must not read as PASS).
  *
- * fcq has no report-path flag: report.json lands where the TARGET's fcq.yaml
- * `report.output` says (default fcq/report/static). ponytail: locate it by
- * parsing that yaml — swap `locateReport` for a `--report-dir` arg once fcq
- * grows one.
+ * The report is written straight into the run dir via fcq's `--report-output`,
+ * so nothing depends on the target's own `fcq.yaml`: a project with no
+ * `report:` section — or none disabled — still yields a report, and two runs
+ * never share a path. `--report-formats=json` skips the HTML/Markdown views
+ * that nothing here reads.
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { z } from "zod";
 import { type Category, type Finding, type Severity } from "../contract";
 import { loadConfig } from "../config";
@@ -167,37 +168,24 @@ function abs(cwd: string, p: string): string {
   return isAbsolute(p) ? p : join(cwd, p);
 }
 
-/** Where fcq will write report.json, from the target's fcq.yaml `report`
- * section (same auto-discovery order as fcq itself). Returns an error string
- * when reports are not enabled — fcq gives us nothing structured otherwise. */
-export function locateReport(cwd: string, configOpt?: string): { path: string } | { error: string } {
-  const candidates = configOpt
-    ? [abs(cwd, configOpt)]
-    : ["fcq/config/fcq.yaml", "fcq.yaml", ".fcq/config.yaml"].map((p) => join(cwd, p));
-  const yamlPath = candidates.find((p) => existsSync(p));
-  if (!yamlPath) {
-    return { error: "no fcq.yaml found (fcq/config/fcq.yaml) — a `report:` section is required for report.json" };
-  }
-  let report: unknown;
-  try {
-    const doc = Bun.YAML.parse(readFileSync(yamlPath, "utf8")) as Record<string, unknown> | null;
-    report = doc?.report;
-  } catch (err) {
-    return { error: `cannot parse ${yamlPath}: ${err instanceof Error ? err.message : String(err)}` };
-  }
-  if (!report || typeof report !== "object") {
-    return { error: `${yamlPath} has no \`report:\` section — enable it so fcq writes report.json` };
-  }
-  const r = report as { enabled?: unknown; output?: unknown };
-  if (r.enabled === false) return { error: `${yamlPath} has report.enabled: false` };
-  const out = typeof r.output === "string" && r.output ? r.output : "fcq/report/static";
-  return { path: join(abs(cwd, out), "report.json") };
-}
-
 // ── run ──────────────────────────────────────────────────────────
 
-export function fcqCommand(cwd: string, targets: string[], o: FcqOptions): string[] {
-  const cmd = [o.bin ?? "fcq", "analyze", cwd, `--paths=${targets.join(",")}`];
+export function fcqCommand(
+  cwd: string,
+  targets: string[],
+  o: FcqOptions,
+  reportDir: string
+): string[] {
+  const cmd = [
+    o.bin ?? "fcq",
+    "analyze",
+    cwd,
+    `--paths=${targets.join(",")}`,
+    // Report into the run dir rather than wherever the target's fcq.yaml
+    // points, and render only the json data source (fcq always writes it).
+    `--report-output=${reportDir}`,
+    "--report-formats=json",
+  ];
   if (o.analyzers?.length) cmd.push(`--analyzers=${o.analyzers.join(",")}`);
   if (o.module) cmd.push(`--module=${o.module}`);
   if (o.config) cmd.push(`--config=${abs(cwd, o.config)}`);
@@ -273,7 +261,10 @@ export async function shardReport(
  */
 export async function runFcq(cwd: string, targets: string[], runRoot: string): Promise<FcqRunStatus> {
   const o = fcqOptionsOf(cwd);
-  const cmd = fcqCommand(cwd, targets, o);
+  // fcq owns this directory (it writes an ownership manifest there), so keep it
+  // separate from the shards f-review writes under fcq/.
+  const reportPath = join(fcqDir(runRoot), "raw", "report.json");
+  const cmd = fcqCommand(cwd, targets, o, dirname(reportPath));
   const command = cmd.join(" ");
   const started = Date.now();
   const fail = (reason: string): FcqRunStatus => ({
@@ -282,9 +273,6 @@ export async function runFcq(cwd: string, targets: string[], runRoot: string): P
     durationMs: Date.now() - started,
     reason,
   });
-
-  const located = locateReport(cwd, o.config);
-  if ("error" in located) return fail(located.error);
 
   const timeoutMs = Math.max(1, o.timeout ?? FCQ_DEFAULT_TIMEOUT_S) * 1000;
   let proc: ReturnType<typeof Bun.spawn>;
@@ -309,28 +297,22 @@ export async function runFcq(cwd: string, targets: string[], runRoot: string): P
   if (exitCode !== 0 && exitCode !== 1) {
     return fail(`exit ${exitCode}: ${stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 500)}`);
   }
-  if (!existsSync(located.path)) return fail(`fcq exited ${exitCode} but wrote no ${located.path}`);
+  if (!existsSync(reportPath)) return fail(`fcq exited ${exitCode} but wrote no ${reportPath}`);
 
   let report: FcqReport;
   try {
-    const parsed = FcqReportSchema.safeParse(JSON.parse(readFileSync(located.path, "utf8")));
+    const parsed = FcqReportSchema.safeParse(JSON.parse(readFileSync(reportPath, "utf8")));
     if (!parsed.success) return fail(`report.json schema mismatch: ${parsed.error.issues[0]?.message}`);
     report = parsed.data;
   } catch (err) {
     return fail(`cannot read report.json: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  // A stale report from a previous run (fcq rotated nothing because it crashed
-  // before reporting) must not be mistaken for this run's result.
-  const ranAt = report.metadata.ranAt ? Date.parse(report.metadata.ranAt) : NaN;
-  if (Number.isFinite(ranAt) && ranAt < started - 60_000) {
-    return fail(`report.json is stale (ranAt ${report.metadata.ranAt} predates this run)`);
   }
   await shardReport(report, targets, runRoot);
   return {
     status: "ok",
     command,
     durationMs: Date.now() - started,
-    reportPath: located.path,
+    reportPath,
   };
 }
 
