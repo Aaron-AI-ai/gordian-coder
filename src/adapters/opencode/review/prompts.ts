@@ -175,6 +175,17 @@ export const JUDGE_AGENT_PROMPT = `You are an independent review judge. You eval
 export const FIXER_AGENT_DESCRIPTION =
   "Writes the corrected code for every static-analysis violation in one file";
 
+/** The fixer's security boundary. `tools` below is legacy compatibility — THIS
+ * is what OpenCode enforces, so a permission map copied from another agent
+ * silently gives that agent's tools. Reusing the judge's is what made three
+ * f-fixer runs answer "Available tools: f_review_judge, f_review_judge_context"
+ * on their first call. */
+export const FIXER_AGENT_PERMISSION: Record<string, PermissionAction> = {
+  "*": "deny",
+  f_review_fix_context: "allow",
+  f_review_fix_submit: "allow",
+};
+
 /** Exactly two tools.
  *
  * The exploration tools are deliberately NOT here: every one of them requires

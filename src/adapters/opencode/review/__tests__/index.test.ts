@@ -86,6 +86,29 @@ describe("tool registration", () => {
     expect(template).toContain("FIX PASS");
   });
 
+  it("gives every agent a permission map matching its own tools", () => {
+    // `permission` is the boundary OpenCode enforces; `tools` is legacy
+    // compatibility. f-fixer was registered with the JUDGE's permission map,
+    // so three runs got "Available tools: f_review_judge,
+    // f_review_judge_context" on their first call while `tools` said otherwise.
+    const { mod } = moduleFor(gitRepo());
+    const cfg: {
+      agent: Record<string, { tools: Record<string, boolean>; permission: Record<string, string> }>;
+    } = { agent: {} };
+    mod.config(cfg as never);
+    for (const [name, a] of Object.entries(cfg.agent)) {
+      const allowedByTools = Object.entries(a.tools)
+        .filter(([t, on]) => on && t.startsWith("f_review"))
+        .map(([t]) => t)
+        .sort();
+      const allowedByPermission = Object.entries(a.permission)
+        .filter(([t, act]) => act === "allow" && t.startsWith("f_review"))
+        .map(([t]) => t)
+        .sort();
+      expect(allowedByPermission, `${name}: permission must match tools`).toEqual(allowedByTools);
+    }
+  });
+
   it("gives the fixer only tools that work without a review session", () => {
     // file_read and code_search route through runReviewTool, which needs an
     // active review. The fixer never opens one, so granting them handed it two
