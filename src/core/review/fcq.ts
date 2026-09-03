@@ -372,7 +372,7 @@ export function violationsForTarget(all: FcqFileViolation[], target: string): Fc
  * The `<review_evidence>` section for a reviewer/judge: most severe first,
  * capped by count and chars, with the leftover counted. "" when nothing.
  */
-export function renderFcqEvidence(violations: FcqFileViolation[]): string {
+export function renderFcqEvidence(violations: FcqFileViolation[], fixAll = false): string {
   if (!violations.length) return "";
   const sorted = [...violations].sort(
     (a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity] || (a.line ?? 0) - (b.line ?? 0)
@@ -384,21 +384,45 @@ export function renderFcqEvidence(violations: FcqFileViolation[]): string {
       (v.description && v.message && v.message !== v.description ? ` (${v.message})` : "")
   );
   const rest = sorted.length - shown.length;
-  const body = [
-    "## Static analysis (fcq, already run for you)",
-    ...lines,
-    ...(rest > 0 ? [`… ${rest} more lower-severity violation(s) — already in the report.`] : []),
+  // fcq has no fix text, so an unfollowed hit reaches the report with the rule
+  // DESCRIPTION as its TO-BE. `fixAll` buys real TO-BE code for every hit with
+  // reviewer budget; the default spends that budget on what fcq cannot see.
+  const scope = fixAll
+    ? [
+        "Use them as leads: for EVERY hit above, write the corrected code as a",
+        "concrete AS-IS/TO-BE fix — or state why it is a false positive. fcq has",
+        "no fix text, so a hit you skip ships with only the rule description.",
+      ]
+    : [
+        "Use them as leads: for CRITICAL/MAJOR hits, trace the actual data flow",
+        "and give an AS-IS/TO-BE fix or state why it is a false positive.",
+      ];
+  const head = ["## Static analysis (fcq, already run for you)"];
+  const tail = [
     "",
     "These are deterministic and already in the report — do NOT re-report them.",
-    "Use them as leads: for CRITICAL/MAJOR hits, trace the actual data flow and",
-    "give an AS-IS/TO-BE fix or state why it is a false positive. Anchor such a",
-    "finding on the SAME `line` as the fcq hit (it is merged into that row) and",
-    "name the rule id in `message`. Spend the rest of your budget on what the",
-    "tools cannot see: logic, boundaries, transactions, framework-rule violations.",
+    ...scope,
+    "Anchor such a finding on the SAME `line` as the fcq hit (it is merged into",
+    "that row) and name the rule id in `message`. Spend the rest of your budget",
+    "on what the tools cannot see: logic, boundaries, transactions, framework rules.",
+  ];
+  // Cap the LIST, never the tail: slicing the joined body dropped the
+  // instructions exactly when a file had enough violations to need them.
+  const room = FCQ_EVIDENCE_MAX_CHARS - head.join("\n").length - tail.join("\n").length;
+  const kept: string[] = [];
+  let used = 0;
+  for (const l of lines) {
+    if (used + l.length + 1 > room) break;
+    kept.push(l);
+    used += l.length + 1;
+  }
+  const omitted = rest + (lines.length - kept.length);
+  return [
+    ...head,
+    ...kept,
+    ...(omitted > 0 ? [`… ${omitted} more violation(s) — in the report, not listed here.`] : []),
+    ...tail,
   ].join("\n");
-  return body.length > FCQ_EVIDENCE_MAX_CHARS
-    ? `${body.slice(0, FCQ_EVIDENCE_MAX_CHARS)}\n… (truncated)`
-    : body;
 }
 
 // ── finalize: violations → findings ──────────────────────────────

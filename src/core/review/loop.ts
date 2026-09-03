@@ -251,6 +251,7 @@ function startRunFileReview(
     resumes: 0,
     runId,
     fcqViolations: meta.fcq?.status === "ok" ? readFcqFile(runDir(runId, cwd), file) : undefined,
+    fcqFix: meta.fcqFix,
   };
   setState(sessionId, state);
 
@@ -1044,7 +1045,7 @@ export function reviewPromptFor(st: ReviewState): string | null {
   // fcq evidence is per TARGET (a segment sees only its window), so it is
   // composed here instead of cached with the per-file dossier.
   if (st.fcqViolations?.length) {
-    const fcq = renderFcqEvidence(violationsForTarget(st.fcqViolations, target));
+    const fcq = renderFcqEvidence(violationsForTarget(st.fcqViolations, target), st.fcqFix);
     if (fcq) evidence = `${fcq}\n\n${evidence}`;
   }
 

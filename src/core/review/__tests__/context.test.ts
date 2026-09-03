@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   resolveDiffRange,
   applyExclude,
@@ -299,5 +299,51 @@ describe("ReviewInputSchema", () => {
 
   it("accepts a {from,to} commit", () => {
     expect(ReviewInputSchema.safeParse({ commit: { from: "A", to: "B" } }).success).toBe(true);
+  });
+});
+
+describe("loadConfig sections", () => {
+  function proj(rel: string, body: unknown): string {
+    const d = mkdtempSync(join(tmpdir(), "cfg-sec-"));
+    tmps.push(d);
+    const p = join(d, rel);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, JSON.stringify(body));
+    return d;
+  }
+
+  it("reads review settings from the `review` section of fico_ai.json", () => {
+    const d = proj(".fico/config/fico_ai.json", {
+      review: { rulesDir: "fcq/rules", language: "ko", deepPasses: 2 },
+      wikiKb: { fico_framework: "http://h/x" },
+    });
+    const c = loadConfig(d);
+    expect(c.rulesDir).toBe("fcq/rules");
+    expect(c.language).toBe("ko");
+    expect(c.deepPasses).toBe(2);
+    expect(c.wikiKb).toEqual({ fico_framework: "http://h/x" });
+  });
+
+  it("still reads a flat fico_ai.json", () => {
+    const d = proj(".fico/config/fico_ai.json", { language: "en", judge: true });
+    expect(loadConfig(d)).toMatchObject({ language: "en", judge: true });
+  });
+
+  it("lets the `review` section win over a same-named top-level key", () => {
+    const d = proj(".fico/config/fico_ai.json", {
+      language: "en",
+      review: { language: "ko" },
+    });
+    expect(loadConfig(d).language).toBe("ko");
+  });
+
+  it("ignores a non-object `review` value instead of dropping the file", () => {
+    const d = proj(".fico/config/fico_ai.json", { language: "ko", review: "nope" });
+    expect(loadConfig(d).language).toBe("ko");
+  });
+
+  it("keeps the legacy flat .f-review.json working", () => {
+    const d = proj(".f-review.json", { rulesDir: "review/rules", judgeRounds: 3 });
+    expect(loadConfig(d)).toMatchObject({ rulesDir: "review/rules", judgeRounds: 3 });
   });
 });

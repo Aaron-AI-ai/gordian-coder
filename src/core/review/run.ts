@@ -111,6 +111,9 @@ export interface RunMeta {
   excludes?: string[];
   /** Static analysis (fcq) step outcome; absent when not enabled for the run. */
   fcq?: FcqRunStatus;
+  /** Config `fcqFix`: reviewers must write a TO-BE fix for every fcq hit, not
+   * just CRITICAL/MAJOR. Costs reviewer budget; buys real code in the report. */
+  fcqFix?: boolean;
 }
 
 /** Persisted run metadata is external state, even though this process created it. */
@@ -135,6 +138,7 @@ export const RunMetaSchema: z.ZodType<RunMeta> = z.object({
   criteriaIdentity: z.string().optional(),
   excludes: z.array(z.string()).optional(),
   fcq: FcqRunStatusSchema.optional(),
+  fcqFix: z.boolean().optional(),
 });
 
 /**
@@ -686,6 +690,7 @@ export async function planReview(args: PlanReviewArgs, cwd: string): Promise<str
     sourceIdentity: range ?? filesSnapshotIdentity(cwd, targets),
     criteriaIdentity: reviewCriteriaIdentity(cwd),
     excludes: [...(config.exclude ?? []), ...(args.exclude ?? [])],
+    ...(config.fcqFix === true ? { fcqFix: true } : {}),
   };
 
   const fingerprint = planFingerprint(planned);
@@ -748,7 +753,10 @@ function renderPlanInstructions(meta: RunMeta): string {
   const fcqLine = !meta.fcq
     ? []
     : meta.fcq.status === "ok"
-      ? [`Static analysis (fcq): done in ${(meta.fcq.durationMs / 1000).toFixed(1)}s — violations are injected into each reviewer as evidence and merged at finalize.`]
+      ? [
+          `Static analysis (fcq): done in ${(meta.fcq.durationMs / 1000).toFixed(1)}s — violations are injected into each reviewer as evidence and merged at finalize.` +
+            (meta.fcqFix ? " `fcqFix` is on: reviewers must write a TO-BE fix for every hit." : ""),
+        ]
       : [`⚠️ Static analysis (fcq) FAILED: ${meta.fcq.reason}. The LLM review proceeds without it; finalize fails closed on failOn.`];
   return [
     `Run created: ${meta.runId} — ${meta.targets.length} file(s), mode: ${meta.range ? `commit diff (${meta.range})` : "explicit files"}${meta.whole ? " · whole-file" : ""}${(meta.deepPasses ?? 1) > 1 ? ` · ${meta.deepPasses} review rounds/target` : ""}${meta.failOn ? ` · gate: failOn=${meta.failOn}` : ""}${meta.judge ? ` · judge gate on` : ""}.`,

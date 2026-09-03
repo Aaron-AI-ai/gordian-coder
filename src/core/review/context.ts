@@ -37,6 +37,20 @@ export type ReviewInput = z.infer<typeof ReviewInputSchema>;
 // crashing the review (e.g. `"rulesDir": 5` reaching path.join) or silently
 // dropping the whole file.
 const field = <T extends z.ZodType>(t: T) => t.optional().catch(undefined);
+
+/** One git wiki to mirror. Shorthand string = the clone URL with every other
+ * field defaulted. */
+export const WikiKbSourceSchema = z.union([
+  z.string(),
+  z.object({
+    url: z.string(),
+    tokenEnv: z.string().optional(), // env var NAME holding the token — never the token itself
+    branch: z.string().optional(),
+    dest: z.string().optional(), // repo-relative; defaults to ".fico/kb/<name>"
+  }),
+]);
+export type WikiKbSource = z.infer<typeof WikiKbSourceSchema>;
+
 export const ReviewConfigSchema = z.object({
   exclude: field(z.array(z.string())),
   output: field(z.string()),
@@ -55,18 +69,52 @@ export const ReviewConfigSchema = z.object({
   judgeRounds: field(z.number()), // max rework (re-review) rounds per file (0..5, default 2; 0 = judge once, never re-review)
   fcq: field(z.boolean()), // run mode: run the fcq static analyzer at plan time and merge its report
   fcqOptions: field(z.record(z.unknown())), // fcq CLI options (see fcq.ts FcqOptionsSchema)
+  fcqFix: field(z.boolean()), // make reviewers write a TO-BE fix for EVERY fcq hit, not just CRITICAL/MAJOR
+  wikiKb: field(z.record(WikiKbSourceSchema)), // name -> git wiki to mirror into the KB (see kb-sync.ts)
 });
 export type ReviewConfig = z.infer<typeof ReviewConfigSchema>;
 
-/** Read `.f-review.json` from the project root, else `fcq/config/`; missing →
- * try the next location; unparseable/non-object → also fall through (an
- * invalid root file must not shadow a valid fallback); nothing valid → {}. */
+/**
+ * Config locations, highest priority first.
+ *
+ * `.fico/config/fico_ai.json` is the current home: one file for every
+ * gordian feature, not just review. The two `.f-review.json` paths stay for
+ * back-compat — projects configured before the move keep working untouched.
+ */
+export const CONFIG_PATHS = [
+  ".fico/config/fico_ai.json",
+  ".f-review.json",
+  "fcq/config/.f-review.json",
+] as const;
+
+/**
+ * Flatten one config document.
+ *
+ * `fico_ai.json` groups settings by feature — review options live under
+ * `"review"`, alongside siblings like `"wikiKb"`. The legacy `.f-review.json`
+ * files are flat. Both shapes reduce to the same object here: the `review`
+ * section wins over a same-named top-level key, so a half-migrated file
+ * behaves the way its author intended rather than silently ignoring the
+ * section.
+ */
+function flattenConfig(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null) return raw;
+  const section = (raw as Record<string, unknown>).review;
+  if (typeof section !== "object" || section === null || Array.isArray(section)) return raw;
+  return { ...(raw as Record<string, unknown>), ...(section as Record<string, unknown>) };
+}
+
+/** First config file that exists AND parses wins; missing → try the next
+ * location; unparseable/non-object → also fall through (an invalid
+ * higher-priority file must not shadow a valid fallback); nothing valid → {}. */
 export function loadConfig(cwd: string = process.cwd()): ReviewConfig {
-  for (const rel of [".f-review.json", "fcq/config/.f-review.json"]) {
+  for (const rel of CONFIG_PATHS) {
     const p = join(cwd, rel);
     if (!existsSync(p)) continue;
     try {
-      const parsed = ReviewConfigSchema.safeParse(JSON.parse(readFileSync(p, "utf8")));
+      const parsed = ReviewConfigSchema.safeParse(
+        flattenConfig(JSON.parse(readFileSync(p, "utf8")))
+      );
       if (parsed.success) return parsed.data;
     } catch {
       /* unparseable JSON — fall through to the next location */

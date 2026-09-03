@@ -11,6 +11,7 @@ import {
   mergeFcqFindings,
   readFcqFile,
   readFcqSummary,
+  FCQ_EVIDENCE_MAX_CHARS,
   renderFcqEvidence,
   renderFcqSection,
   runFcq,
@@ -161,7 +162,25 @@ describe("evidence / findings rendering", () => {
     expect(text.indexOf("R2")).toBeLessThan(text.indexOf("R3"));
     expect(text.indexOf("R3")).toBeLessThan(text.indexOf("R1"));
     expect(text).toContain("do NOT re-report");
+    expect(text).toContain("CRITICAL/MAJOR");
     expect(renderFcqEvidence([])).toBe("");
+  });
+
+  it("fixAll demands a TO-BE for every hit and survives the char cap", () => {
+    expect(renderFcqEvidence(rows, true)).toContain("EVERY hit above");
+    // Enough rows to blow FCQ_EVIDENCE_MAX_CHARS: the list is trimmed, the
+    // anchoring instructions (what makes the merge work) must still be there.
+    const many: FcqFileViolation[] = Array.from({ length: 40 }, (_, i) => ({
+      ...rows[0]!,
+      ruleId: `R${i}`,
+      description: "d".repeat(400),
+      line: i + 1,
+    }));
+    const big = renderFcqEvidence(many, true);
+    expect(big.length).toBeLessThanOrEqual(FCQ_EVIDENCE_MAX_CHARS);
+    expect(big).toContain("EVERY hit above");
+    expect(big).toContain("SAME `line`");
+    expect(big).toMatch(/… \d+ more violation/);
   });
 
   it("segment targets keep only in-window rows plus unanchored ones", () => {

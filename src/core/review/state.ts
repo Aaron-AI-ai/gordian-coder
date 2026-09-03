@@ -28,6 +28,7 @@ export interface ReviewState {
   wholeFile: boolean; // review the full file content instead of just the diff
   runId?: string; // set when this session reviews ONE file of a parallel run (Model A)
   fcqViolations?: FcqFileViolation[]; // run mode: this file's fcq violations (evidence)
+  fcqFix?: boolean; // config `fcqFix`: demand a TO-BE fix for EVERY fcq hit, not just CRITICAL/MAJOR
   systemRule: string;
   frameworkRules: string; // authoritative framework conventions (always injected)
   extraRules: ExtraRule[]; // review/rules/*.md; glob-gated per file at prompt render
