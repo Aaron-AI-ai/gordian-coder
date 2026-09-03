@@ -24,4 +24,5 @@ export * from "./pipeline/run";
 export * from "./pipeline/judge-store";
 export * from "./pipeline/judge-prompt";
 export * from "./pipeline/judge";
+export * from "./pipeline/fixer";
 export * from "./evidence/fcq";

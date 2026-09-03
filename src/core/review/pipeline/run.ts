@@ -28,6 +28,7 @@ import { defaultLabel, loadBaseline, manifestTimestamp, renderReviewContext, res
 import { readRunJudgments } from "./judge-store";
 import { DEFAULT_JUDGE_THRESHOLD } from "./judge-store";
 import { fcqFindings, mergeFcqFindings, readFcqFile, readFcqSummary, renderFcqSection, runFcq } from "../evidence/fcq";
+import { applyFixes, fixCoverage, loadFixes } from "./fixer";
 import { rubricSources } from "../evidence/rubric";
 
 export interface PlanReviewArgs {
@@ -230,36 +231,58 @@ function renderPlanInstructions(meta: RunMeta): string {
   // List every target: the orchestrator dispatches from this text, so a
   // truncated list would silently drop files onto the single finalize retry.
   const list = meta.targets.map((target) => `  - ${target}`);
+  // Steps are numbered at the end: the fix pass is conditional, and a hardcoded
+  // "3." in the judge block silently collided with it.
+  const fixSteps =
+    meta.fcqFix && meta.fcq?.status === "ok"
+      ? [
+          [
+            `FIX PASS — for EACH file above, spawn ONE f-fixer subagent with this prompt:`,
+            `   "Call f_review_fix_context with runId=\"${meta.runId}\" and file=\"<file>\", write the corrected code for every violation, then call f_review_fix_submit."`,
+            `   It runs independently of the review — same batch limit — and writes the fixes finalize merges onto the fcq rows.`,
+          ].join("\n"),
+        ]
+      : [];
   const judgeSteps = meta.judge
     ? [
-        `3. JUDGE GATE — after EACH f-reviewer subagent finishes, spawn ONE f-judge subagent with this prompt:`,
-        `   "Call f_review_judge_context with runId=\"${meta.runId}\" and file=\"<file>\", evaluate that review, then call f_review_judge."`,
-        `4. Follow the message f_review_judge returns EXACTLY: it either accepts the file, or tells you to re-spawn the f-reviewer for that file (judge feedback is injected automatically) and judge again. The rework cap is enforced by the tool — never re-spawn beyond what it instructs.`,
-        `5. When every file is accepted, call f_review_finalize with runId="${meta.runId}".`,
-        `6. If finalize reports missing files, re-spawn subagents for ONLY those files ONCE (judging each again), then finalize again.`,
+        [
+          `JUDGE GATE — after EACH f-reviewer subagent finishes, spawn ONE f-judge subagent with this prompt:`,
+          `   "Call f_review_judge_context with runId=\"${meta.runId}\" and file=\"<file>\", evaluate that review, then call f_review_judge."`,
+        ].join("\n"),
+        `Follow the message f_review_judge returns EXACTLY: it either accepts the file, or tells you to re-spawn the f-reviewer for that file (judge feedback is injected automatically) and judge again. The rework cap is enforced by the tool — never re-spawn beyond what it instructs.`,
+        `When every file is accepted, call f_review_finalize with runId="${meta.runId}".`,
+        `If finalize reports missing files, re-spawn subagents for ONLY those files ONCE (judging each again), then finalize again.`,
       ]
     : [
-        `3. When every file has been dispatched, call f_review_finalize with runId="${meta.runId}".`,
-        `4. If finalize reports missing files, re-spawn subagents for ONLY those files ONCE, then finalize again.`,
+        `When every file has been dispatched, call f_review_finalize with runId="${meta.runId}".`,
+        `If finalize reports missing files, re-spawn subagents for ONLY those files ONCE, then finalize again.`,
       ];
   const fcqLine = !meta.fcq
     ? []
     : meta.fcq.status === "ok"
       ? [
           `Static analysis (fcq): done in ${(meta.fcq.durationMs / 1000).toFixed(1)}s — violations are injected into each reviewer as evidence and merged at finalize.` +
-            (meta.fcqFix ? " `fcqFix` is on: reviewers must write a TO-BE fix for every hit." : ""),
+            (meta.fcqFix
+              ? " `fcqFix` is on: a separate f-fixer pass writes the corrected code for every hit, including MINOR."
+              : ""),
         ]
       : [`⚠️ Static analysis (fcq) FAILED: ${meta.fcq.reason}. The LLM review proceeds without it; finalize fails closed on failOn.`];
+  const steps = [
+    [
+      `For EACH file above, spawn ONE f-reviewer subagent with this prompt:`,
+      `   "Call f_review_context with runId=\"${meta.runId}\" and files=[\"<file>\"], review that single file, and call f_review_submit. Review no other files."`,
+    ].join("\n"),
+    `Spawn at most ${RUN_BATCH_SIZE} subagents at a time; wait for a batch to finish before the next.`,
+    ...fixSteps,
+    ...judgeSteps,
+  ];
   return [
-    `Run created: ${meta.runId} — ${meta.targets.length} file(s), mode: ${meta.range ? `commit diff (${meta.range})` : "explicit files"}${meta.whole ? " · whole-file" : ""}${(meta.deepPasses ?? 1) > 1 ? ` · ${meta.deepPasses} review rounds/target` : ""}${meta.failOn ? ` · gate: failOn=${meta.failOn}` : ""}${meta.judge ? ` · judge gate on` : ""}.`,
+    `Run created: ${meta.runId} — ${meta.targets.length} file(s), mode: ${meta.range ? `commit diff (${meta.range})` : "explicit files"}${meta.whole ? " · whole-file" : ""}${(meta.deepPasses ?? 1) > 1 ? ` · ${meta.deepPasses} review rounds/target` : ""}${meta.failOn ? ` · gate: failOn=${meta.failOn}` : ""}${meta.judge ? ` · judge gate on` : ""}${meta.fcqFix ? ` · fix pass on` : ""}.`,
     ...list,
     ...fcqLine,
     "",
     `Fan-out instructions (follow exactly):`,
-    `1. For EACH file above, spawn ONE f-reviewer subagent with this prompt:`,
-    `   "Call f_review_context with runId=\"${meta.runId}\" and files=[\"<file>\"], review that single file, and call f_review_submit. Review no other files."`,
-    `2. Spawn at most ${RUN_BATCH_SIZE} subagents at a time; wait for a batch to finish before the next.`,
-    ...judgeSteps,
+    ...steps.map((step, i) => `${i + 1}. ${step}`),
   ].join("\n");
 }
 
@@ -310,7 +333,12 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
   const fcqSummary = meta.fcq?.status === "ok" ? readFcqSummary(runRoot) : null;
   if (meta.fcq?.status === "ok") {
     for (const file of meta.targets) {
-      const rows = fcqFindings(file, readFcqFile(runRoot, file));
+      // The fix pass wrote the corrected code for these hits; without it a row
+      // ships with only the rule's own description as its TO-BE.
+      const rows = applyFixes(
+        fcqFindings(file, readFcqFile(runRoot, file)),
+        loadFixes(runId, file, cwd).fixes
+      );
       if (rows.length) findings[file] = mergeFcqFindings(findings[file] ?? [], rows);
     }
   }

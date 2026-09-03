@@ -177,10 +177,20 @@ describe("evidence / findings rendering", () => {
     expect(renderFcqEvidence([])).toBe("");
   });
 
-  it("fixAll demands a TO-BE for every hit and survives the char cap", () => {
-    expect(renderFcqEvidence(rows, true)).toContain("EVERY hit above");
+  it("fixAll hands the fixes to the fix pass and points the reviewer elsewhere", () => {
+    // Telling one agent to write fixes for every hit AND find what fcq cannot
+    // see produced reviews of nothing but restated style rules. With fixAll the
+    // fixes belong to f-fixer, and the reviewer is aimed at the rest.
+    const ev = renderFcqEvidence(rows, true);
+    expect(ev).toContain("separate fix pass");
+    expect(ev).toContain("including MINOR");
+    expect(ev).toContain("Do not write fixes for these");
+    expect(ev).not.toContain("EVERY hit above");
+  });
+
+  it("keeps the instructions when the violation list overflows the cap", () => {
     // Enough rows to blow FCQ_EVIDENCE_MAX_CHARS: the list is trimmed, the
-    // anchoring instructions (what makes the merge work) must still be there.
+    // instructions (what makes the pass work at all) must still be there.
     const many: FcqFileViolation[] = Array.from({ length: 40 }, (_, i) => ({
       ...rows[0]!,
       ruleId: `R${i}`,
@@ -189,9 +199,13 @@ describe("evidence / findings rendering", () => {
     }));
     const big = renderFcqEvidence(many, true);
     expect(big.length).toBeLessThanOrEqual(FCQ_EVIDENCE_MAX_CHARS);
-    expect(big).toContain("EVERY hit above");
-    expect(big).toContain("SAME `line`");
+    expect(big).toContain("separate fix pass");
     expect(big).toMatch(/… \d+ more violation/);
+
+    // Without fixAll the reviewer still owns the CRITICAL/MAJOR follow-ups.
+    const plain = renderFcqEvidence(many, false);
+    expect(plain).toContain("SAME `line`");
+    expect(plain).toContain("CRITICAL/MAJOR");
   });
 
   it("segment targets keep only in-window rows plus unanchored ones", () => {

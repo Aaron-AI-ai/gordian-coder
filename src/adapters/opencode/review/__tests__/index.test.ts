@@ -76,6 +76,8 @@ describe("tool registration", () => {
         "code_search",
         "f_review_context",
         "f_review_finalize",
+        "f_review_fix_context",
+        "f_review_fix_submit",
         "f_review_judge",
         "f_review_judge_context",
         "f_review_plan",

@@ -366,14 +366,14 @@ export function renderFcqEvidence(violations: FcqFileViolation[], fixAll = false
       (v.description && v.message && v.message !== v.description ? ` (${v.message})` : "")
   );
   const rest = sorted.length - shown.length;
-  // fcq has no fix text, so an unfollowed hit reaches the report with the rule
-  // DESCRIPTION as its TO-BE. `fixAll` buys real TO-BE code for every hit with
-  // reviewer budget; the default spends that budget on what fcq cannot see.
+  // With `fixAll` a separate f-fixer subagent writes the corrected code for
+  // every hit, so the reviewer is told to leave them alone entirely. Asking one
+  // agent to do both is what produced a review of nothing but restated style
+  // rules: a concrete list beats an abstract "also find real bugs".
   const scope = fixAll
     ? [
-        "Use them as leads: for EVERY hit above, write the corrected code as a",
-        "concrete fix in `asIs`/`toBe` — or state why it is a false positive. fcq has",
-        "no fix text, so a hit you skip ships with only the rule description.",
+        "A separate fix pass is already writing the corrected code for ALL of them,",
+        "including MINOR. Do not write fixes for these and do not restate them.",
       ]
     : [
         "Use them as leads: for CRITICAL/MAJOR hits, trace the actual data flow",
@@ -384,9 +384,17 @@ export function renderFcqEvidence(violations: FcqFileViolation[], fixAll = false
     "",
     "These are deterministic and already in the report — do NOT re-report them.",
     ...scope,
-    "Anchor such a finding on the SAME `line` as the fcq hit (it is merged into",
-    "that row) and name the rule id in `message`. Spend the rest of your budget",
-    "on what the tools cannot see: logic, boundaries, transactions, framework rules.",
+    ...(fixAll
+      ? [
+          "YOUR job is what static analysis cannot see: logic, boundaries, null and",
+          "error paths, transactions, concurrency, and the framework rules below.",
+          "Read the Related code section and follow the callers before you submit.",
+        ]
+      : [
+          "Anchor such a finding on the SAME `line` as the fcq hit (it is merged into",
+          "that row) and name the rule id in `message`. Spend the rest of your budget",
+          "on what the tools cannot see: logic, boundaries, transactions, framework rules.",
+        ]),
   ];
   // Cap the LIST, never the tail: slicing the joined body dropped the
   // instructions exactly when a file had enough violations to need them.

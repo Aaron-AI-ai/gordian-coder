@@ -27,6 +27,8 @@ import {
   REQUIRED_CATEGORIES,
   SEVERITIES,
   getState,
+  fixContext,
+  submitFix,
   REVIEW_TOOLS,
   runReviewTool,
   startReview,
@@ -48,6 +50,10 @@ import {
   REVIEWER_AGENT_PERMISSION,
   REVIEWER_AGENT_TOOLS,
   JUDGE_AGENT_NAME,
+  FIXER_AGENT_NAME,
+  FIXER_AGENT_DESCRIPTION,
+  FIXER_AGENT_PROMPT,
+  FIXER_AGENT_TOOLS,
   JUDGE_AGENT_DESCRIPTION,
   JUDGE_AGENT_PROMPT,
   JUDGE_AGENT_PERMISSION,
@@ -202,6 +208,42 @@ export function createReviewModule(input: PluginInput): {
     },
   });
 
+  const f_review_fix_context = tool({
+    description:
+      "Fix pass (f-fixer only): the source of one file plus every static-analysis violation in it, to be turned into corrected code.",
+    args: {
+      runId: z.string().min(1).describe("The runId returned by f_review_plan"),
+      file: z.string().min(1).describe("Repo-relative path of the file to fix"),
+    },
+    async execute(args) {
+      return fixContext(args.runId, args.file, cwd);
+    },
+  });
+
+  const f_review_fix_submit = tool({
+    description:
+      "Fix pass (f-fixer only): record the corrected code for each violation. Anchored on line + ruleId, merged onto the fcq rows at finalize.",
+    args: {
+      runId: z.string().min(1),
+      file: z.string().min(1),
+      fixes: z
+        .array(
+          z.object({
+            line: z.number().int().nonnegative().describe("Violation line, exactly as listed"),
+            ruleId: z.string().describe("Violation rule id, exactly as listed"),
+            asIs: z.string().optional().describe("The code as it stands — code only"),
+            toBe: z.string().optional().describe("The corrected code — code only"),
+            falsePositive: z.boolean().optional().describe("True when no change applies"),
+            note: z.string().optional().describe("One line; required for a false positive"),
+          })
+        )
+        .describe("One entry per violation"),
+    },
+    async execute(args) {
+      return submitFix(args, cwd);
+    },
+  });
+
   const f_review_finalize = tool({
     description:
       "Finalize a parallel review run (orchestrator only): verifies every planned file was reviewed, aggregates the per-file reviews into the final report with a coverage/quality summary, and reports any missing files (re-spawn those once, then finalize again).",
@@ -343,6 +385,13 @@ export function createReviewModule(input: PluginInput): {
       steps: JUDGE_AGENT_STEPS,
       maxSteps: JUDGE_AGENT_STEPS,
     };
+    cfg.agent[FIXER_AGENT_NAME] ??= {
+      mode: "subagent",
+      description: FIXER_AGENT_DESCRIPTION,
+      prompt: FIXER_AGENT_PROMPT,
+      permission: JUDGE_AGENT_PERMISSION,
+      tools: FIXER_AGENT_TOOLS,
+    };
     (cfg.command ??= {})[REVIEW_COMMAND_NAME] ??= {
       description: REVIEW_COMMAND_DESCRIPTION,
       template: REVIEW_COMMAND_TEMPLATE,
@@ -356,6 +405,8 @@ export function createReviewModule(input: PluginInput): {
       ...explorationTools,
       f_review_submit,
       f_review_finalize,
+      f_review_fix_context,
+      f_review_fix_submit,
       f_review_judge_context,
       f_review_judge,
     },

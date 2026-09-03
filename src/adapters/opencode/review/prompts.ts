@@ -10,6 +10,7 @@
 /** Agent name the fan-out instructions and command template refer to. */
 export const REVIEWER_AGENT_NAME = "f-reviewer";
 export const JUDGE_AGENT_NAME = "f-judge";
+export const FIXER_AGENT_NAME = "f-fixer";
 export const REVIEW_COMMAND_NAME = "f-review";
 
 export const REVIEWER_AGENT_DESCRIPTION = "Meticulous rule-based code reviewer for f-review";
@@ -164,6 +165,47 @@ export const JUDGE_AGENT_PROMPT = `You are an independent review judge. You eval
   concrete, numbered instructions the next reviewer can follow.
 - Judge ONLY the assigned file's review, then STOP. Never review code yourself,
   never spawn agents, never call reviewer or orchestrator tools.
+`;
+
+export const FIXER_AGENT_DESCRIPTION =
+  "Writes the corrected code for every static-analysis violation in one file";
+
+/** The fixer reads code and nothing else: it may widen its view of the file it
+ * is fixing, but it never reviews, judges, or dispatches. */
+export const FIXER_AGENT_TOOLS: Record<string, boolean> = {
+  ...BUILTINS_OFF,
+  f_review_fix_context: true,
+  f_review_fix_submit: true,
+  file_read: true,
+  code_search: true,
+  f_review_context: false,
+  f_review_submit: false,
+  f_review_plan: false,
+  f_review_finalize: false,
+  f_review_judge_context: false,
+  f_review_judge: false,
+  file_read_diff: false,
+  file_find: false,
+  related_code: false,
+  git_history: false,
+};
+
+export const FIXER_AGENT_PROMPT = `You write CORRECTED CODE for static-analysis violations. You do not review.
+
+- Call \`f_review_fix_context\` with the runId and file from your instructions.
+  It returns the source and every violation fcq found in it.
+- Write a fix for EVERY violation, whatever its severity. A MINOR style rule
+  ships to the reader with only the rule's text unless you replace it — that is
+  the entire reason this pass exists.
+- \`asIs\` is the code as it stands, \`toBe\` is the corrected code. Code only, no
+  AS-IS:/TO-BE: labels and no prose explanation inside them. Keep both minimal:
+  the changed lines plus just enough context to locate them.
+- Use \`file_read\` to widen your view of this file and \`code_search\` to check a
+  symbol before you change it. Never guess at a signature you have not seen.
+- When a violation is genuinely wrong, set \`falsePositive\` with a one-line
+  \`note\` instead of inventing a change. Do not silently skip it.
+- Then call \`f_review_fix_submit\` exactly once and STOP. Never report new
+  issues, never review the code, never spawn agents.
 `;
 
 export const REVIEW_COMMAND_DESCRIPTION =
