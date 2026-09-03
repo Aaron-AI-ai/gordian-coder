@@ -22,6 +22,7 @@ import { writeFileReview } from "../../pipeline/run-store";
 import { loadRun } from "../../pipeline/artifact";
 import { readFileReviewResult } from "../../pipeline/artifact";
 import { startReview } from "../../pipeline/start";
+import { guardExploration, submitReview } from "../../pipeline/loop";
 import { reviewPromptFor } from "../../pipeline/prompt";
 import { judgeContext, submitJudge } from "../../pipeline/judge";
 import { clearState, getState } from "../../pipeline/state";
@@ -289,6 +290,72 @@ describe("run-mode integration", () => {
     expect(report).toContain("fcq:mybatis-sql/FCQ-SQL-INJ-001");
     expect(report).toContain("## Static Analysis (fcq)");
     expect(report).toContain("Violations in reviewed files: 2 (+1 outside");
+  });
+
+  it("bounces a submission that only restates the fcq list", async () => {
+    // The failure this guards: handed 28 violations, a reviewer submitted six
+    // restated checkstyle rows and nothing else. Those rows are already in the
+    // report, so such a review added nothing.
+    const d = gitRepo();
+    fakeFcq(d);
+    const plan = await planReview({ commit: "HEAD" }, d);
+    const runId = /Run created: (\S+)/.exec(plan)![1];
+    await startReview({ runId, files: ["src/A.java"] }, d, "echo");
+    const st = getState("echo")!;
+    guardExploration(st, "file_read", "x"); // clear the "no exploration" note
+    const token = /CURRENT_SUBMIT_TOKEN[:\s]*([A-Za-z0-9_-]+)/.exec(reviewPromptFor(st)!)?.[1];
+    const echo = await submitReview(
+      {
+        submitToken: token,
+        assessed: [...REQUIRED_CATEGORIES],
+        findings: [
+          {
+            category: "security" as const,
+            severity: "major" as const,
+            file: "src/A.java",
+            line: 10,
+            rule: "FCQ-SQL-INJ-001",
+            message: "restating the fcq hit",
+            toBe: "use #{}",
+          },
+        ],
+      },
+      "echo"
+    );
+    expect(echo).toContain("Every finding restates an fcq rule");
+    expect(echo).toContain("related_code");
+    clearState("echo");
+  });
+
+  it("accepts a submission that adds a finding of its own", async () => {
+    const d = gitRepo();
+    fakeFcq(d);
+    const plan = await planReview({ commit: "HEAD" }, d);
+    const runId = /Run created: (\S+)/.exec(plan)![1];
+    await startReview({ runId, files: ["src/A.java"] }, d, "own");
+    const st = getState("own")!;
+    guardExploration(st, "file_read", "x");
+    const token = /CURRENT_SUBMIT_TOKEN[:\s]*([A-Za-z0-9_-]+)/.exec(reviewPromptFor(st)!)?.[1];
+    const ok = await submitReview(
+      {
+        submitToken: token,
+        assessed: [...REQUIRED_CATEGORIES],
+        findings: [
+          {
+            category: "correctness" as const,
+            severity: "major" as const,
+            file: "src/A.java",
+            line: 42,
+            rule: "null-handling",
+            message: "empty result dereferenced",
+            toBe: "if (r.isEmpty()) return null;",
+          },
+        ],
+      },
+      "own"
+    );
+    expect(ok).not.toContain("Every finding restates");
+    clearState("own");
   });
 
   it("merging fcq findings does not unmatch recorded judgments (judge gate)", async () => {

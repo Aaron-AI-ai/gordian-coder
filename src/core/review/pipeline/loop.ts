@@ -134,7 +134,14 @@ export function ruleFileContent(
 function finalCheckNotes(
   st: ReviewState,
   file: string,
-  findings: { severity: Severity; asIs?: string; toBe?: string; suggestion?: string }[]
+  findings: {
+    severity: Severity;
+    rule: string;
+    message: string;
+    asIs?: string;
+    toBe?: string;
+    suggestion?: string;
+  }[]
 ): string[] {
   const notes: string[] = [];
   if (!Object.keys(st.callLog[file] ?? {}).length) {
@@ -146,7 +153,27 @@ function finalCheckNotes(
   const noFix = findings.filter(
     (f) => (f.severity === "blocker" || f.severity === "major") && !hasFix(f)
   ).length;
-  if (noFix) notes.push(`- ${noFix} blocker/major finding(s) lack a concrete \`suggestion\`.`);
+  if (noFix) notes.push(`- ${noFix} blocker/major finding(s) lack a concrete fix (\`asIs\`/\`toBe\`).`);
+
+  // A submission that only echoes the static-analysis list is the failure this
+  // guards: fcq's hits are already in the report, so a review that adds nothing
+  // beyond them added nothing. Only checked when there WERE hits to echo.
+  if (st.fcqViolations?.length && findings.length) {
+    const ruleIds = new Set(
+      st.fcqViolations.map((v) => v.ruleId.toLowerCase())
+    );
+    const own = findings.filter(
+      (f) => ![...ruleIds].some((id) => `${f.rule} ${f.message}`.toLowerCase().includes(id))
+    ).length;
+    if (own === 0) {
+      notes.push(
+        `- Every finding restates an fcq rule. Those are already in the report ` +
+          `(a separate pass writes their fixes). Use related_code / code_search on ` +
+          `the callers and report what static analysis cannot see — logic, null and ` +
+          `error paths, transactions, framework rules — or submit with none.`
+      );
+    }
+  }
   return notes;
 }
 

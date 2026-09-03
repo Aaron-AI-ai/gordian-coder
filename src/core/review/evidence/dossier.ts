@@ -179,11 +179,16 @@ export function reviewEvidence(
     [
       ...(remaining.length
         ? [
-            "## Related code (NOT yet read — fetch only if it matters)",
+            // Phrased as an instruction, not an invitation. "fetch only if it
+            // matters" reads to a small model as "skip this", and a reviewer
+            // handed a concrete fcq list took that permission every time.
+            "## Related code (NOT yet read — READ THESE)",
             renderRelatedList(cwd, ref, file, remaining, false),
             "",
-            "Candidates whose source is not included below. If one's behavior matters " +
-              "to a finding, one targeted code_search(<symbol>) or file_read is worthwhile.",
+            "Their source is NOT included above. Before you submit, open the ones a " +
+              "finding could depend on with code_search(<symbol>) or file_read: a caller " +
+              "whose contract you never checked is where the bugs static analysis " +
+              "cannot see actually live.",
           ]
         : []),
       ...(sourceBlocks.length
