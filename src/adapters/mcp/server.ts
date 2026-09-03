@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * MCP Server Entry Point
  * Run this file directly to start the MCP server for Claude Code or Cline

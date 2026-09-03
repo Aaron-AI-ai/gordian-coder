@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import { startCliServer } from "./index";
 
 startCliServer().catch((error) => {
