@@ -54,6 +54,11 @@ export function reviewerAgentSteps(maxToolCalls: number): number {
 }
 export const JUDGE_AGENT_STEPS = 6;
 
+/** Step cap for the fix pass: context, then submit, plus room to retry a
+ * rejected submission. Without a cap a fixer that cannot make progress spins —
+ * one was observed retrying the same read 35 times. */
+export const FIXER_AGENT_STEPS = 6;
+
 /** Legacy OpenCode `tools` compatibility. `permission` above is the security
  * boundary; the wildcard and explicit built-in denies keep older releases as
  * confined as their legacy matching supports. */
@@ -170,14 +175,19 @@ export const JUDGE_AGENT_PROMPT = `You are an independent review judge. You eval
 export const FIXER_AGENT_DESCRIPTION =
   "Writes the corrected code for every static-analysis violation in one file";
 
-/** The fixer reads code and nothing else: it may widen its view of the file it
- * is fixing, but it never reviews, judges, or dispatches. */
+/** Exactly two tools.
+ *
+ * The exploration tools are deliberately NOT here: every one of them requires
+ * an active review session, and the fixer never opens one — it would get
+ * "No active review" forever. A fixer granted file_read was observed retrying
+ * it 35 times against that error. f_review_fix_context carries the source it
+ * needs instead. */
 export const FIXER_AGENT_TOOLS: Record<string, boolean> = {
   ...BUILTINS_OFF,
   f_review_fix_context: true,
   f_review_fix_submit: true,
-  file_read: true,
-  code_search: true,
+  file_read: false,
+  code_search: false,
   f_review_context: false,
   f_review_submit: false,
   f_review_plan: false,
@@ -200,8 +210,10 @@ export const FIXER_AGENT_PROMPT = `You write CORRECTED CODE for static-analysis 
 - \`asIs\` is the code as it stands, \`toBe\` is the corrected code. Code only, no
   AS-IS:/TO-BE: labels and no prose explanation inside them. Keep both minimal:
   the changed lines plus just enough context to locate them.
-- Use \`file_read\` to widen your view of this file and \`code_search\` to check a
-  symbol before you change it. Never guess at a signature you have not seen.
+- Work from the source in that context and nothing else — it is the whole file
+  unless it says otherwise. You have no other tools. If the context is
+  truncated, fix what you can see and leave the rest unentered rather than
+  guessing at code you were not shown.
 - When a violation is genuinely wrong, set \`falsePositive\` with a one-line
   \`note\` instead of inventing a change. Do not silently skip it.
 - Then call \`f_review_fix_submit\` exactly once and STOP. Never report new

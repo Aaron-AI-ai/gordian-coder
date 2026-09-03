@@ -69,6 +69,22 @@ function moduleFor(cwd: string) {
 const ctx = { sessionID: SESSION } as never;
 
 describe("tool registration", () => {
+  it("gives the fixer only tools that work without a review session", () => {
+    // file_read and code_search route through runReviewTool, which needs an
+    // active review. The fixer never opens one, so granting them handed it two
+    // tools that can only ever answer "No active review".
+    const { mod } = moduleFor(gitRepo());
+    const cfg: { agent: Record<string, { tools: Record<string, boolean>; steps?: number }> } = { agent: {} };
+    mod.config(cfg as never);
+    const fixer = cfg.agent["f-fixer"]!;
+    expect(Object.entries(fixer.tools).filter(([, on]) => on).map(([n]) => n).sort()).toEqual([
+      "f_review_fix_context",
+      "f_review_fix_submit",
+    ]);
+    // And a step cap, so a fixer that cannot progress stops instead of spinning.
+    expect(fixer.steps).toBeGreaterThan(0);
+  });
+
   it("exposes the full review toolset, orchestrator tools included", () => {
     const { mod } = moduleFor(gitRepo());
     expect(Object.keys(mod.tools).sort()).toEqual(

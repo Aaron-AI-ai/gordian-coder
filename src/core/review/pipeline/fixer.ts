@@ -29,8 +29,10 @@ import { fileRead } from "../tools/read";
 /** Violations shown per request. Beyond this the file is a lint failure, not a
  * review target, and a fixer session cannot hold them all anyway. */
 export const FIX_MAX_ITEMS = 60;
-/** Source window around a violation when the whole file is too large. */
-export const FIX_FILE_MAX_LINES = 600;
+/** Lines of source handed to the fixer. It has no read tools — this context is
+ * the only code it will ever see — so the cap is generous and a file past it is
+ * called out rather than silently cut. */
+export const FIX_FILE_MAX_LINES = 2000;
 
 export const FixSchema = z.object({
   line: z.number().int().nonnegative(),
@@ -88,7 +90,9 @@ export function fixContext(runId: string, file: string, cwd: string): string {
   if (!rows.length) return `✅ ${file} has no fcq violations. Nothing to fix; do not submit.`;
 
   const shown = rows.slice(0, FIX_MAX_ITEMS);
-  const source = fileRead(cwd, meta.range ? null : null, file, 1, FIX_FILE_MAX_LINES);
+  // Working tree, not the ref: the fix is written against the code as it is now.
+  const source = fileRead(cwd, null, file, 1, FIX_FILE_MAX_LINES);
+  const truncated = source.includes("IS_TRUNCATED: true");
   return [
     `# Fix pass — ${file} (run ${runId})`,
     "",
@@ -107,6 +111,9 @@ export function fixContext(runId: string, file: string, cwd: string): string {
     ),
     "",
     "## Source",
+    truncated
+      ? `⚠️ Only the first ${FIX_FILE_MAX_LINES} lines are shown and you have no read tools. Enter fixes ONLY for violations you can see here; leave the rest out.`
+      : "This is the complete file. You have no read tools — everything you need is here.",
     source,
     "",
     "## Submit",

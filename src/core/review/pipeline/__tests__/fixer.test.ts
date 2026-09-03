@@ -77,6 +77,17 @@ describe("fixContext", () => {
     expect(ctx).toContain("f_review_fix_submit");
   });
 
+  it("says the context is all the code there is", async () => {
+    // The fixer has no read tools: a fixer granted file_read got "No active
+    // review" on every call and retried 35 times. The context has to be
+    // self-sufficient and say so.
+    const cwd = repo();
+    const runId = await run(cwd);
+    const ctx = fixContext(runId, "src/A.java", cwd);
+    expect(ctx).toContain("This is the complete file");
+    expect(ctx).toContain("no read tools");
+  });
+
   it("refuses a file that is not a target, and a run without fcq", async () => {
     const cwd = repo();
     const runId = await run(cwd);

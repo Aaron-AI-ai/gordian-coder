@@ -54,6 +54,7 @@ import {
   FIXER_AGENT_DESCRIPTION,
   FIXER_AGENT_PROMPT,
   FIXER_AGENT_TOOLS,
+  FIXER_AGENT_STEPS,
   JUDGE_AGENT_DESCRIPTION,
   JUDGE_AGENT_PROMPT,
   JUDGE_AGENT_PERMISSION,
@@ -391,6 +392,8 @@ export function createReviewModule(input: PluginInput): {
       prompt: FIXER_AGENT_PROMPT,
       permission: JUDGE_AGENT_PERMISSION,
       tools: FIXER_AGENT_TOOLS,
+      steps: FIXER_AGENT_STEPS,
+      maxSteps: FIXER_AGENT_STEPS,
     };
     (cfg.command ??= {})[REVIEW_COMMAND_NAME] ??= {
       description: REVIEW_COMMAND_DESCRIPTION,
