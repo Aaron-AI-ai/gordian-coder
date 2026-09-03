@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 function gitRepo(): string {
   const d = mkdtempSync(join(tmpdir(), "k-git-"));
@@ -89,11 +89,21 @@ describe("isDefaultExcluded", () => {
 });
 
 describe("collectTargets (files-only, no git)", () => {
+  /** collectTargets resolves a named file to a real path, so the fixtures have
+   * to exist — a name that matches nothing is now rejected by design. */
+  function withFiles(dir: string, paths: string[]): string {
+    for (const rel of paths) {
+      mkdirSync(join(dir, dirname(rel)), { recursive: true });
+      writeFileSync(join(dir, rel), "x\n");
+    }
+    return dir;
+  }
+
   it("drops dot paths even when the user asked for them explicitly", async () => {
     // Documented in the spec (§3.2): the default exclusion is not overridable,
     // so CI/config files under a dot path are never reviewable. Silent by
     // design — if this ever becomes an opt-in, this test is the contract.
-    const d = tmp();
+    const d = withFiles(tmp(), [".github/workflows/ci.yml", "src/a.ts", ".f-review.json"]);
     expect(
       await collectTargets({ files: [".github/workflows/ci.yml", "src/a.ts"] }, d)
     ).toEqual(["src/a.ts"]);
@@ -101,7 +111,7 @@ describe("collectTargets (files-only, no git)", () => {
   });
 
   it("unions files and applies config + param excludes", async () => {
-    const d = tmp();
+    const d = withFiles(tmp(), ["src/a.ts", "src/a.test.ts", "src/b.ts"]);
     writeFileSync(join(d, ".f-review.json"), JSON.stringify({ exclude: ["**/*.test.ts"] }));
     const targets = await collectTargets(
       { files: ["src/a.ts", "src/a.test.ts", "src/b.ts"], exclude: ["src/b.ts"] },
@@ -113,7 +123,7 @@ describe("collectTargets (files-only, no git)", () => {
   it("drops dot-paths and .class files by default", async () => {
     const targets = await collectTargets(
       { files: ["src/Foo.java", ".gitignore", ".github/ci.yml", "build/Foo.class"] },
-      tmp()
+      withFiles(tmp(), ["src/Foo.java", ".gitignore", ".github/ci.yml", "build/Foo.class"])
     );
     expect(targets).toEqual(["src/Foo.java"]);
   });
@@ -121,7 +131,7 @@ describe("collectTargets (files-only, no git)", () => {
   it("normalizes './' prefixes and backslashes in explicit files", async () => {
     const targets = await collectTargets(
       { files: ["./src/a.ts", "src\\b.ts", "src/a.ts"] },
-      tmp()
+      withFiles(tmp(), ["src/a.ts", "src/b.ts"])
     );
     expect(targets).toEqual(["src/a.ts", "src/b.ts"]); // deduped + normalized
   });
@@ -129,7 +139,7 @@ describe("collectTargets (files-only, no git)", () => {
   it("rebases absolute paths inside cwd onto the repo root", async () => {
     // Every consumer joins the target against cwd, so an absolute target reads
     // as <cwd>/<cwd>/… and the judge scores 0 on a file it cannot open.
-    const d = tmp();
+    const d = withFiles(tmp(), ["src/a.ts", "src/b.ts"]);
     const targets = await collectTargets(
       { files: [join(d, "src/a.ts"), "src/a.ts", join(d, "src/b.ts")] },
       d
@@ -137,9 +147,26 @@ describe("collectTargets (files-only, no git)", () => {
     expect(targets).toEqual(["src/a.ts", "src/b.ts"]); // deduped against the relative form
   });
 
-  it("leaves absolute paths outside cwd alone", async () => {
-    const targets = await collectTargets({ files: ["/elsewhere/src/a.ts"] }, tmp());
-    expect(targets).toEqual(["/elsewhere/src/a.ts"]); // ../ would be dropped by the dot rule
+  it("rejects a target that is not in this repository", async () => {
+    // Previously an absolute path outside cwd was carried through untouched,
+    // and every later read missed — the reviewer then reported the file as
+    // missing context instead of the run failing at plan time.
+    const d = withFiles(tmp(), ["src/a.ts"]);
+    expect(collectTargets({ files: ["/elsewhere/src/a.ts"] }, d)).rejects.toThrow(
+      /no file matching/
+    );
+    expect(collectTargets({ files: ["nope.ts"] }, d)).rejects.toThrow(/no file matching/);
+  });
+
+  it("resolves a bare filename, and names the candidates when several match", async () => {
+    // An orchestrator that says "SONAQ002Service.java" is doing the obvious
+    // thing; resolving it is the difference between a review and a run whose
+    // every read misses.
+    const d = withFiles(tmp(), ["src/deep/Only.java", "a/Dup.java", "b/Dup.java"]);
+    expect(await collectTargets({ files: ["Only.java"] }, d)).toEqual(["src/deep/Only.java"]);
+    expect(await collectTargets({ files: ["deep/Only.java"] }, d)).toEqual(["src/deep/Only.java"]);
+    expect(collectTargets({ files: ["Dup.java"] }, d)).rejects.toThrow(/matches 2 files/);
+    expect(await collectTargets({ files: ["a/Dup.java"] }, d)).toEqual(["a/Dup.java"]);
   });
 });
 

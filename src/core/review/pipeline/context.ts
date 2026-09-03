@@ -10,10 +10,12 @@
  * latest commit (HEAD~1..HEAD).
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, relative } from "node:path";
 import { z } from "zod";
 import { loadConfig } from "../config";
+import { afterRef, listFilesAt } from "../tools/read";
+import { RUNS_DIR } from "./artifact";
 
 export const CommitSpec = z.union([
   z.string(), // single ref ("HEAD", "<sha>") or range ("A..B")
@@ -170,6 +172,43 @@ function normalizeTarget(file: string, cwd: string): string {
   return rel && !rel.startsWith("../") ? rel : path;
 }
 
+/**
+ * Resolve one user-supplied target to a real repository path.
+ *
+ * A caller that names a file rather than a path ("SONAQ002Service.java", or
+ * "qry/service/SONAQ002Service.java") is doing the obvious thing, and an
+ * orchestrator model does it constantly. Left unresolved the run is created
+ * anyway and every downstream read misses, so the reviewer reports the file as
+ * missing context instead of reviewing it — a silent, expensive no-op.
+ *
+ * Resolution is a path-suffix match, so ambiguity is fixed by naming one more
+ * directory. Our own run artifacts are excluded: `reviews/<file>.java--<hash>.json`
+ * shares the basename of the file it reviewed, and every past run would
+ * otherwise make its own subject ambiguous.
+ *
+ * Throws on no match or several, naming the candidates — collectTargets's
+ * callers turn that into text for the model.
+ */
+function resolveTargetPath(spec: string, cwd: string, ref: string | null): string {
+  if (existsSync(join(cwd, spec)) && statSync(join(cwd, spec)).isFile()) return spec;
+
+  const suffix = spec.startsWith("/") ? spec : `/${spec}`;
+  const candidates = listFilesAt(cwd, ref).filter(
+    (f) => !f.startsWith(`${RUNS_DIR}/`) && (f === spec || f.endsWith(suffix))
+  );
+  if (candidates.length === 1) return candidates[0]!;
+  if (candidates.length === 0) {
+    throw new Error(
+      `no file matching "${spec}" in this repository — pass a repo-relative path`
+    );
+  }
+  throw new Error(
+    `"${spec}" matches ${candidates.length} files; name one of them (or add a parent directory):\n` +
+      candidates.slice(0, 10).map((f) => `  - ${f}`).join("\n") +
+      (candidates.length > 10 ? `\n  … and ${candidates.length - 10} more` : "")
+  );
+}
+
 /** Build the deduped, exclude-filtered, sorted target file list. */
 export async function collectTargets(
   input: ReviewInput,
@@ -181,7 +220,19 @@ export async function collectTargets(
   if (range) for (const f of gitDiffFiles(range, cwd)) set.add(f);
   // Normalize user-supplied paths ("./x", backslashes, absolute) to git's
   // repo-relative forward-slash form, so they match diff headers and each other.
-  if (input.files) for (const f of input.files) set.add(normalizeTarget(f, cwd));
+  // Resolve every named file to a real path, reporting ALL bad ones at once:
+  // fixing them one plan call at a time is the worst version of this.
+  if (input.files) {
+    const problems: string[] = [];
+    for (const f of input.files) {
+      try {
+        set.add(resolveTargetPath(normalizeTarget(f, cwd), cwd, afterRef(range)));
+      } catch (err) {
+        problems.push(err instanceof Error ? err.message : String(err));
+      }
+    }
+    if (problems.length) throw new Error(problems.join("\n"));
+  }
 
   const kept = [...set].filter((f) => !isDefaultExcluded(f));
   const patterns = [...(loadConfig(cwd).exclude ?? []), ...(input.exclude ?? [])];

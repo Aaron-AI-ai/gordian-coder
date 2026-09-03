@@ -348,6 +348,7 @@ describe("planReview", () => {
   it("refuses runs above MAX_RUN_TARGETS", async () => {
     const d = dir();
     const files = Array.from({ length: MAX_RUN_TARGETS + 1 }, (_, i) => `f${i}.ts`);
+    for (const f of files) writeFileSync(join(d, f), "x\n"); // targets must exist to be planned
     const msg = await planReview({ files }, d);
     expect(msg).toContain("exceed the per-run cap");
     expect(existsSync(join(d, RUNS_DIR))).toBe(false); // nothing created
@@ -355,6 +356,9 @@ describe("planReview", () => {
 
   it("returns the empty-target message without creating a run", async () => {
     const d = gitRepo();
+    mkdirSync(join(d, ".hidden"), { recursive: true });
+    writeFileSync(join(d, ".hidden/x.ts"), "x\n");
+    // The file exists and resolves; the dot-path rule is what empties the set.
     const msg = await planReview({ files: [".hidden/x.ts"] }, d);
     expect(msg).toContain("No files to review");
   });
