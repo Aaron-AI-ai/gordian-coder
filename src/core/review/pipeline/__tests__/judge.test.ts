@@ -830,3 +830,140 @@ describe("criteria constant", () => {
     }
   });
 });
+
+describe("judge context overflow (fail-closed)", () => {
+  /** Repo whose single file is far larger than any judge budget. */
+  function hugeRepo(lines: number, width = 200): string {
+    const d = dir();
+    const sh = (c: string[]) => Bun.spawnSync(c, { cwd: d });
+    sh(["git", "init", "-q"]);
+    sh(["git", "config", "user.email", "t@t"]);
+    sh(["git", "config", "user.name", "t"]);
+    writeFileSync(join(d, "a.ts"), "x\n");
+    sh(["git", "add", "-A"]);
+    sh(["git", "commit", "-qm", "init"]);
+    writeFileSync(
+      join(d, "a.ts"),
+      Array.from({ length: lines }, (_, i) => `const v${i} = "${"y".repeat(width)}";`).join("\n") + "\n"
+    );
+    sh(["git", "add", "-A"]);
+    sh(["git", "commit", "-qm", "grow"]);
+    return d;
+  }
+
+  async function context(
+    d: string,
+    findings: FileReviewResult["findings"],
+    over: Partial<RunMeta> = {}
+  ): Promise<string> {
+    const meta = await createRun(baseMeta({ whole: true, ...over }), d);
+    await writeFileReview(
+      meta.runId,
+      { file: "a.ts", assessed: [...REQUIRED_CATEGORIES], findings, explorationCalls: 2, partial: false },
+      "# r",
+      d
+    );
+    return judgeContext(meta.runId, "a.ts", d);
+  }
+
+  const finding = (line?: number): FileReviewResult["findings"][number] => ({
+    category: "correctness",
+    severity: "major",
+    file: "a.ts",
+    ...(line === undefined ? {} : { line }),
+    rule: "r",
+    message: "m",
+    toBe: "fix",
+  });
+
+  it("refuses to judge when a truncated change leaves a finding unanchored", async () => {
+    // An unanchored finding cannot be checked against a targeted window, so a
+    // judge would score it against absence and could still award PASS.
+    const out = await context(hugeRepo(4000), [finding(1), finding()]);
+    expect(out).toContain("Judge context INCOMPLETE");
+    expect(out).toContain("1 finding(s) have no line anchor");
+    expect(out).toContain("Do NOT call f_review_judge");
+  });
+
+  it("refuses to judge a zero-finding review of a truncated change", async () => {
+    // With no findings there are no anchors to recover the hidden code, so the
+    // judge would see only the prefix and call the whole file clean.
+    const out = await context(hugeRepo(4000), []);
+    expect(out).toContain("Judge context INCOMPLETE");
+    expect(out).toContain("no anchors for the omitted code");
+  });
+
+  it("refuses to judge when the findings alone exceed the budget", async () => {
+    const many = Array.from({ length: 60 }, (_, i) => ({
+      ...finding(i + 1),
+      message: "m".repeat(400),
+    }));
+    const out = await context(hugeRepo(50), many);
+    expect(out).toContain("Judge context INCOMPLETE");
+    expect(out).toContain("serialized finding(s) exceed");
+  });
+
+  it("refuses to judge when the finding windows still do not fit", async () => {
+    // Anchors exist and windows are built, but base + windows still blow the
+    // change budget — the last place a partial excerpt could have slipped by.
+    const out = await context(hugeRepo(1, 40_000), [finding(1)]);
+    expect(out).toContain("Judge context INCOMPLETE");
+    expect(out).toContain("finding window(s) plus the base exceed");
+  });
+
+  it("marks the artifact terminal so the run fails closed", async () => {
+    const d = hugeRepo(4000);
+    const meta = await createRun(baseMeta({ whole: true }), d);
+    await writeFileReview(
+      meta.runId,
+      { file: "a.ts", assessed: [...REQUIRED_CATEGORIES], findings: [], explorationCalls: 2, partial: false },
+      "# r",
+      d
+    );
+    expect(judgeContext(meta.runId, "a.ts", d)).toContain("Judge context INCOMPLETE");
+    // Terminal, not merely unjudged: a retry must not be able to produce a PASS.
+    const judgment = loadJudgment(meta.runId, "a.ts", d);
+    expect(judgment.terminal?.status).toBe("judge-incomplete");
+    expect(judgment.terminal?.reason).toContain("bounded judge context unavailable");
+
+    const out = await finalizeRun(meta.runId, d);
+    expect(out).toContain("INCOMPLETE");
+  });
+
+  it("refuses to judge a large deletion, whose source no longer exists", async () => {
+    // The diff is big enough to need windows, but the file is gone at the
+    // reviewed ref — there is nothing to build a window from.
+    const d = dir();
+    const sh = (c: string[]) => Bun.spawnSync(c, { cwd: d });
+    sh(["git", "init", "-q"]);
+    sh(["git", "config", "user.email", "t@t"]);
+    sh(["git", "config", "user.name", "t"]);
+    writeFileSync(
+      join(d, "a.ts"),
+      Array.from({ length: 400 }, (_, i) => `const v${i} = "${"y".repeat(200)}";`).join("\n") + "\n"
+    );
+    sh(["git", "add", "-A"]);
+    sh(["git", "commit", "-qm", "init"]);
+    rmSync(join(d, "a.ts"));
+    sh(["git", "add", "-A"]);
+    sh(["git", "commit", "-qm", "delete"]);
+
+    const meta = await createRun(baseMeta({ whole: false }), d);
+    await writeFileReview(
+      meta.runId,
+      { file: "a.ts", assessed: [...REQUIRED_CATEGORIES], findings: [finding(1)], explorationCalls: 2, partial: false },
+      "# r",
+      d
+    );
+    const out = judgeContext(meta.runId, "a.ts", d);
+    expect(out).toContain("Judge context INCOMPLETE");
+    expect(out).toContain("source is unavailable");
+  });
+
+  it("judges normally when everything fits", async () => {
+    const out = await context(gitRepo(), [finding(1)], { whole: false });
+    expect(out).not.toContain("Judge context INCOMPLETE");
+    expect(out).toContain("### Criteria");
+    expect(out.length).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_CHARS);
+  });
+});

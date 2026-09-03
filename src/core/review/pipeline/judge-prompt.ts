@@ -142,6 +142,10 @@ export function changeExcerpt(
     }
   }
 
+  // Unreachable while JUDGE_BASE_MAX_CHARS and JUDGE_DIFF_MAX_CHARS both sit
+  // below JUDGE_CHANGE_MAX_CHARS — both sources are already capped above. Kept
+  // as the guard on that invariant: raise either budget past the change budget
+  // and this is what stops a partial excerpt from reaching the judge.
   if (base.length > JUDGE_CHANGE_MAX_CHARS) {
     return contextOverflow(`the base change excerpt exceeds ${JUDGE_CHANGE_MAX_CHARS} characters`);
   }
