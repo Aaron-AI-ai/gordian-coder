@@ -166,7 +166,9 @@ export async function submitFix(payload: unknown, cwd: string): Promise<string> 
  * positive keeps the row (the violation is real to fcq) but replaces the fix
  * with the reason, so the report never silently drops a hit.
  */
-export function applyFixes<T extends { line?: number; rule: string; asIs?: string; toBe?: string }>(
+export function applyFixes<
+  T extends { line?: number; rule: string; message: string; asIs?: string; toBe?: string },
+>(
   findings: T[],
   fixes: Fix[]
 ): T[] {
@@ -177,8 +179,11 @@ export function applyFixes<T extends { line?: number; rule: string; asIs?: strin
   return findings.map((f) => {
     const fix = byKey.get(key(f.line, f.rule));
     if (!fix) return f;
+    // A false positive has no code, so it goes in the message rather than the
+    // TO-BE the report renders as a code block.
     if (fix.falsePositive) {
-      return { ...f, toBe: `(false positive) ${fix.note ?? "no change required"}` };
+      const why = fix.note ?? "no change required";
+      return { ...f, message: `${f.message}\n(오탐) ${why}`, asIs: f.asIs, toBe: undefined } as T;
     }
     return {
       ...f,

@@ -435,14 +435,16 @@ export function mapFcqCategory(c: string): Category {
   return "maintainability";
 }
 
-/** Findings for the report: one per violation, rule tagged `fcq:`. The
- * violation snippet is the AS-IS; fcq has no fix text, so the rule's own
- * description (what the rule demands) stands in as the TO-BE — a placeholder a
- * reviewer's real correction replaces at merge. The two are separate fields:
- * concatenated, a long snippet used to truncate away the fix entirely. */
+/** Findings for the report: one per violation, rule tagged `fcq:`.
+ *
+ * The violation snippet is the AS-IS. `toBe` is left EMPTY: fcq has no fix
+ * text, and its rule description is a requirement, not code. It used to stand
+ * in as the TO-BE, which put prose in a field the report renders as a code
+ * block — the reader saw "블록 주석 사용 금지" styled as something to paste.
+ * The requirement already reaches them through `message`. The fix pass fills
+ * `toBe` in with real code at merge. */
 export function fcqFindings(file: string, violations: FcqFileViolation[]): Finding[] {
   return violations.map((v) => {
-    const toBe = v.description || `(apply ${v.ruleId})`;
     const asIs = v.snippet?.length ? v.snippet.join("\n") : undefined;
     return {
       category: mapFcqCategory(v.category),
@@ -452,7 +454,6 @@ export function fcqFindings(file: string, violations: FcqFileViolation[]): Findi
       rule: `fcq:${v.analyzer}/${v.ruleId}`,
       message: v.message || v.description,
       ...(asIs ? { asIs } : {}),
-      toBe,
     };
   });
 }

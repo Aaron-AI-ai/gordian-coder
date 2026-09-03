@@ -125,8 +125,11 @@ details.vblk summary code { word-break:break-all; }
 details.vblk ul { margin:0; padding:10px 16px 14px 30px; font-size:13px; list-style:none; }
 details.vblk li { margin:10px 0; line-height:1.65; }
 details.vblk li::before { content:'\25B8'; color:var(--graphite); margin-right:7px; }
+/* asIs/toBe hold code and nothing else, so both render as code: monospace,
+   preserved whitespace, and their own scroll rather than a wrapped paragraph. */
 .fix { display:block; margin:6px 0 0 16px; padding:8px 11px; background:#f7f6f1; border-left:3px solid var(--line);
-  border-radius:0 6px 6px 0; font-size:12px; white-space:pre-wrap; overflow-x:auto; }
+  border-radius:0 6px 6px 0; font-family:var(--mono); font-size:12px; line-height:1.5;
+  white-space:pre; overflow-x:auto; }
 /* The corrected code is what a reader acts on — it reads as the answer, while
    the offending code is context. Muting one and accenting the other keeps a
    long AS-IS from burying the fix that follows it. */

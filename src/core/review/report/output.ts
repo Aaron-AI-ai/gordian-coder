@@ -135,14 +135,15 @@ function isBlockSuggestion(s: string | undefined): s is string {
 /** Fence a code block, unless the model already fenced it (a double fence
  * renders the backticks as literal text).
  *
- * A single line is left unfenced: fcq has no fix text, so a violation's TO-BE
- * is the rule's own description — prose like "블록 주석 사용 금지" — and putting
- * that in a ```java block presents a requirement as code to paste. Real code
- * fixes worth fencing run to more than one line. */
+ * Every line gets a box, one-liners included: `asIs` and `toBe` now only ever
+ * hold code. They briefly held prose too — fcq's rule description stood in as
+ * a violation's TO-BE — and one-line values were left bare to avoid styling a
+ * requirement as something to paste. That prose lives in `message` now, so the
+ * exception is gone and a one-line fix reads like the code it is. */
 function fenced(code: string, lang: string): string {
   const t = code.trim();
   if (/^```/.test(t)) return t;
-  return t.includes("\n") ? `\`\`\`${lang}\n${t}\n\`\`\`` : t;
+  return `\`\`\`${lang}\n${t}\n\`\`\``;
 }
 
 /** Language tag for the fence, from the reviewed file's extension. */
@@ -271,10 +272,10 @@ export function renderReport(
     for (const x of fs) {
       const old = baseline?.has(baselineKey(file, x.rule)) ? `**[${L.existing}]** ` : "";
       const fix = splitFix(x);
-      // An AS-IS always means there is code to show, so those go below too.
-      const inline = !fix.asIs && fix.toBe && !isBlockSuggestion(fix.toBe) ? fix.toBe : undefined;
-      if (!inline && (fix.asIs || fix.toBe)) blocks.push(x);
-      const suggestion = inline ? cell(inline) : fix.asIs || fix.toBe ? L.seeBelow : "-";
+      // Every fix is code, so every fix gets a fenced block below rather than
+      // a flattened table cell that cannot be pasted.
+      if (fix.asIs || fix.toBe) blocks.push(x);
+      const suggestion = fix.asIs || fix.toBe ? L.seeBelow : "-";
       lines.push(
         `| ${x.severity} | ${x.category} | ${x.line ?? "-"} | ${cell(x.rule)} | ${old}${cell(x.message)} | ${suggestion} |`
       );

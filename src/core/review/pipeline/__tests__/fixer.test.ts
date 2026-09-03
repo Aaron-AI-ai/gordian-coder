@@ -208,9 +208,11 @@ describe("submitFix", () => {
 describe("applyFixes", () => {
   const rows = (): Finding[] => fcqFindings("src/A.java", [VIOLATION]);
 
-  it("replaces the rule-text placeholder with real code", () => {
-    // Before the fix pass a MINOR row's TO-BE is the rule description.
-    expect(rows()[0]!.toBe).toBe("블록 주석 금지");
+  it("fills in the TO-BE the fcq row does not have", () => {
+    // fcq has no fix text, so an unfixed row carries none — its requirement
+    // reaches the reader through `message`, not through a code block.
+    expect(rows()[0]!.toBe).toBeUndefined();
+    expect(rows()[0]!.message).toContain("block comment");
     const out = applyFixes(rows(), [
       { line: 2, ruleId: "NoBlockComment", asIs: "/* block */", toBe: "// block" },
     ]);
@@ -221,17 +223,19 @@ describe("applyFixes", () => {
   it("anchors on line AND rule id", () => {
     const wrongLine = applyFixes(rows(), [{ line: 9, ruleId: "NoBlockComment", toBe: "x" }]);
     const wrongRule = applyFixes(rows(), [{ line: 2, ruleId: "Other", toBe: "x" }]);
-    expect(wrongLine[0]!.toBe).toBe("블록 주석 금지");
-    expect(wrongRule[0]!.toBe).toBe("블록 주석 금지");
+    expect(wrongLine[0]!.toBe).toBeUndefined();
+    expect(wrongRule[0]!.toBe).toBeUndefined();
   });
 
-  it("keeps a false positive visible instead of dropping the row", () => {
+  it("keeps a false positive visible, in the message rather than as code", () => {
     const out = applyFixes(rows(), [
       { line: 2, ruleId: "NoBlockComment", falsePositive: true, note: "generated file" },
     ]);
     expect(out).toHaveLength(1);
-    expect(out[0]!.toBe).toContain("false positive");
-    expect(out[0]!.toBe).toContain("generated file");
+    // Not in toBe: the report renders that as a code block to paste.
+    expect(out[0]!.toBe).toBeUndefined();
+    expect(out[0]!.message).toContain("오탐");
+    expect(out[0]!.message).toContain("generated file");
   });
 
   it("leaves findings untouched when the pass produced nothing", () => {

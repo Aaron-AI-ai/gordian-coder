@@ -386,10 +386,13 @@ describe("multi-line suggestions", () => {
     expect(details).toContain("  .filter(Objects::nonNull)"); // and indentation with it
   });
 
-  it("keeps single-line suggestions inline in the table", () => {
+  it("gives a single-line fix its own block too", () => {
+    // It used to stay inline in the table. Every fix is code now, and a table
+    // cell cannot hold a code block or be pasted out of.
     const md = renderReport({ "a.ts": [finding({ suggestion: "delete the line" })] }, "", "en");
-    expect(md).toContain("| delete the line |");
-    expect(md).not.toContain("Suggestions"); // no details section when nothing deferred
+    expect(md).toContain("↓ see below");
+    expect(md).toContain("Suggestions");
+    expect(md).toContain("```ts\ndelete the line\n```");
   });
 
   it("parses baseline keys past a suggestion block that looks like report structure", () => {
@@ -437,17 +440,17 @@ describe("AS-IS / TO-BE rendering", () => {
     expect(md.indexOf("**AS-IS**")).toBeLessThan(md.indexOf("**TO-BE**"));
   });
 
-  it("leaves a one-line fix unfenced — fcq's TO-BE is prose, not code", () => {
-    // fcq has no fix text, so a violation's TO-BE is the rule description.
-    // Fencing it as java presented a requirement as code to paste over.
+  it("fences a one-line fix as well", () => {
+    // Prose no longer reaches these fields — fcq's rule description lives in
+    // `message` — so the one-line exception that kept it out of a code block
+    // is gone, and every fix reads as the code it is.
     const md = renderReport(
-      { "src/A.java": [f({ asIs: "int a;\nint b;", toBe: "블록 주석 사용 금지" })] },
+      { "src/A.java": [f({ asIs: "int a;\nint b;", toBe: "long a;" })] },
       "t",
       "en"
     );
-    expect(md).toContain("블록 주석 사용 금지");
-    expect(md).not.toContain("```java\n블록 주석");
-    expect(md).toContain("```java\nint a;"); // the multi-line half still fences
+    expect(md).toContain("```java\nlong a;\n```");
+    expect(md).toContain("```java\nint a;\nint b;\n```");
   });
 
   it("does not double-fence code the model already fenced", () => {
@@ -463,9 +466,10 @@ describe("AS-IS / TO-BE rendering", () => {
     expect(md).toContain("long a;");
   });
 
-  it("keeps a one-line fix inline in the table", () => {
+  it("boxes every fix, whatever its length", () => {
     const md = renderReport({ "src/A.java": [f({ toBe: "use long" })] }, "t", "en");
-    expect(md).toContain("| use long |");
-    expect(md).not.toContain("**TO-BE**");
+    expect(md).toContain("**TO-BE**");
+    expect(md).toContain("```java\nuse long\n```");
+    expect(md).not.toContain("| use long |"); // never flattened into a cell
   });
 });

@@ -222,9 +222,11 @@ describe("evidence / findings rendering", () => {
     // Separate fields, separate budgets: the snippet can no longer crowd out
     // the fix the way it did when both shared one 4000-char `suggestion`.
     expect(f[1].asIs).toBe("x");
-    expect(f[1].toBe).toBe("d2");
+    // No toBe: fcq has no fix text, and its rule description is a requirement
+    // the message already carries — not code for the report to box.
+    expect(f[1].toBe).toBeUndefined();
     expect(f[0].asIs).toBeUndefined(); // no snippet
-    expect(f[0].toBe).toBe("d1"); // rule description stands in as the fix
+    expect(f[0].toBe).toBeUndefined();
     expect(f[2]).toMatchObject({ category: "framework", severity: "major" });
     expect(f[2].line).toBeUndefined();
     expect(mapFcqCategory("bugs")).toBe("correctness");
@@ -251,7 +253,7 @@ describe("evidence / findings rendering", () => {
     expect(r2.asIs).toBe("${a}");
     const r1 = out.find((f) => f.rule === "fcq:pmd/R1")!;
     expect(r1.severity).toBe("blocker"); // LLM blocker outranks fcq MINOR
-    expect(r1.toBe).toBe("d1"); // LLM wrote no fix → fcq's placeholder stays
+    expect(r1.toBe).toBeUndefined(); // LLM wrote no fix, and fcq has none to offer
     expect(out.find((f) => f.rule === "fcq:arch/R3")!.message).toBe("m3"); // unanchored: untouched
   });
 
