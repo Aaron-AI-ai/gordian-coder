@@ -26,3 +26,6 @@ export {
 
 // f-review
 export * from "./review";
+
+// wiki -> KB sync
+export * from "./kb-sync";
