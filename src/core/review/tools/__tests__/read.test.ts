@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,6 +11,7 @@ import {
   FILE_READ_MAX_CHARS,
   FILE_READ_MAX_LINES,
   fileLineCount,
+  readFileAt,
   renderFileContent,
   sanitizeFindingLines,
 } from "../read";
@@ -75,6 +76,40 @@ describe("afterRef", () => {
   });
   it("defaults a missing end to HEAD", () => {
     expect(afterRef("A..")).toBe("HEAD");
+  });
+});
+
+describe("readFileAt (ref mode)", () => {
+  /** Repo with the target file one directory down, committed. */
+  function repo(): { root: string; sub: string } {
+    const root = tmp();
+    mkdirSync(join(root, "sub"), { recursive: true });
+    writeFileSync(join(root, "sub/a.ts"), "export const a = 1;\n");
+    const git = (args: string[]) => Bun.spawnSync(["git", ...args], { cwd: root });
+    git(["init", "-q"]);
+    git(["config", "user.email", "review@test"]);
+    git(["config", "user.name", "Reviewer"]);
+    git(["add", "-A"]);
+    git(["commit", "-qm", "add a"]);
+    return { root, sub: join(root, "sub") };
+  }
+
+  it("reads a committed file from the repo root", () => {
+    const { root } = repo();
+    expect(readFileAt(root, "HEAD", "sub/a.ts")).toBe("export const a = 1;\n");
+  });
+
+  // Regression: `git show ref:path` resolves from the repo root, so without the
+  // `./` prefix every read from a subdirectory returns null and the reviewer
+  // sees empty files instead of an error.
+  it("reads a committed file when cwd is a subdirectory", () => {
+    const { sub } = repo();
+    expect(readFileAt(sub, "HEAD", "a.ts")).toBe("export const a = 1;\n");
+  });
+
+  it("returns null for a path that does not exist at the ref", () => {
+    const { root } = repo();
+    expect(readFileAt(root, "HEAD", "sub/missing.ts")).toBeNull();
   });
 });
 

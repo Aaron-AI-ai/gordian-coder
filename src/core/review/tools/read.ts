@@ -84,10 +84,14 @@ export function afterRef(range: string | null): string | null {
 
 // ── FileReader (cwd + ref) ───────────────────────────────────────
 
-/** Read a file's "after" content, or null when it does not exist. */
+/** Read a file's "after" content, or null when it does not exist.
+ * `./` prefix: `git show ref:path` resolves path from the REPO ROOT, but every
+ * path here is cwd-relative — they only coincide when cwd is the root. `./`
+ * makes git resolve from cwd, so a review started in a subdirectory reads
+ * files instead of silently seeing every one of them as empty. */
 export function readFileAt(cwd: string, ref: string | null, path: string): string | null {
   if (ref) {
-    const r = sh(["git", "show", `${ref}:${path}`], cwd);
+    const r = sh(["git", "show", `${ref}:./${path}`], cwd);
     return r.code === 0 ? r.stdout : null;
   }
   const abs = join(cwd, path);
