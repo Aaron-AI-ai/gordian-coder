@@ -13,7 +13,7 @@
 
 import { existsSync, statSync, readdirSync, readFileSync, renameSync } from "node:fs";
 import { join, isAbsolute, dirname, basename } from "node:path";
-import { loadConfig } from "../pipeline/context";
+import { loadConfig } from "../config";
 import { SEVERITIES, verdict, type Finding, type Severity } from "../contract";
 import { renderHtmlReport } from "./html";
 

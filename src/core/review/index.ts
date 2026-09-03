@@ -4,6 +4,7 @@
  */
 
 export * from "./contract";
+export * from "./config";
 export * from "./imports";
 export * from "./pipeline/context";
 export * from "./evidence/template";

@@ -10,7 +10,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, isAbsolute, basename } from "node:path";
 import { REQUIRED_CATEGORIES, type Category } from "../contract";
-import { loadConfig } from "../pipeline/context";
+import { loadConfig } from "../config";
 import FRAMEWORK_DEFAULT from "./knowledge/framework.md" with { type: "text" };
 import FRAMEWORK_KB_RULE from "./rules/framework_kb.md" with { type: "text" };
 import JAVA_RULE from "./rules/java.md" with { type: "text" };

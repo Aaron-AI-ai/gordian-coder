@@ -33,13 +33,8 @@ import {
   type Finding,
   type Severity,
 } from "../contract";
-import {
-  collectTargets,
-  loadConfig,
-  resolveDeepPasses,
-  resolveDiffRange,
-  type CommitSpec,
-} from "./context";
+import { collectTargets, resolveDiffRange, type CommitSpec } from "./context";
+import { loadConfig, resolveDeepPasses } from "../config";
 import {
   defaultLabel,
   loadBaseline,

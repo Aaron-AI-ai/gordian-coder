@@ -16,16 +16,8 @@ import {
   type Finding,
   type Severity,
 } from "../contract";
-import {
-  collectTargets,
-  loadConfig,
-  buildDiffMap,
-  resolveDeepPasses,
-  resolveMaxIter,
-  resolveMaxToolCalls,
-  resolveDiffRange,
-  type CommitSpec,
-} from "./context";
+import { collectTargets, buildDiffMap, resolveDiffRange, type CommitSpec } from "./context";
+import { loadConfig, resolveDeepPasses, resolveMaxIter, resolveMaxToolCalls } from "../config";
 import {
   buildRubric,
   loadFrameworkGuide,

@@ -26,7 +26,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 import { type Category, type Finding, type Severity } from "../contract";
-import { loadConfig } from "../pipeline/context";
+import { loadConfig } from "../config";
 import { targetRange } from "../pipeline/segment";
 
 /** Default wall-clock cap for the fcq process (build + analysis), seconds. */

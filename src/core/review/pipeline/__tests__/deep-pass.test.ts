@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MAX_DEEP_PASSES, resolveDeepPasses } from "../context";
+import { MAX_DEEP_PASSES, resolveDeepPasses } from "../../config";
 import { startReview, submitReview, guardExploration } from "../loop";
 import { MAX_ITER } from "../../tools/read";
 import { getState, clearState } from "../state";

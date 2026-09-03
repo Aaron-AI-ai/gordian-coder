@@ -33,8 +33,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
-import { loadConfig } from "./review/pipeline/context";
-import type { WikiKbSource } from "./review/pipeline/context";
+import { loadConfig } from "./review/config";
+import type { WikiKbSource } from "./review/config";
 
 /** Clone timeout. A wiki is small; anything slower is a hung auth prompt. */
 const CLONE_TIMEOUT_MS = 120_000;
