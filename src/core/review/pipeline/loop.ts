@@ -37,13 +37,7 @@ import {
   manifestTimestamp,
   renderReport,
 } from "../report/output";
-import {
-  loadRun,
-  readFileReviewResult,
-  runFreshness,
-  writeFileReview,
-  type FileReviewResult,
-} from "./run";
+import { loadRun, readFileReviewResult, runFreshness, writeFileReview, type FileReviewResult } from "./run-store";
 import {
   judgeFeedbackFor,
   currentReviewTerminal,
@@ -68,7 +62,7 @@ import { SEGMENT_THRESHOLD, inFileRelated, planSegments, targetPath, targetRange
 import { dbg, dbgOnce, setReviewDebug } from "../debug";
 import { VERSION } from "../../../version";
 import { readFcqFile, renderFcqEvidence, violationsForTarget } from "../evidence/fcq";
-import { runDir } from "./run";
+import { runDir } from "./run-store";
 
 export const NO_ACTIVE_REVIEW = "No active review. Call f_review_context first.";
 

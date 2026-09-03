@@ -16,6 +16,7 @@ export * from "./tools/read";
 export * from "./tools/related";
 export * from "./pipeline/loop";
 export * from "./evidence/dossier";
+export * from "./pipeline/run-store";
 export * from "./pipeline/run";
 export * from "./pipeline/judge";
 export * from "./evidence/fcq";

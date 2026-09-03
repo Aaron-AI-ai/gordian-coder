@@ -7,7 +7,8 @@ import { startReview, submitReview, guardExploration } from "../loop";
 import { MAX_ITER } from "../../tools/read";
 import { getState, clearState } from "../state";
 import { REQUIRED_CATEGORIES } from "../../contract";
-import { createRun, planReview, loadRun, readRunResults, finalizeRun } from "../run";
+import { planReview, finalizeRun } from "../run";
+import { createRun, loadRun, readRunResults } from "../run-store";
 
 const tmps: string[] = [];
 afterEach(() => {
