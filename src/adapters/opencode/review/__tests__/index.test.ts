@@ -69,6 +69,23 @@ function moduleFor(cwd: string) {
 const ctx = { sessionID: SESSION } as never;
 
 describe("tool registration", () => {
+  it("tells the orchestrator that f-fixer exists and is not interchangeable", () => {
+    // Two real runs spawned f-judge with the fix prompt because the command
+    // template only ever named f-reviewer and f-judge. The subagent failed on
+    // its first tool call and the fix pass silently never ran.
+    const { mod } = moduleFor(gitRepo());
+    const cfg: { agent: Record<string, unknown>; command: Record<string, { template: string }> } = {
+      agent: {},
+      command: {},
+    };
+    mod.config(cfg as never);
+    const template = cfg.command["f-review"]!.template;
+    expect(template).toContain("f-fixer");
+    expect(template).toContain("f_review_fix_context");
+    expect(template).toContain("the three are not");
+    expect(template).toContain("FIX PASS");
+  });
+
   it("gives the fixer only tools that work without a review session", () => {
     // file_read and code_search route through runReviewTool, which needs an
     // active review. The fixer never opens one, so granting them handed it two

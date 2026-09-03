@@ -237,7 +237,7 @@ function renderPlanInstructions(meta: RunMeta): string {
     meta.fcqFix && meta.fcq?.status === "ok"
       ? [
           [
-            `FIX PASS — for EACH file above, spawn ONE f-fixer subagent with this prompt:`,
+            `FIX PASS — for EACH file above, spawn ONE subagent of type \`f-fixer\` (NOT f-reviewer, NOT f-judge — only f-fixer can call these tools) with this prompt:`,
             `   "Call f_review_fix_context with runId=\"${meta.runId}\" and file=\"<file>\", write the corrected code for every violation, then call f_review_fix_submit."`,
             `   It runs independently of the review — same batch limit — and writes the fixes finalize merges onto the fcq rows.`,
           ].join("\n"),
@@ -246,7 +246,7 @@ function renderPlanInstructions(meta: RunMeta): string {
   const judgeSteps = meta.judge
     ? [
         [
-          `JUDGE GATE — after EACH f-reviewer subagent finishes, spawn ONE f-judge subagent with this prompt:`,
+          `JUDGE GATE — after EACH f-reviewer subagent finishes, spawn ONE subagent of type \`f-judge\` with this prompt:`,
           `   "Call f_review_judge_context with runId=\"${meta.runId}\" and file=\"<file>\", evaluate that review, then call f_review_judge."`,
         ].join("\n"),
         `Follow the message f_review_judge returns EXACTLY: it either accepts the file, or tells you to re-spawn the f-reviewer for that file (judge feedback is injected automatically) and judge again. The rework cap is enforced by the tool — never re-spawn beyond what it instructs.`,
@@ -269,7 +269,7 @@ function renderPlanInstructions(meta: RunMeta): string {
       : [`⚠️ Static analysis (fcq) FAILED: ${meta.fcq.reason}. The LLM review proceeds without it; finalize fails closed on failOn.`];
   const steps = [
     [
-      `For EACH file above, spawn ONE f-reviewer subagent with this prompt:`,
+      `For EACH file above, spawn ONE subagent of type \`f-reviewer\` with this prompt:`,
       `   "Call f_review_context with runId=\"${meta.runId}\" and files=[\"<file>\"], review that single file, and call f_review_submit. Review no other files."`,
     ].join("\n"),
     `Spawn at most ${RUN_BATCH_SIZE} subagents at a time; wait for a batch to finish before the next.`,

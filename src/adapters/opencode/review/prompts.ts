@@ -224,8 +224,8 @@ export const REVIEW_COMMAND_DESCRIPTION =
   "Rule-based code review over a git commit or files (parallel subagents)";
 
 export const REVIEW_COMMAND_TEMPLATE = `Run a parallel code review using the f-review tools. You are the ORCHESTRATOR:
-you never review code yourself — you plan, dispatch f-reviewer subagents, and
-finalize.
+you never review code yourself — you plan, dispatch subagents (f-reviewer, and
+f-fixer / f-judge when the plan asks for them), and finalize.
 
 Free-form arguments: $ARGUMENTS
 
@@ -241,6 +241,8 @@ Parse the arguments into \`f_review_plan\` parameters (all optional):
 - \`--plan=...\` → \`planGuidance\`
 - \`--deep=N\` → \`deepPasses\` (review rounds per file, 1-5; default comes from
   \`.f-review.json\` \`deepPasses\`)
+- \`fcqFix: true\` in config → the plan adds a FIX PASS step; spawn one f-fixer
+  subagent per file for it.
 - \`--judge\` → \`judge: true\` (judge gate: an independent f-judge subagent scores
   each file's review; failing reviews are re-reviewed with feedback. Default
   comes from \`.f-review.json\` \`judge\`)
@@ -262,6 +264,16 @@ Parallel workflow (default):
      before dispatching the next batch.
    - Never review a file yourself, never spawn a subagent for a file outside
      the plan's target list, and never spawn two subagents for the same file.
+   - Each step names the subagent it needs. Spawn THAT one — the three are not
+     interchangeable and each can only call its own tools:
+       f-reviewer → f_review_context / f_review_submit
+       f-fixer    → f_review_fix_context / f_review_fix_submit
+       f-judge    → f_review_judge_context / f_review_judge
+     A prompt handed to the wrong subagent fails on its first tool call.
+   - If the plan includes a FIX PASS step, spawn ONE f-fixer subagent per file
+     with the prompt it gives. The fix pass writes the corrected code for the
+     static-analysis violations; without it they reach the report with only
+     the rule's own text as their fix.
    - If the plan enables the judge gate, follow its judge steps exactly: after
      each reviewer finishes, spawn ONE f-judge subagent for that file and obey
      the accept/rework message \`f_review_judge\` returns (the rework cap is
