@@ -143,6 +143,11 @@ export const FcqRunStatusSchema = z.object({
   durationMs: z.number(),
   reason: z.string().optional(),
   reportPath: z.string().optional(),
+  /** fcq's exit code. 0/1 are normal; 2+ means it stumbled mid-run. */
+  exitCode: z.number().optional(),
+  /** status "ok" but fcq exited 2+: the report holds only what it managed to
+   * analyse. Usable evidence, incomplete coverage — say so, don't discard it. */
+  partial: z.boolean().optional(),
 });
 export type FcqRunStatus = z.infer<typeof FcqRunStatusSchema>;
 
@@ -292,12 +297,21 @@ export async function runFcq(cwd: string, targets: string[], runRoot: string): P
   ]);
   clearTimeout(timer);
   if (timedOut) return fail(`timed out after ${timeoutMs / 1000}s`);
-  // 0 = clean, 1 = findings at/above fcq's own fail-on — both are results.
-  // 2 = usage/config error; anything else = crash.
-  if (exitCode !== 0 && exitCode !== 1) {
-    return fail(`exit ${exitCode}: ${stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 500)}`);
+
+  // 0 = clean, 1 = findings at/above fcq's own fail-on. 2+ means fcq itself
+  // stumbled — a module failed to build, an analyzer crashed — but it still
+  // writes what it managed to analyse, and those violations are real and worth
+  // fixing. So the REPORT decides whether the run is usable, not the exit code;
+  // a bad exit only marks the result partial.
+  const stderrTail = stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 500);
+  const partial = exitCode !== 0 && exitCode !== 1;
+  if (!existsSync(reportPath)) {
+    return fail(
+      partial
+        ? `exit ${exitCode}: ${stderrTail}`
+        : `fcq exited ${exitCode} but wrote no ${reportPath}`
+    );
   }
-  if (!existsSync(reportPath)) return fail(`fcq exited ${exitCode} but wrote no ${reportPath}`);
 
   let report: FcqReport;
   try {
@@ -313,6 +327,10 @@ export async function runFcq(cwd: string, targets: string[], runRoot: string): P
     command,
     durationMs: Date.now() - started,
     reportPath,
+    exitCode,
+    // Downstream treats "ok" as usable evidence; `partial` is what tells the
+    // plan output and the report that the analysis did not cover everything.
+    ...(partial ? { partial: true, reason: `exit ${exitCode}: ${stderrTail}` } : {}),
   };
 }
 
@@ -510,6 +528,14 @@ export function renderFcqSection(status: FcqRunStatus | undefined, summary: FcqS
       "",
     ].join("\n");
   }
+  // A partial run is usable evidence, so it renders the normal table — but the
+  // reader must not take an empty category for "clean" when fcq never got there.
+  const partialNote = status.partial
+    ? [
+        `- ⚠️ **PARTIAL** — fcq exited ${status.exitCode}: ${status.reason ?? "unknown"}`,
+        `  Only the files it managed to analyse appear below; the rest are unanalysed, not clean.`,
+      ]
+    : [];
   const s = summary.summary;
   const analyzers = summary.metadata.analyzers
     .map((a) => `${a.name} ${a.status}${a.durationMillis != null ? ` (${(a.durationMillis / 1000).toFixed(1)}s)` : ""}`)
@@ -518,6 +544,7 @@ export function renderFcqSection(status: FcqRunStatus | undefined, summary: FcqS
   const table = summary.categories.filter((c) => c.violationCount > 0);
   return [
     ...head,
+    ...partialNote,
     `- Rules: ${s.totalRules} (pass ${s.passed} / fail ${s.failed} / not run ${s.notRun})` +
       (s.passRate != null ? ` · pass rate ${s.passRate}%` : ""),
     `- Violations in reviewed files: ${summary.targetViolations}` +

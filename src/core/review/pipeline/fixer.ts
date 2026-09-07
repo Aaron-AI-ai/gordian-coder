@@ -86,8 +86,16 @@ export function fixContext(runId: string, file: string, cwd: string): string {
   if (meta.fcq?.status !== "ok") {
     return `No static-analysis result for run ${runId} — nothing to fix. Skip this file.`;
   }
+  // Second gate, independent of the plan's file list: a partial fcq run leaves
+  // most targets with no shard at all, and a fixer spawned for one of those has
+  // nothing to work on. Say so plainly instead of handing it an empty prompt.
   const rows = readFcqFile(runDir(runId, cwd), file);
-  if (!rows.length) return `✅ ${file} has no fcq violations. Nothing to fix; do not submit.`;
+  if (!rows.length) {
+    return (
+      `✅ ${file} has no fcq violations${meta.fcq.partial ? " (fcq ran only partially — this file may simply not have been analysed)" : ""}. ` +
+      `Nothing to fix; do NOT call f_review_fix_submit for this file.`
+    );
+  }
 
   const shown = rows.slice(0, FIX_MAX_ITEMS);
   // Working tree, not the ref: the fix is written against the code as it is now.

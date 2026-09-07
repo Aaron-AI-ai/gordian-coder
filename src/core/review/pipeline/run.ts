@@ -221,28 +221,35 @@ export async function planReview(args: PlanReviewArgs, cwd: string): Promise<str
       await Bun.write(join(runDir(meta.runId, cwd), "run.json"), JSON.stringify(meta, null, 2));
     }
     pruneRuns(cwd);
-    return renderPlanInstructions(meta);
+    return renderPlanInstructions(meta, cwd);
   } finally {
     rmSync(claimPath, { force: true });
   }
 }
 
-function renderPlanInstructions(meta: RunMeta): string {
+function renderPlanInstructions(meta: RunMeta, cwd: string): string {
   // List every target: the orchestrator dispatches from this text, so a
   // truncated list would silently drop files onto the single finalize retry.
   const list = meta.targets.map((target) => `  - ${target}`);
   // Steps are numbered at the end: the fix pass is conditional, and a hardcoded
   // "3." in the judge block silently collided with it.
-  const fixSteps =
+  // Spawn a fixer only where there is something to fix. "for EACH file above"
+  // burned a subagent per clean file, and with a partial fcq run most files
+  // have no shard at all. The list is the gate.
+  const filesToFix =
     meta.fcqFix && meta.fcq?.status === "ok"
-      ? [
-          [
-            `FIX PASS — for EACH file above, spawn ONE subagent of type \`f-fixer\` (NOT f-reviewer, NOT f-judge — only f-fixer can call these tools) with this prompt:`,
-            `   "Call f_review_fix_context with runId=\"${meta.runId}\" and file=\"<file>\", write the corrected code for every violation, then call f_review_fix_submit."`,
-            `   It runs independently of the review — same batch limit. WAIT for every fix subagent to return before you finalize: finalize merges whatever is on disk at that moment, and a fix that lands afterwards is not in the report.`,
-          ].join("\n"),
-        ]
+      ? meta.targets.filter((f) => readFcqFile(runDir(meta.runId, cwd), f).length > 0)
       : [];
+  const fixSteps = filesToFix.length
+    ? [
+        [
+          `FIX PASS — spawn ONE subagent of type \`f-fixer\` (NOT f-reviewer, NOT f-judge — only f-fixer can call these tools) for EACH of these ${filesToFix.length} file(s), and ONLY these — the others have no static-analysis violations:`,
+          ...filesToFix.map((f) => `     - ${f}`),
+          `   Prompt: "Call f_review_fix_context with runId=\"${meta.runId}\" and file=\"<file>\", write the corrected code for every violation, then call f_review_fix_submit."`,
+          `   It runs independently of the review — same batch limit. WAIT for every fix subagent to return before you finalize: finalize merges whatever is on disk at that moment, and a fix that lands afterwards is not in the report.`,
+        ].join("\n"),
+      ]
+    : [];
   const judgeSteps = meta.judge
     ? [
         [
@@ -250,11 +257,11 @@ function renderPlanInstructions(meta: RunMeta): string {
           `   "Call f_review_judge_context with runId=\"${meta.runId}\" and file=\"<file>\", evaluate that review, then call f_review_judge."`,
         ].join("\n"),
         `Follow the message f_review_judge returns EXACTLY: it either accepts the file, or tells you to re-spawn the f-reviewer for that file (judge feedback is injected automatically) and judge again. The rework cap is enforced by the tool — never re-spawn beyond what it instructs.`,
-        `When every file is accepted${meta.fcqFix && meta.fcq?.status === "ok" ? " AND every fix subagent has returned" : ""}, call f_review_finalize with runId="${meta.runId}".`,
+        `When every file is accepted${filesToFix.length ? " AND every fix subagent has returned" : ""}, call f_review_finalize with runId="${meta.runId}".`,
         `If finalize reports missing files, re-spawn subagents for ONLY those files ONCE (judging each again), then finalize again.`,
       ]
     : [
-        `When every file has been dispatched${meta.fcqFix && meta.fcq?.status === "ok" ? " AND every fix subagent has returned" : ""}, call f_review_finalize with runId="${meta.runId}".`,
+        `When every file has been dispatched${filesToFix.length ? " AND every fix subagent has returned" : ""}, call f_review_finalize with runId="${meta.runId}".`,
         `If finalize reports missing files, re-spawn subagents for ONLY those files ONCE, then finalize again.`,
       ];
   const fcqLine = !meta.fcq
@@ -263,8 +270,16 @@ function renderPlanInstructions(meta: RunMeta): string {
       ? [
           `Static analysis (fcq): done in ${(meta.fcq.durationMs / 1000).toFixed(1)}s — violations are injected into each reviewer as evidence and merged at finalize.` +
             (meta.fcqFix
-              ? " `fcqFix` is on: a separate f-fixer pass writes the corrected code for every hit, including MINOR."
+              ? filesToFix.length
+                ? ` \`fcqFix\` is on: an f-fixer pass writes the corrected code for every hit in the ${filesToFix.length} file(s) listed below.`
+                : " `fcqFix` is on, but no file has violations — there is no fix pass to run."
               : ""),
+          ...(meta.fcq.partial
+            ? [
+                `⚠️ fcq exited ${meta.fcq.exitCode} — PARTIAL result: ${meta.fcq.reason}`,
+                `   The report it did write is used as-is; files it could not analyse simply have no violations listed.`,
+              ]
+            : []),
         ]
       : [`⚠️ Static analysis (fcq) FAILED: ${meta.fcq.reason}. The LLM review proceeds without it; finalize fails closed on failOn.`];
   const steps = [

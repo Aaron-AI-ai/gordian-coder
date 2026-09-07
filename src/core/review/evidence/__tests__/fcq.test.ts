@@ -22,6 +22,7 @@ import { writeFileReview } from "../../pipeline/run-store";
 import { loadRun } from "../../pipeline/artifact";
 import { readFileReviewResult } from "../../pipeline/artifact";
 import { startReview } from "../../pipeline/start";
+import { fixContext } from "../../pipeline/fixer";
 import { submitFix } from "../../pipeline/fixer";
 import { runDir } from "../../pipeline/artifact";
 import { guardExploration, submitReview } from "../../pipeline/loop";
@@ -406,6 +407,32 @@ describe("run-mode integration", () => {
     expect(plan).toContain("FIX PASS");
     expect(plan).toContain("WAIT for every fix subagent to return");
     expect(plan).toContain("every fix subagent has returned");
+    // 위반이 있는 파일만 고치라고 지시해야 한다. B는 깨끗하므로 fixer를 띄우면
+    // 서브에이전트 하나를 빈손으로 태우는 셈이다.
+    const fixBlock = plan.slice(plan.indexOf("FIX PASS"), plan.indexOf("Prompt:"));
+    expect(fixBlock).toContain("src/A.java");
+    expect(fixBlock).not.toContain("src/B.java");
+  });
+
+  it("skips the fix pass entirely when no target has a violation", async () => {
+    const d = gitRepo();
+    fakeFcq(d);
+    writeFileSync(join(d, ".f-review.json"), JSON.stringify({ fcq: true, fcqFix: true, fcqOptions: { bin: join(d, "fcq-bin"), timeout: 30 } }));
+    // A의 위반만 담긴 픽스처에서 A를 대상에서 빼면 고칠 것이 남지 않는다.
+    const plan = await planReview({ files: ["src/B.java"], whole: true }, d);
+    expect(plan).not.toContain("FIX PASS");
+    expect(plan).toContain("no file has violations");
+    expect(plan).not.toContain("every fix subagent has returned");
+  });
+
+  it("fix context refuses a file with no violations", async () => {
+    const d = gitRepo();
+    fakeFcq(d);
+    writeFileSync(join(d, ".f-review.json"), JSON.stringify({ fcq: true, fcqFix: true, fcqOptions: { bin: join(d, "fcq-bin"), timeout: 30 } }));
+    const plan = await planReview({ commit: "HEAD" }, d);
+    const runId = /Run created: (\S+)/.exec(plan)![1];
+    expect(fixContext(runId, "src/B.java", d)).toContain("Nothing to fix");
+    expect(fixContext(runId, "src/A.java", d)).toContain("Fix pass — src/A.java");
   });
 
   it("rewrites the report when a fix lands after the first finalize", async () => {
@@ -477,9 +504,32 @@ describe("run-mode integration", () => {
     expect(readFileReviewResult(runId, "src/A.java", d)!.findings).toHaveLength(0);
   });
 
-  it("fcq failure keeps the review going but fails closed on failOn", async () => {
+  // fcq가 중간에 넘어져도(exit 2+) 분석한 만큼은 report.json에 쓴다. 그 결과를
+  // 버리면 고칠 수 있었던 위반까지 사라지므로, 리포트가 있으면 부분 결과로 쓴다.
+  it("fcq exiting 2 with a report is used as a PARTIAL result", async () => {
     const d = gitRepo();
     fakeFcq(d, { exit: 2 });
+    const plan = await planReview({ commit: "HEAD", failOn: "major" }, d);
+    expect(plan).not.toContain("Static analysis (fcq) FAILED");
+    expect(plan).toContain("PARTIAL result");
+    const runId = /Run created: (\S+)/.exec(plan)![1];
+    // 증거는 정상 결과와 똑같이 리뷰어에게 주입된다.
+    await startReview({ runId, files: ["src/A.java"] }, d, "fq");
+    expect(reviewPromptFor(getState("fq")!)!).toContain("Static analysis (fcq");
+    for (const file of ["src/A.java", "src/B.java"]) {
+      await writeFileReview(runId, { file, assessed: [...REQUIRED_CATEGORIES], findings: [], explorationCalls: 1, partial: false }, "# r", d);
+    }
+    const out = await finalizeRun(runId, d);
+    // 부분이라도 완료된 분석이므로 품질 미완으로 깎지 않는다.
+    expect(out).not.toContain("static analysis (fcq) did not complete");
+    const report = readFileSync(join(d, /Report: (\S+)/.exec(out)![1]), "utf8");
+    expect(report).toContain("**PARTIAL**");
+    expect(report).toContain("unanalysed, not clean");
+  });
+
+  it("fcq exiting 2 without a report still fails and fails closed on failOn", async () => {
+    const d = gitRepo();
+    fakeFcq(d, { exit: 2, noReport: true });
     const plan = await planReview({ commit: "HEAD", failOn: "major" }, d);
     expect(plan).toContain("Static analysis (fcq) FAILED");
     const runId = /Run created: (\S+)/.exec(plan)![1];
