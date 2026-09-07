@@ -1,7 +1,21 @@
 #!/bin/bash
 # =============================================================================
-# install.sh - gordian-coder 오프라인 설치 스크립트 (Linux / macOS)
-# 인터넷 연결 없이 Bun 설치, 의존성 복원, 프로젝트 빌드를 수행합니다.
+# install.sh - gordian-coder 오프라인 설치 (Linux / macOS)
+#
+#   tar -xzf gordian-coder-offline-<version>.tar.gz
+#   cd offline-package && bash install.sh
+#
+# 인터넷 연결 없이 Bun 설치 → 빌드 산출물 배치 → 글로벌 링크를 수행합니다.
+# dist는 의존성이 번들된 산출물이라 대상 서버에서 빌드하지 않습니다.
+#
+# 환경변수:
+#   INSTALL_DIR  설치 경로 (기본 ~/gordian-coder)
+#   BUN_DIR      Bun 설치 경로 (기본 ~/.bun)
+#   FORCE=1      기존 설치 경로를 확인 없이 덮어쓰기 (재설치/업그레이드 자동화용)
+#   SKIP_BUN=1   Bun 설치 건너뜀 (대상 서버에 이미 Bun이 있는 경우)
+#   FORCE_BUN=1  기존 Bun을 확인 없이 번들된 버전으로 덮어쓰기
+#
+# FORCE는 Bun에 영향을 주지 않습니다 — 기존 Bun은 FORCE_BUN 없이는 교체되지 않습니다.
 # =============================================================================
 
 set -e
@@ -31,6 +45,15 @@ log_ok() {
 
 log_error() {
   echo "  [ERROR] $1" >&2
+}
+
+# 기본값 no. 비대화형(EOF)에서도 no —
+# `read`의 EOF 실패가 set -e로 스크립트를 죽이지 않도록 `|| true`가 필요하다.
+# 강제 yes는 호출부에서 각자의 환경변수로 판단한다 (FORCE가 Bun까지 덮어쓰면 안 되므로).
+confirm() {
+  local answer
+  read -r -p "  $1 (y/N): " answer || true
+  [[ "$answer" == "y" || "$answer" == "Y" ]]
 }
 
 detect_platform() {
@@ -67,10 +90,9 @@ echo "============================================"
 echo "  gordian-coder 오프라인 설치"
 echo "============================================"
 
-# 필수 파일 존재 확인
-if [ ! -d "$SCRIPT_DIR/bin" ] || [ ! -d "$SCRIPT_DIR/packages" ] || [ ! -d "$SCRIPT_DIR/project" ]; then
-  log_error "오프라인 패키지 구조가 올바르지 않습니다."
-  log_error "prepare.sh를 먼저 실행해 주세요."
+if [ ! -d "$SCRIPT_DIR/bin" ] || [ ! -d "$SCRIPT_DIR/project/dist" ]; then
+  log_error "오프라인 패키지 구조가 올바르지 않습니다 (bin/, project/dist/ 필요)."
+  log_error "압축을 푼 offline-package 디렉토리 안에서 실행해 주세요."
   exit 1
 fi
 
@@ -81,38 +103,50 @@ log_info "감지된 플랫폼: $PLATFORM"
 # 1. Bun 설치
 # -----------------------------------------------------------------------------
 
-log_step "1/4 Bun 설치"
+log_step "1/3 Bun 설치"
 
 BUN_ARCHIVE="$SCRIPT_DIR/bin/bun-${PLATFORM}.zip"
+HAS_BUN=$(command -v bun &>/dev/null && echo true || echo false)
 
-if [ ! -f "$BUN_ARCHIVE" ]; then
-  log_error "Bun 바이너리를 찾을 수 없습니다: $BUN_ARCHIVE"
-  log_error "현재 플랫폼(${PLATFORM})용 바이너리가 포함되어 있는지 확인해 주세요."
+# 설치 여부 결정. 기존 Bun은 명시적 동의 없이는 건드리지 않는다.
+if [ "${SKIP_BUN:-}" = "1" ]; then
+  INSTALL_BUN=false
+  log_info "SKIP_BUN=1 — Bun 설치 건너뜀"
+elif [ "$HAS_BUN" = false ]; then
+  INSTALL_BUN=true
+elif [ "${FORCE_BUN:-}" = "1" ]; then
+  INSTALL_BUN=true
+  log_info "기존 Bun v$(bun --version) → FORCE_BUN=1, 덮어씀"
+else
+  log_info "기존 Bun 발견: v$(bun --version 2>/dev/null || echo unknown)"
+  if confirm "Bun을 덮어쓰시겠습니까?"; then
+    INSTALL_BUN=true
+  else
+    INSTALL_BUN=false
+    log_info "기존 Bun 유지"
+  fi
+fi
+
+if [ "$INSTALL_BUN" = false ] && [ "$HAS_BUN" = false ]; then
+  log_error "Bun이 없는데 설치를 건너뛰었습니다. Bun 없이는 실행할 수 없습니다."
   exit 1
 fi
 
-# 이미 설치된 bun이 있으면 확인
-if command -v bun &>/dev/null; then
-  EXISTING_BUN_VER=$(bun --version 2>/dev/null || echo "unknown")
-  log_info "기존 Bun 발견: v${EXISTING_BUN_VER}"
-  read -p "  Bun을 덮어쓰시겠습니까? (y/N): " OVERWRITE_BUN
-  if [[ "$OVERWRITE_BUN" != "y" && "$OVERWRITE_BUN" != "Y" ]]; then
-    log_info "기존 Bun 유지"
-  else
-    log_info "Bun 설치 진행..."
-  fi
-else
-  OVERWRITE_BUN="y"
+# 아카이브 확인은 실제로 설치할 때만 — 이미 Bun이 있으면 해당 플랫폼 zip이 없어도 무방.
+if [ "$INSTALL_BUN" = true ] && [ ! -f "$BUN_ARCHIVE" ]; then
+  log_error "Bun 바이너리를 찾을 수 없습니다: $BUN_ARCHIVE"
+  log_error "현재 플랫폼(${PLATFORM})용 바이너리가 포함되어 있는지 확인해 주세요."
+  log_error "이미 Bun이 설치된 서버라면 SKIP_BUN=1 로 건너뛸 수 있습니다."
+  exit 1
 fi
 
-if [[ "$OVERWRITE_BUN" == "y" || "$OVERWRITE_BUN" == "Y" ]]; then
+if [ "$INSTALL_BUN" = true ]; then
   mkdir -p "$BUN_INSTALL_DIR/bin"
 
   # zip 해제 (bun-{platform}/bun 구조)
   TEMP_DIR=$(mktemp -d)
   unzip -q -o "$BUN_ARCHIVE" -d "$TEMP_DIR"
 
-  # bun 바이너리 복사
   BUN_EXTRACTED=$(find "$TEMP_DIR" -name "bun" -type f | head -1)
   if [ -z "$BUN_EXTRACTED" ]; then
     log_error "아카이브에서 bun 바이너리를 찾을 수 없습니다."
@@ -127,11 +161,6 @@ if [[ "$OVERWRITE_BUN" == "y" || "$OVERWRITE_BUN" == "Y" ]]; then
   log_ok "Bun 설치 완료: $BUN_INSTALL_DIR/bin/bun"
 fi
 
-# PATH에 bun 추가 (현재 세션)
-export PATH="$BUN_INSTALL_DIR/bin:$PATH"
-export BUN_INSTALL="$BUN_INSTALL_DIR"
-
-# 셸 설정 파일에 PATH 추가
 SHELL_NAME="$(basename "$SHELL" 2>/dev/null || echo "bash")"
 case "$SHELL_NAME" in
   zsh)  RC_FILE="$HOME/.zshrc" ;;
@@ -139,78 +168,58 @@ case "$SHELL_NAME" in
   *)    RC_FILE="$HOME/.profile" ;;
 esac
 
-BUN_PATH_LINE='export BUN_INSTALL="$HOME/.bun"'
-BUN_PATH_LINE2='export PATH="$BUN_INSTALL/bin:$PATH"'
+# 기존 Bun을 그대로 쓰는 경우엔 PATH도 rc 파일도 건드리지 않는다.
+if [ "$INSTALL_BUN" = true ]; then
+  export PATH="$BUN_INSTALL_DIR/bin:$PATH"
+  export BUN_INSTALL="$BUN_INSTALL_DIR"
 
-if ! grep -q '.bun/bin' "$RC_FILE" 2>/dev/null; then
-  {
-    echo ""
-    echo "# bun (gordian-coder offline install)"
-    echo "$BUN_PATH_LINE"
-    echo "$BUN_PATH_LINE2"
-  } >> "$RC_FILE"
-  log_info "PATH 설정 추가됨: $RC_FILE"
-else
-  log_info "PATH 설정 이미 존재: $RC_FILE"
+  if ! grep -q "$BUN_INSTALL_DIR/bin" "$RC_FILE" 2>/dev/null; then
+    {
+      echo ""
+      echo "# bun (gordian-coder offline install)"
+      echo "export BUN_INSTALL=\"$BUN_INSTALL_DIR\""
+      echo 'export PATH="$BUN_INSTALL/bin:$PATH"'
+    } >> "$RC_FILE"
+    log_info "PATH 설정 추가됨: $RC_FILE"
+  else
+    log_info "PATH 설정 이미 존재: $RC_FILE"
+  fi
 fi
 
-# 설치 확인
 log_info "Bun 버전: $(bun --version)"
 
 # -----------------------------------------------------------------------------
-# 2. 프로젝트 복사
+# 2. 빌드 산출물 배치
 # -----------------------------------------------------------------------------
 
-log_step "2/4 프로젝트 설치"
+log_step "2/3 빌드 산출물 배치"
 
 if [ -d "$INSTALL_BASE" ]; then
   log_info "기존 설치 발견: $INSTALL_BASE"
-  read -p "  덮어쓰시겠습니까? (y/N): " OVERWRITE_PROJECT
-  if [[ "$OVERWRITE_PROJECT" != "y" && "$OVERWRITE_PROJECT" != "Y" ]]; then
-    log_error "설치 중단. 다른 경로를 지정하려면 INSTALL_DIR 환경변수를 사용하세요."
+  if [ "${FORCE:-}" != "1" ] && ! confirm "덮어쓰시겠습니까?"; then
+    log_error "설치 중단. 다른 경로는 INSTALL_DIR, 자동 덮어쓰기는 FORCE=1을 사용하세요."
     log_error "예: INSTALL_DIR=/opt/gordian-coder bash install.sh"
     exit 1
   fi
+  # 이전 버전의 dist가 남지 않도록 제거
+  rm -rf "$INSTALL_BASE/dist"
 fi
 
 mkdir -p "$INSTALL_BASE"
 cp -R "$SCRIPT_DIR/project/." "$INSTALL_BASE/"
 
-log_ok "프로젝트 복사 완료: $INSTALL_BASE"
+log_ok "설치 완료: $INSTALL_BASE"
 
 # -----------------------------------------------------------------------------
-# 3. 의존성 복원
+# 3. 글로벌 링크
 # -----------------------------------------------------------------------------
 
-log_step "3/4 의존성 복원"
-
-NODE_MODULES_ARCHIVE="$SCRIPT_DIR/packages/node_modules.tar.gz"
-
-if [ ! -f "$NODE_MODULES_ARCHIVE" ]; then
-  log_error "node_modules 아카이브를 찾을 수 없습니다."
-  exit 1
-fi
-
-log_info "node_modules 압축 해제 중..."
-tar -xzf "$NODE_MODULES_ARCHIVE" -C "$INSTALL_BASE"
-
-log_ok "의존성 복원 완료"
-
-# -----------------------------------------------------------------------------
-# 4. 빌드 및 링크
-# -----------------------------------------------------------------------------
-
-log_step "4/4 빌드 및 링크"
+log_step "3/3 글로벌 링크"
 
 cd "$INSTALL_BASE"
-
-log_info "프로젝트 빌드 중..."
-bun run build
-
-log_info "글로벌 링크 등록 중..."
 bun link
 
-log_ok "빌드 및 링크 완료"
+log_ok "링크 완료"
 
 # -----------------------------------------------------------------------------
 # 설치 완료

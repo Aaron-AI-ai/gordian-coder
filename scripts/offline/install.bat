@@ -1,4 +1,8 @@
 @echo off
+REM 이 파일은 UTF-8(BOM 없음)이다. cmd는 현재 코드페이지로 한 줄씩 읽으므로
+REM 65001로 바꿔야 아래 한글이 깨지지 않는다. BOM은 cmd가 첫 줄에 그대로
+REM 출력해버리므로 붙이지 않는다.
+chcp 65001 >nul
 REM =============================================================================
 REM install.bat - gordian-coder 오프라인 설치 (Windows CMD 래퍼)
 REM PowerShell install.ps1을 실행합니다.
