@@ -4,7 +4,7 @@
 
 set -e
 
-cd "$(dirname "$(dirname "${BASH_SOURCE[0]}")")"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 echo "=== Building gordian-coder ==="
 
