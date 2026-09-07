@@ -1,6 +1,6 @@
 {
   "name": "gordian-coder",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Multi-platform AI coding assistant plugin for OpenCode, Claude Code, and Cline",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
