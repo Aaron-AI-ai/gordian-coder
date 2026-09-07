@@ -45,6 +45,51 @@ function parseOutput(stdout: string): Record<string, unknown> {
   }
 }
 
+/**
+ * Unknown arguments must fail loudly. Before this guard they fell through to
+ * the stdin hook path: `gdc --init-opencode` on a build without that option
+ * answered "Invalid JSON input", and with a terminal attached it hung waiting
+ * on stdin instead of reporting the bad flag.
+ */
+describe("argument validation", () => {
+  function runArgs(args: string[]) {
+    const result = spawnSync("bun", ["run", CLI_PATH, ...args], {
+      input: "",
+      encoding: "utf-8",
+      timeout: 10_000,
+    });
+    return { stderr: result.stderr ?? "", exitCode: result.status };
+  }
+
+  it("rejects an unknown option with exit 1 and prints help", () => {
+    const { stderr, exitCode } = runArgs(["--init-opencodex"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Unknown command");
+    expect(stderr).toContain("Usage:");
+  });
+
+  it("rejects an unknown flag on a known command", () => {
+    const { stderr, exitCode } = runArgs(["--init", "--globl"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Unknown option: --globl");
+  });
+
+  it("rejects an unknown kb-sync flag", () => {
+    const { stderr, exitCode } = runArgs(["kb-sync", "--chek"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Unknown option: --chek");
+  });
+
+  it("rejects a stray positional argument", () => {
+    expect(runArgs(["foo"]).exitCode).toBe(1);
+  });
+
+  it("still accepts the valid flags", () => {
+    expect(runArgs(["--version"]).exitCode).toBe(0);
+    expect(runArgs(["--help"]).exitCode).toBe(0);
+  });
+});
+
 // ── Helper payloads ──────────────────────────────────────────────
 
 function makePayload(hookName: string, extra: Record<string, unknown> = {}): string {
