@@ -10,6 +10,8 @@ import {
   submitFix,
   FIX_MAX_ITEMS,
   FIX_FILE_MAX_LINES,
+  FIX_CONTEXT_MAX_BYTES,
+  fixWindows,
 } from "../fixer";
 import { createRun } from "../run-store";
 import { runDir } from "../artifact";
@@ -120,6 +122,58 @@ describe("fixContext", () => {
     expect(ctx).toContain("This is the complete file");
   });
 
+  it("keeps a large file under the host's tool-output ceiling and says what is visible", async () => {
+    // Regression: a 1431-line file produced ~59KB of source, OpenCode's tool
+    // output store cut it at 51200 bytes mid-file, and the context still said
+    // "This is the complete file" — the fixer cannot read, so it fixed code it
+    // could not see.
+    const cwd = repo();
+    const lines = Array.from(
+      { length: 1431 },
+      (_, i) => `  private final String field${i} = "some padding to make the line realistic ${i}";`
+    );
+    writeFileSync(join(cwd, "src/Wide.java"), lines.join("\n") + "\n");
+    const meta = await createRun(
+      {
+        targets: ["src/Wide.java"],
+        range: null,
+        whole: true,
+        label: "t",
+        language: "en",
+        fcq: { status: "ok", command: "fcq", durationMs: 1, reportPath: "r" },
+      } as never,
+      cwd
+    );
+    const { fcqShardPath } = await import("../../evidence/fcq");
+    mkdirSync(join(runDir(meta.runId, cwd), "fcq", "files"), { recursive: true });
+    writeFileSync(
+      fcqShardPath(runDir(meta.runId, cwd), "src/Wide.java"),
+      JSON.stringify([
+        { ...VIOLATION, line: 12 },
+        { ...VIOLATION, line: 1400 },
+      ])
+    );
+    const ctx = fixContext(meta.runId, "src/Wide.java", cwd);
+    expect(Buffer.byteLength(ctx, "utf8")).toBeLessThanOrEqual(FIX_CONTEXT_MAX_BYTES);
+    expect(ctx).not.toContain("This is the complete file");
+    expect(ctx).toContain("too large to show whole");
+    // Both violations must still be fixable: the late one is the whole point.
+    expect(ctx).toContain("field1400");
+    expect(ctx).toContain("field12 ");
+    expect(ctx).toContain("Every listed violation is inside a range above.");
+  });
+
+  it("merges overlapping violation windows and clamps them to the file", () => {
+    expect(fixWindows([50, 60, 400], 500, 20)).toEqual([
+      [30, 80],
+      [380, 420],
+    ]);
+    expect(fixWindows([5, 495], 500, 20)).toEqual([
+      [1, 25],
+      [475, 500],
+    ]);
+  });
+
   it("warns when the file is longer than the fixer can be shown", async () => {
     const cwd = repo();
     writeFileSync(
@@ -145,8 +199,9 @@ describe("fixContext", () => {
     );
     const ctx = fixContext(meta.runId, "src/Huge.java", cwd);
     // Silence here would have the fixer inventing code for lines it never saw.
-    expect(ctx).toContain("Only the first");
-    expect(ctx).toContain("leave the rest out");
+    expect(ctx).toContain("too large to show whole");
+    expect(ctx).toContain("Only these line ranges are below: L1-50");
+    expect(ctx).toContain("10|int v9");
   });
 
   it("refuses a file that is not a target, and a run without fcq", async () => {

@@ -33,6 +33,36 @@ export const FIX_MAX_ITEMS = 60;
  * the only code it will ever see — so the cap is generous and a file past it is
  * called out rather than silently cut. */
 export const FIX_FILE_MAX_LINES = 2000;
+/**
+ * Byte ceiling for the whole context.
+ *
+ * The host truncates a tool result before the model sees it — OpenCode's store
+ * cuts at 51200 bytes — and the fixer has no read tools to recover what was
+ * dropped. A 1431-line Java file was cut mid-source at ~697 lines while this
+ * context still claimed to be the complete file. Budget below that ceiling and
+ * hand over violation-anchored windows when the whole file will not fit.
+ */
+export const FIX_CONTEXT_MAX_BYTES = 45_000;
+/** Lines of context each side of a violation when the file is windowed. */
+export const FIX_WINDOW_LINES = 40;
+
+const byteLen = (s: string): number => Buffer.byteLength(s, "utf8");
+
+/** Violation lines → merged, clamped [start, end] windows, in file order. */
+export function fixWindows(lines: number[], total: number, radius = FIX_WINDOW_LINES): [number, number][] {
+  const merged: [number, number][] = [];
+  for (const line of [...new Set(lines)].sort((a, b) => a - b)) {
+    const start = Math.max(1, line - radius);
+    const end = Math.min(total, line + radius);
+    if (start > total) continue;
+    const last = merged[merged.length - 1];
+    // Touching windows join: two ranges one line apart read as a gap that is
+    // not there, and the fixer is told to skip what it cannot see.
+    if (last && start <= last[1] + 1) last[1] = Math.max(last[1], end);
+    else merged.push([start, end]);
+  }
+  return merged;
+}
 
 export const FixSchema = z.object({
   line: z.number().int().nonnegative(),
@@ -98,16 +128,7 @@ export function fixContext(runId: string, file: string, cwd: string): string {
   }
 
   const shown = rows.slice(0, FIX_MAX_ITEMS);
-  // Working tree, not the ref: the fix is written against the code as it is now.
-  // The 6th argument is the line cap; passing FIX_FILE_MAX_LINES only as
-  // end_line left the reader's 500-line default in force and truncated a
-  // 900-line file despite the constant saying 2000.
-  const source = fileRead(cwd, null, file, 1, FIX_FILE_MAX_LINES, FIX_FILE_MAX_LINES);
-  // Counted, not read off the rendered header: asking for lines 1..2000 of a
-  // 2050-line file is "exactly what you asked for" to the reader, so its
-  // IS_TRUNCATED says false while 50 lines are missing.
-  const truncated = (fileLineCount(cwd, null, file) ?? 0) > FIX_FILE_MAX_LINES;
-  return [
+  const head = [
     `# Fix pass — ${file} (run ${runId})`,
     "",
     `${rows.length} static-analysis violation(s)${rows.length > shown.length ? `, first ${shown.length} shown` : ""}.`,
@@ -125,10 +146,8 @@ export function fixContext(runId: string, file: string, cwd: string): string {
     ),
     "",
     "## Source",
-    truncated
-      ? `⚠️ Only the first ${FIX_FILE_MAX_LINES} lines are shown and you have no read tools. Enter fixes ONLY for violations you can see here; leave the rest out.`
-      : "This is the complete file. You have no read tools — everything you need is here.",
-    source,
+  ];
+  const tail = [
     "",
     "## Submit",
     "Call `f_review_fix_submit` with runId, file, and one entry per violation:",
@@ -136,7 +155,60 @@ export function fixContext(runId: string, file: string, cwd: string): string {
     "`asIs` (the code as it stands) and `toBe` (the corrected code) — code only,",
     "no AS-IS:/TO-BE: labels. Do NOT report new issues here; that is the",
     "reviewer's job and duplicates are dropped.",
-  ].join("\n");
+  ];
+  const budget = FIX_CONTEXT_MAX_BYTES - byteLen(head.join("\n")) - byteLen(tail.join("\n"));
+  return [...head, ...fixSource(cwd, file, shown, budget), ...tail].join("\n");
+}
+
+/**
+ * The code the fixer is shown: the whole file when it fits the byte budget,
+ * otherwise the windows around the violations, dropped from the end until it
+ * does. Either way the note above it says exactly what is visible — the fixer
+ * has no way to check, so it must be told rather than guess.
+ */
+function fixSource(
+  cwd: string,
+  file: string,
+  shown: FcqFileViolation[],
+  budget: number
+): string[] {
+  // Working tree, not the ref: the fix is written against the code as it is now.
+  // The 6th argument is the line cap; passing FIX_FILE_MAX_LINES only as
+  // end_line left the reader's 500-line default in force and truncated a
+  // 900-line file despite the constant saying 2000.
+  const whole = fileRead(cwd, null, file, 1, FIX_FILE_MAX_LINES, FIX_FILE_MAX_LINES);
+  // Counted, not read off the rendered header: asking for lines 1..2000 of a
+  // 2050-line file is "exactly what you asked for" to the reader, so its
+  // IS_TRUNCATED says false while 50 lines are missing.
+  const total = fileLineCount(cwd, null, file) ?? 0;
+  if (total <= FIX_FILE_MAX_LINES && byteLen(whole) <= budget) {
+    return ["This is the complete file. You have no read tools — everything you need is here.", whole];
+  }
+
+  const windows = fixWindows(
+    shown.map((v) => v.line ?? 0).filter((l) => l > 0),
+    total
+  );
+  const rendered: string[] = [];
+  const visible: [number, number][] = [];
+  let used = 0;
+  for (const [start, end] of windows) {
+    const chunk = fileRead(cwd, null, file, start, end, end - start + 1);
+    if (used + byteLen(chunk) > budget) break;
+    used += byteLen(chunk);
+    rendered.push(chunk);
+    visible.push([start, end]);
+  }
+  const covers = (line: number) => visible.some(([s, e]) => line >= s && line <= e);
+  const unseen = shown.map((v) => v.line ?? 0).filter((l) => !covers(l));
+  return [
+    `⚠️ ${file} is ${total} lines — too large to show whole, and you have no read tools.`,
+    `Only these line ranges are below: ${visible.map(([s, e]) => `L${s}-${e}`).join(", ") || "none"}.`,
+    unseen.length
+      ? `Do NOT enter fixes for the violation(s) at ${unseen.map((l) => `L${l}`).join(", ")} — that code is not shown. Submit only what you can see.`
+      : "Every listed violation is inside a range above.",
+    ...rendered,
+  ];
 }
 
 /** Persist one file's fixes. Overwrites — a retry is idempotent. */
