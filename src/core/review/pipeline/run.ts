@@ -23,7 +23,7 @@ import { collectTargets, resolveDiffRange, type CommitSpec } from "./context";
 import { FinalizeCacheSchema, MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, RUN_BATCH_SIZE, absoluteOutputPath, createRun, diskTextHash, filesSnapshotIdentity, finalizeFingerprint, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, runFreshness, unfinishedRuns } from "./run-store";
 import { loadRun, type RunMeta } from "./artifact";
 import { RUNS_DIR, reviewArtifactHash, runDir } from "./artifact";
-import { loadConfig, resolveDeepPasses } from "../config";
+import { loadConfigSource, resolveDeepPasses } from "../config";
 import { defaultLabel, loadBaseline, manifestTimestamp, renderReviewContext, resolveOutputPath, writeReport } from "../report/output";
 import { readRunJudgments } from "./judge-store";
 import { DEFAULT_JUDGE_THRESHOLD } from "./judge-store";
@@ -154,7 +154,7 @@ export async function planReview(args: PlanReviewArgs, cwd: string): Promise<str
     );
   }
 
-  const config = loadConfig(cwd);
+  const config = loadConfigSource(cwd).config;
   const planned: PlannedRun = {
     targets,
     range,
@@ -291,8 +291,17 @@ function renderPlanInstructions(meta: RunMeta, cwd: string): string {
     ...fixSteps,
     ...judgeSteps,
   ];
+  // The orchestrator must never narrate settings it guessed from a file it
+  // read itself: state every resolved run mode here, on and off alike, with
+  // the config that supplied them.
+  const configSource = loadConfigSource(cwd).source;
+  const settingsLine =
+    `Effective settings: deepPasses=${meta.deepPasses ?? 1} · judge=${meta.judge ? "on" : "off"} · ` +
+    `fcq=${meta.fcq ? "on" : "off"} · fcqFix=${meta.fcqFix ? "on" : "off"} ` +
+    (configSource ? `(config: ${configSource}, plus any call arguments)` : "(no project config found; tool defaults)");
   return [
     `Run created: ${meta.runId} — ${meta.targets.length} file(s), mode: ${meta.range ? `commit diff (${meta.range})` : "explicit files"}${meta.whole ? " · whole-file" : ""}${(meta.deepPasses ?? 1) > 1 ? ` · ${meta.deepPasses} review rounds/target` : ""}${meta.failOn ? ` · gate: failOn=${meta.failOn}` : ""}${meta.judge ? ` · judge gate on` : ""}${meta.fcqFix ? ` · fix pass on` : ""}.`,
+    settingsLine,
     ...list,
     ...fcqLine,
     "",

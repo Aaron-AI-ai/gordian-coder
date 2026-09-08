@@ -88,6 +88,16 @@ function flattenConfig(raw: unknown): unknown {
  * location; unparseable/non-object → also fall through (an invalid
  * higher-priority file must not shadow a valid fallback); nothing valid → {}. */
 export function loadConfig(cwd: string = process.cwd()): ReviewConfig {
+  return loadConfigSource(cwd).config;
+}
+
+/** `loadConfig` plus the file it came from — `source` is undefined when no
+ * location held a usable config. Reported in the plan output so a run can
+ * never disagree with the user about which config applied. */
+export function loadConfigSource(cwd: string = process.cwd()): {
+  config: ReviewConfig;
+  source?: string;
+} {
   for (const rel of CONFIG_PATHS) {
     const p = join(cwd, rel);
     if (!existsSync(p)) continue;
@@ -95,12 +105,12 @@ export function loadConfig(cwd: string = process.cwd()): ReviewConfig {
       const parsed = ReviewConfigSchema.safeParse(
         flattenConfig(JSON.parse(readFileSync(p, "utf8")))
       );
-      if (parsed.success) return parsed.data;
+      if (parsed.success) return { config: parsed.data, source: rel };
     } catch {
       /* unparseable JSON — fall through to the next location */
     }
   }
-  return {};
+  return { config: {} };
 }
 
 /** Hard ceiling on review rounds per target (deep-pass iteration). */

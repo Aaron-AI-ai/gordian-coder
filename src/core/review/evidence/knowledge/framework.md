@@ -20,5 +20,5 @@ the rule here — and word the suggestion accordingly.
 Add more framework rules below. For each rule state:
   1) the rule, 2) the violation pattern, 3) the concrete suggestion.
 This file is bundled into the plugin at build time. A project may override it
-by setting "frameworkGuide": "<path>" in .f-review.json.
+by setting "frameworkGuide": "<path>" in .fico/config/fico_ai.json (review section).
 -->

@@ -549,7 +549,9 @@ describe("run-mode integration", () => {
   it("without fcq enabled nothing changes", async () => {
     const d = gitRepo();
     const plan = await planReview({ commit: "HEAD" }, d);
-    expect(plan).not.toContain("fcq");
+    // The settings line always states the mode; only the fcq step must be absent.
+    expect(plan).toContain("fcq=off");
+    expect(plan).not.toContain("Static analysis (fcq)");
     expect(loadRun(/Run created: (\S+)/.exec(plan)![1], d)!.fcq).toBeUndefined();
   });
 });

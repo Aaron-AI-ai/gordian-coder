@@ -105,7 +105,7 @@ export function createReviewModule(input: PluginInput): {
         .int()
         .optional()
         .describe(
-          "Review rounds per file/segment (1-5; default from .f-review.json `deepPasses`, else 1). Rounds >1 make the submit gate bounce clean submissions back for refute/deepen/calibrate passes."
+          "Review rounds per file/segment (1-5; default from project config `deepPasses`, else 1). Rounds >1 make the submit gate bounce clean submissions back for refute/deepen/calibrate passes."
         ),
       runId: z
         .string()
@@ -147,19 +147,19 @@ export function createReviewModule(input: PluginInput): {
         .int()
         .optional()
         .describe(
-          "Review rounds per file/segment for every subagent (1-5; default from .f-review.json `deepPasses`, else 1)"
+          "Review rounds per file/segment for every subagent (1-5; default from project config `deepPasses`, else 1)"
         ),
       judge: z
         .boolean()
         .optional()
         .describe(
-          "Judge gate: after each file's review, an independent f-judge subagent scores it; below-threshold reviews are re-reviewed with feedback (default from .f-review.json `judge`)"
+          "Judge gate: after each file's review, an independent f-judge subagent scores it; below-threshold reviews are re-reviewed with feedback (default from project config `judge`)"
         ),
       fcq: z
         .boolean()
         .optional()
         .describe(
-          "Static analysis: run the fcq CLI over the targets before fan-out, inject its violations into each reviewer as evidence, and merge them into the final report (default from .f-review.json `fcq`; options in `fcqOptions`)"
+          "Static analysis: run the fcq CLI over the targets before fan-out, inject its violations into each reviewer as evidence, and merge them into the final report (default from project config `fcq`; options in `fcqOptions`)"
         ),
     },
     async execute(args) {

@@ -244,6 +244,25 @@ describe("planReview", () => {
     expect(loadRun(runId, d)?.targets).toEqual(["a.ts", "b.ts"]);
   });
 
+  it("reports the effective settings and the config file they came from", async () => {
+    const d = gitRepo();
+    mkdirSync(join(d, ".fico", "config"), { recursive: true });
+    writeFileSync(
+      join(d, ".fico", "config", "fico_ai.json"),
+      JSON.stringify({ review: { judge: true, deepPasses: 3 } })
+    );
+    const msg = await planReview({}, d);
+    expect(msg).toContain("deepPasses=3");
+    expect(msg).toContain("judge=on");
+    expect(msg).toContain("fcq=off");
+    expect(msg).toContain("config: .fico/config/fico_ai.json");
+  });
+
+  it("says so when no project config was found", async () => {
+    const msg = await planReview({}, gitRepo());
+    expect(msg).toContain("no project config found");
+  });
+
   it("creates a fresh run for a repeated identical plan (no resume)", async () => {
     const d = gitRepo();
     const first = await planReview({}, d);

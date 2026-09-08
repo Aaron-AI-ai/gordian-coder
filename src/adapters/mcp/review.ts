@@ -68,7 +68,7 @@ export function createReviewTools(cwd: string = process.cwd()): ToolDefinition[]
       deepPasses: {
         type: "number",
         description:
-          "Review rounds per file/segment (1-5; default from .f-review.json `deepPasses`, else 1)",
+          "Review rounds per file/segment (1-5; default from project config `deepPasses`, else 1)",
       },
     },
     execute: async (params) => {

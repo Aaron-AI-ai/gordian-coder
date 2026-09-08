@@ -251,19 +251,24 @@ Parse the arguments into \`f_review_plan\` parameters (all optional):
 - \`--background=...\` → \`requirementBackground\`
 - \`--plan=...\` → \`planGuidance\`
 - \`--deep=N\` → \`deepPasses\` (review rounds per file, 1-5; default comes from
-  \`.f-review.json\` \`deepPasses\`)
+  project config \`deepPasses\`)
 - \`fcqFix: true\` in config → the plan adds a FIX PASS step; spawn one f-fixer
   subagent per file for it.
 - \`--judge\` → \`judge: true\` (judge gate: an independent f-judge subagent scores
   each file's review; failing reviews are re-reviewed with feedback. Default
-  comes from \`.f-review.json\` \`judge\`)
+  comes from project config \`judge\`)
 - \`--fcq\` → \`fcq: true\` (static analysis: the fcq CLI runs once at plan time;
   its violations become reviewer evidence and merge into the report. Default
-  comes from \`.f-review.json\` \`fcq\`; CLI options live in \`fcqOptions\`)
+  comes from project config \`fcq\`; CLI options live in \`fcqOptions\`)
 - \`--sequential\` → do NOT use f_review_plan; instead call \`f_review_context\`
   with the same parameters (minus \`--sequential\`) and delegate the whole review
   to a single f-reviewer subagent that reviews every file in one session,
   following the injected checklist (legacy sequential mode).
+
+NEVER read the project config yourself. \`f_review_plan\` resolves it
+(\`.fico/config/fico_ai.json\`, or a legacy \`.f-review.json\`) and reports the
+effective settings back in its output — announcing defaults from a file you
+read is how you end up reporting the wrong ones.
 
 Parallel workflow (default):
 1. Call \`f_review_plan\` with the parsed parameters. It returns a runId, the
