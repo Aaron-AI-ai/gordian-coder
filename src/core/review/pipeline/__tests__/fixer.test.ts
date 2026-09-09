@@ -219,17 +219,56 @@ describe("fixContext", () => {
 });
 
 describe("submitFix", () => {
-  it("records fixes and reports what the file still lacks", async () => {
+  it("sends the fixer back for the violations it left out, once", async () => {
     const cwd = repo();
     const runId = await run(cwd, [VIOLATION, { ...VIOLATION, line: 3, ruleId: "Other" }]);
+    const first = { line: 2, ruleId: "NoBlockComment", asIs: "/* block */", toBe: "// block" };
+    const out = await submitFix({ runId, file: "src/A.java", fixes: [first] }, cwd);
+    expect(out).toContain("1 fix(es) recorded");
+    // Naming the gap and calling the task done in the same breath is what let a
+    // violation needing a refactor rather than a snippet swap ship unfixed.
+    expect(out).toContain("L3");
+    expect(out).not.toContain("COMPLETE");
+    expect(loadFixes(runId, "src/A.java", cwd).fixes).toHaveLength(1);
+
+    // Second submission: the gap is reported, but the fixer is not looped on it.
+    const again = await submitFix({ runId, file: "src/A.java", fixes: [first] }, cwd);
+    expect(again).toContain("1 violation(s) still have no entry");
+    expect(again).toContain("COMPLETE");
+  });
+
+  it("matches entries by anchor, not by count", async () => {
+    const cwd = repo();
+    const runId = await run(cwd, [VIOLATION, { ...VIOLATION, line: 3, ruleId: "Other" }]);
+    // Two entries for one violation used to net out against the one with none.
     const out = await submitFix(
-      { runId, file: "src/A.java", fixes: [{ line: 2, ruleId: "NoBlockComment", asIs: "/* block */", toBe: "// block" }] },
+      {
+        runId,
+        file: "src/A.java",
+        fixes: [
+          { line: 2, ruleId: "checkstyle/NoBlockComment", toBe: "// block" },
+          { line: 2, ruleId: "NoBlockComment", toBe: "// block" },
+        ],
+      },
       cwd
     );
-    expect(out).toContain("1 fix(es) recorded");
-    // Silence here would ship a violation with only its rule text.
-    expect(out).toContain("1 violation(s) received no entry");
-    expect(loadFixes(runId, "src/A.java", cwd).fixes).toHaveLength(1);
+    expect(out).toContain("L3");
+    expect(out).not.toContain("COMPLETE");
+  });
+
+  it("accepts a note-only entry as an entry", async () => {
+    const cwd = repo();
+    const runId = await run(cwd, [VIOLATION]);
+    const out = await submitFix(
+      {
+        runId,
+        file: "src/A.java",
+        fixes: [{ line: 2, ruleId: "NoBlockComment", note: "extract the mapper call" }],
+      },
+      cwd
+    );
+    expect(out).toContain("COMPLETE");
+    expect(out).not.toContain("NO entry");
   });
 
   it("rejects a malformed submission and an unknown target", async () => {

@@ -135,7 +135,11 @@ export function fixContext(runId: string, file: string, cwd: string): string {
     "Write the corrected code for EVERY one, whatever its severity: a MINOR",
     "style rule ships with only the rule text unless you replace it. Where a",
     "violation is genuinely wrong, mark it `falsePositive` with a one-line note",
-    "instead of inventing a change.",
+    "instead of inventing a change. Where it needs a structural refactor no",
+    "snippet swap expresses — a 64-line method to split, say — submit the entry",
+    "anyway with a `note` naming the blocks to extract and the methods to make.",
+    "Every violation above needs an entry; a violation you leave out is the one",
+    "that ships unfixed.",
     "",
     "## Violations",
     ...shown.map(
@@ -211,6 +215,13 @@ function fixSource(
   ];
 }
 
+/** Line + rule id, the anchor the fixer is given and the merge matches on.
+ * The analyzer prefix is dropped so `checkstyle/MethodLength` and
+ * `MethodLength` are the same violation. */
+function fixKey(line: number | undefined, rule: string): string {
+  return `${line ?? 0}${rule.slice(rule.lastIndexOf("/") + 1).toLowerCase()}`;
+}
+
 /** Persist one file's fixes. Overwrites — a retry is idempotent. */
 export async function submitFix(payload: unknown, cwd: string): Promise<string> {
   const parsed = FixSubmitSchema.safeParse(payload);
@@ -222,21 +233,46 @@ export async function submitFix(payload: unknown, cwd: string): Promise<string> 
     return `❌ ${file} is not a target of run ${runId}.`;
   }
   const violations = readFcqFile(runDir(runId, cwd), file);
+  // Read before the overwrite: a fixer already sent back once is not sent back
+  // again, whatever it submitted the second time.
+  const resubmission = loadFixes(runId, file, cwd).fixes.length > 0;
   const body: FileFixes = { file, fixes };
   await Bun.write(fixesPath(runId, file, cwd), JSON.stringify(body, null, 2));
 
   const withCode = fixes.filter((f) => f.toBe?.trim()).length;
   const fp = fixes.filter((f) => f.falsePositive).length;
-  const missing = violations.length - fixes.length;
+  // Matched by anchor, not by count: two entries for one line while another
+  // violation has none is exactly the gap a count comparison reports as clean.
+  const entered = new Set(fixes.map((f) => fixKey(f.line, f.ruleId)));
+  const missing = violations
+    .slice(0, FIX_MAX_ITEMS)
+    .filter((v) => !entered.has(fixKey(v.line, v.ruleId)));
+  const recorded = `✅ ${file}: ${fixes.length} fix(es) recorded (${withCode} with code, ${fp} false positive(s)).`;
+  if (!missing.length || resubmission) {
+    return [
+      recorded,
+      missing.length
+        ? `⚠️ ${missing.length} violation(s) still have no entry — they ship with the rule text only.`
+        : "",
+      "This subagent's task is COMPLETE.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  // Not complete, and saying so is the point: this message used to report the
+  // gap and declare the task done in consecutive lines, so a violation needing
+  // a refactor rather than a snippet swap was simply dropped.
   return [
-    `✅ ${file}: ${fixes.length} fix(es) recorded (${withCode} with code, ${fp} false positive(s)).`,
-    missing > 0
-      ? `⚠️ ${missing} violation(s) received no entry — they ship with the rule text only.`
-      : "",
-    "This subagent's task is COMPLETE.",
-  ]
-    .filter(Boolean)
-    .join("\n");
+    recorded,
+    `⚠️ ${missing.length} violation(s) got NO entry and would ship with the rule text only:`,
+    ...missing.map(
+      (v) => `- L${v.line ?? 0} [${v.severity}] ${v.analyzer}/${v.ruleId} — ${v.description}`
+    ),
+    `Call f_review_fix_submit again with the SAME entries PLUS one for each of these.`,
+    `A violation needing a structural refactor no snippet swap expresses still gets`,
+    `an entry — with a \`note\` naming the blocks to extract; a wrong one gets`,
+    `\`falsePositive\`. Do NOT stop here; this is your last chance to enter them.`,
+  ].join("\n");
 }
 
 /**
@@ -253,11 +289,9 @@ export function applyFixes<
   fixes: Fix[]
 ): T[] {
   if (!fixes.length) return findings;
-  const key = (line: number | undefined, rule: string) =>
-    `${line ?? 0}${rule.slice(rule.lastIndexOf("/") + 1).toLowerCase()}`;
-  const byKey = new Map(fixes.map((f) => [key(f.line, f.ruleId), f]));
+  const byKey = new Map(fixes.map((f) => [fixKey(f.line, f.ruleId), f]));
   return findings.map((f) => {
-    const fix = byKey.get(key(f.line, f.rule));
+    const fix = byKey.get(fixKey(f.line, f.rule));
     if (!fix) return f;
     // A false positive has no code, so it goes in the message rather than the
     // TO-BE the report renders as a code block.
