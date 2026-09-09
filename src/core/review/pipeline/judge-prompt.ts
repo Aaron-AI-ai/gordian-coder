@@ -2,7 +2,7 @@
  * What the judge subagent is shown: the change under review, the findings the
  * reviewer submitted, and the criteria to score them against.
  *
- * Every section is budgeted against JUDGE_CONTEXT_MAX_CHARS, because the judge
+ * Every section is budgeted against JUDGE_CONTEXT_MAX_BYTES, because the judge
  * runs on the same context as the reviewer it is checking. When the change
  * alone cannot fit, the build fails with a JudgeContextOverflow rather than
  * silently handing over a truncated diff — a judge scoring a review of code it
@@ -26,7 +26,7 @@ import {
 } from "./judge-store";
 
 /** Cap on the change excerpt embedded in the judge context. */
-const JUDGE_DIFF_MAX_CHARS = 10_000;
+const JUDGE_DIFF_MAX_BYTES = 10_000;
 
 /** Whole-file lines shown to the judge before falling back to per-finding windows. */
 const JUDGE_FILE_MAX_LINES = 2000;
@@ -34,23 +34,31 @@ const JUDGE_FILE_MAX_LINES = 2000;
 /** Context lines around a finding whose line the capped excerpt did not show. */
 const JUDGE_WINDOW = 25;
 
-/** Hard ceiling for the complete judge prompt returned to a small model.
- * Raised with the authoritative-rules section rather than shrinking the
- * findings/change budgets: those shrink into contextOverflow, which is
- * terminal, so trading evidence for rules would buy one fix with a regression. */
-export const JUDGE_CONTEXT_MAX_CHARS = 48_000;
+/**
+ * Hard ceiling for the complete judge prompt.
+ *
+ * Bytes, not characters, and the same 45_000 the fix pass uses: the host
+ * truncates a tool result before the model sees it (OpenCode's store cuts at
+ * 51200 bytes) and the judge has no read tools to recover what was dropped. A
+ * character budget silently doubles or triples in bytes on a file with Korean
+ * comments, which is exactly where the judge would have been handed a cut
+ * context while believing it complete.
+ */
+export const JUDGE_CONTEXT_MAX_BYTES = 45_000;
 
 /** Section budgets leave room for the rules, identities, and instructions. */
-const JUDGE_FINDINGS_MAX_CHARS = 18_000;
+const JUDGE_FINDINGS_MAX_BYTES = 20_000;
 
-const JUDGE_CHANGE_MAX_CHARS = 18_000;
+/** The change section, and so the whole-file base inside it. Sized to hold an
+ * ordinary service class whole: a 400-line Java file renders to ~19_000 bytes,
+ * and a base too small to hold it forced every finding into a window whose sum
+ * then blew the same budget — a terminal INCOMPLETE for a file that fits. */
+const JUDGE_CHANGE_MAX_BYTES = 24_000;
 
 /** Cap on the authoritative-rules section (framework guide + glob-gated
  * project rules). Truncated, never rejected: a review judged against partial
  * rules still beats one judged against none. */
-const JUDGE_RULES_MAX_CHARS = 8_000;
-
-const JUDGE_BASE_MAX_CHARS = 10_000;
+const JUDGE_RULES_MAX_BYTES = 8_000;
 
 /** The judging rubric injected into every judge context. Kept as data so an
  * offline evaluation script can reuse the exact same criteria. */
@@ -71,6 +79,15 @@ export const JUDGE_CRITERIA = [
   `Penalize noise: duplicates, style nits inflated to issues, hallucinated lines.`,
   `Prefer false negatives over false positives, matching the review's own rules.`,
 ].join("\n");
+
+const byteLen = (s: string): number => Buffer.byteLength(s, "utf8");
+
+/** Truncate to a UTF-8 byte budget, dropping a character split by the cut. */
+function sliceBytes(s: string, max: number): string {
+  if (byteLen(s) <= max) return s;
+  const decoded = new TextDecoder("utf-8").decode(Buffer.from(s, "utf8").subarray(0, max));
+  return decoded.replace(/\uFFFD$/, "");
+}
 
 export interface JudgeContextOverflow {
   reason: string;
@@ -120,9 +137,9 @@ export function changeExcerpt(
   if (meta.range && !meta.whole) {
     const diff = buildDiffMap(meta.range, [file], cwd)[file] ?? "";
     if (diff) {
-      needsWindows = diff.length > JUDGE_DIFF_MAX_CHARS;
+      needsWindows = byteLen(diff) > JUDGE_DIFF_MAX_BYTES;
       base = needsWindows
-        ? `${diff.slice(0, JUDGE_DIFF_MAX_CHARS)}\n… (diff truncated)`
+        ? `${sliceBytes(diff, JUDGE_DIFF_MAX_BYTES)}\n… (diff truncated)`
         : diff;
     }
   }
@@ -131,23 +148,36 @@ export function changeExcerpt(
     if (content === null) {
       base = `Error: file not found: ${file}. The reviewed source is unavailable.`;
     } else {
-      const shownLines = Math.min(totalLines, JUDGE_FILE_MAX_LINES);
-      base = renderFileContent(file, content, 1, shownLines, JUDGE_FILE_MAX_LINES, JUDGE_BASE_MAX_CHARS);
-      const characterTruncated = base.includes("IS_TRUNCATED: true");
-      // A character-truncated line-numbered block may end midway through an
-      // early line even though its header names the requested end. Treat none
-      // of its lines as reliably visible and add windows for every anchor.
-      visibleTo = characterTruncated ? 0 : shownLines;
-      needsWindows = shownLines < totalLines || characterTruncated;
+      const rendered = renderFileContent(
+        file,
+        content,
+        1,
+        totalLines,
+        JUDGE_FILE_MAX_LINES,
+        JUDGE_CHANGE_MAX_BYTES
+      );
+      // The reader caps characters; the budget is bytes. A multi-byte source
+      // can pass its cap and still overrun, so measure the cut here too.
+      const whole =
+        totalLines <= JUDGE_FILE_MAX_LINES &&
+        !rendered.includes("IS_TRUNCATED: true") &&
+        byteLen(rendered) <= JUDGE_CHANGE_MAX_BYTES;
+      // Whole or nothing. A partial base is a prefix the finding windows below
+      // re-render line for line, and paying for it twice is what turned a file
+      // that fits into a terminal INCOMPLETE. Without it the windows own the
+      // whole change budget and the header says what is visible.
+      base = whole ? rendered : "";
+      visibleTo = whole ? totalLines : 0;
+      needsWindows = !whole;
     }
   }
 
-  // Unreachable while JUDGE_BASE_MAX_CHARS and JUDGE_DIFF_MAX_CHARS both sit
-  // below JUDGE_CHANGE_MAX_CHARS — both sources are already capped above. Kept
-  // as the guard on that invariant: raise either budget past the change budget
-  // and this is what stops a partial excerpt from reaching the judge.
-  if (base.length > JUDGE_CHANGE_MAX_CHARS) {
-    return contextOverflow(`the base change excerpt exceeds ${JUDGE_CHANGE_MAX_CHARS} characters`);
+  // Unreachable while both sources are byte-capped at or below the change
+  // budget above. Kept as the guard on that invariant: raise either cap past
+  // the change budget and this is what stops a partial excerpt from reaching
+  // the judge.
+  if (byteLen(base) > JUDGE_CHANGE_MAX_BYTES) {
+    return contextOverflow(`the base change excerpt exceeds ${JUDGE_CHANGE_MAX_BYTES} bytes`);
   }
   if (!needsWindows) return base;
   if (content === null) {
@@ -178,17 +208,22 @@ export function changeExcerpt(
   if (!hiddenLines.length) return base;
 
   const windows = findingWindows(hiddenLines, totalLines).map(({ start, end }) =>
-    renderFileContent(file, content, start, end, end - start + 1, JUDGE_CHANGE_MAX_CHARS)
+    renderFileContent(file, content, start, end, end - start + 1, JUDGE_CHANGE_MAX_BYTES)
   );
   const excerpt = [
     base,
-    `### Excerpts around finding lines the capped excerpt above does not show`,
-    `(judge these findings against the windows below, not against absence)`,
+    base
+      ? `### Excerpts around finding lines the capped excerpt above does not show`
+      : `### ${file} is ${totalLines} lines — too large to show whole; excerpts around every finding line`,
+    `(judge these findings against the windows below, not against absence:\n` +
+      `code outside these ranges was not shown to you and is not a coverage gap)`,
     ...windows,
-  ].join("\n\n");
-  if (excerpt.length > JUDGE_CHANGE_MAX_CHARS) {
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  if (byteLen(excerpt) > JUDGE_CHANGE_MAX_BYTES) {
     return contextOverflow(
-      `${windows.length} merged finding window(s) plus the base exceed ${JUDGE_CHANGE_MAX_CHARS} characters`
+      `${windows.length} merged finding window(s) plus the base exceed ${JUDGE_CHANGE_MAX_BYTES} bytes`
     );
   }
   return excerpt;
@@ -197,7 +232,7 @@ export function changeExcerpt(
 export function overflowContext(file: string, revision: number, reason: string): string {
   return (
     `⚠️ Judge context INCOMPLETE for ${file} review revision ${revision}: ${reason}. ` +
-    `The bounded context cannot show every finding and its evidence within ${JUDGE_CONTEXT_MAX_CHARS} characters. ` +
+    `The bounded context cannot show every finding and its evidence within ${JUDGE_CONTEXT_MAX_BYTES} bytes. ` +
     `This artifact is now terminal Judge INCOMPLETE — Do NOT call f_review_judge or re-spawn it, ` +
     `because a partial judgment must never PASS. Continue with the remaining files, then call ` +
     `f_review_finalize; the run fails closed as INCOMPLETE.`
@@ -238,8 +273,8 @@ export function authoritativeRules(file: string, cwd: string): string {
     .join("\n\n");
   if (!body) return "";
   const capped =
-    body.length > JUDGE_RULES_MAX_CHARS
-      ? `${body.slice(0, JUDGE_RULES_MAX_CHARS)}\n… (rules truncated)`
+    byteLen(body) > JUDGE_RULES_MAX_BYTES
+      ? `${sliceBytes(body, JUDGE_RULES_MAX_BYTES)}\n… (rules truncated)`
       : body;
   return [
     `### Authoritative project rules (the reviewer was REQUIRED to follow these)`,
@@ -261,9 +296,9 @@ export function buildJudgePrompt(
   cwd: string
 ): string | JudgeContextOverflow {
   const findingsJson = JSON.stringify(result.findings, null, 2);
-  if (findingsJson.length > JUDGE_FINDINGS_MAX_CHARS) {
+  if (byteLen(findingsJson) > JUDGE_FINDINGS_MAX_BYTES) {
     return contextOverflow(
-      `${result.findings.length} serialized finding(s) exceed ${JUDGE_FINDINGS_MAX_CHARS} characters`
+      `${result.findings.length} serialized finding(s) exceed ${JUDGE_FINDINGS_MAX_BYTES} bytes`
     );
   }
 
@@ -314,7 +349,7 @@ export function buildJudgePrompt(
     `score, and feedback. Feedback must be concrete, numbered instructions the`,
     `next reviewer can follow (required when the score is below the threshold).`,
   ].join("\n");
-  return prompt.length <= JUDGE_CONTEXT_MAX_CHARS
+  return byteLen(prompt) <= JUDGE_CONTEXT_MAX_BYTES
     ? prompt
-    : contextOverflow(`the assembled judge prompt is ${prompt.length} characters`);
+    : contextOverflow(`the assembled judge prompt is ${byteLen(prompt)} bytes`);
 }

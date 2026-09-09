@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { judgeContext, judgeFeedbackFor, submitJudge } from "../judge";
 import { loadJudgment, readRunJudgments } from "../judge-store";
 import { DEFAULT_JUDGE_THRESHOLD, MAX_INVALID_JUDGE_SUBMISSIONS, MAX_JUDGE_ROUNDS, type FileJudgment, type JudgeAttempt, type JudgeSubmitPayload } from "../judge-store";
-import { JUDGE_CONTEXT_MAX_CHARS, JUDGE_CRITERIA } from "../judge-prompt";
+import { JUDGE_CONTEXT_MAX_BYTES, JUDGE_CRITERIA } from "../judge-prompt";
 import { planReview, finalizeRun } from "../run";
 import { createRun, writeFileReview } from "../run-store";
 import { loadRun, type RunMeta } from "../artifact";
@@ -152,7 +152,7 @@ describe("judgeContext", () => {
     const out = judgeContext(meta.runId, "a.ts", d);
     expect(out).toContain("(rules truncated)");
     expect(out).toContain("Validity (40%)"); // still a real context, not an overflow notice
-    expect(out.length).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_CHARS);
+    expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_BYTES);
   });
 
   it("shows file content instead of a diff for whole-file runs", async () => {
@@ -251,6 +251,23 @@ describe("submitJudge", () => {
     expect(second).toContain("Judge INCOMPLETE");
     expect(loadJudgment(meta.runId, "a.ts", d).terminal?.status).toBe("judge-incomplete");
     expect(judgeContext(meta.runId, "a.ts", d)).toContain("Judge INCOMPLETE");
+  });
+
+  it("a raised judgeRounds is honoured by the re-review gate too (no deadlock)", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta({ judgeRounds: 4 }), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+
+    // Three reworks — past MAX_JUDGE_ROUNDS, inside the run's cap of 4.
+    for (let i = 1; i <= 3; i++) {
+      const msg = await submitJudge(judgePayload(meta.runId, 10), d);
+      expect(msg).toContain(`rework ${i}/4`);
+      if (i < 3) await writeFileReview(meta.runId, reviewResult(), `# a revision ${i + 1}`, d);
+    }
+    // The judge told the orchestrator to re-spawn the reviewer; the gate must agree.
+    const rejoin = await startReview({ runId: meta.runId, files: ["a.ts"] }, d, SESSION);
+    expect(rejoin).not.toContain("rework cap");
+    expect(getState(SESSION)).toBeDefined();
   });
 
   it("HARD-enforces the cap: past it no context, verdict, or re-review is served", async () => {
@@ -492,8 +509,9 @@ describe("judge excerpt covers finding lines past the cap", () => {
     await writeFileReview(meta.runId, result, "# big", d);
 
     const out = judgeContext(meta.runId, "big.ts", d);
-    expect(out).toContain("truncated at 2000 lines");
-    expect(out).toContain("finding lines the capped excerpt above does not show");
+    // No truncated prefix: the windows below would re-render it line for line.
+    expect(out).toContain("big.ts is 2400 lines — too large to show whole");
+    expect(out).not.toContain("1|line1\n");
     expect(out).toContain("line2100"); // the finding's anchor is visible to the judge
   });
 
@@ -516,7 +534,7 @@ describe("judge excerpt covers finding lines past the cap", () => {
     );
 
     const out = judgeContext(meta.runId, "clean-big.ts", d);
-    expect(out.length).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_CHARS);
+    expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_BYTES);
     expect(out).toContain("terminal Judge INCOMPLETE");
     expect(out).toContain("zero-finding review has no anchors");
     expect(out).not.toContain("Judge every finding by its index");
@@ -551,7 +569,7 @@ describe("judge excerpt covers finding lines past the cap", () => {
     await writeFileReview(meta.runId, result, "# unanchored-big", d);
 
     const out = judgeContext(meta.runId, "unanchored-big.ts", d);
-    expect(out.length).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_CHARS);
+    expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_BYTES);
     expect(out).toContain("terminal Judge INCOMPLETE");
     expect(out).toContain("1 finding(s) have no line anchor");
     expect(out).not.toContain("Judge every finding by its index");
@@ -577,7 +595,7 @@ describe("judge excerpt covers finding lines past the cap", () => {
     await writeFileReview(meta.runId, result, "# oversized findings", d);
 
     const out = judgeContext(meta.runId, "a.ts", d);
-    expect(out.length).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_CHARS);
+    expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_BYTES);
     expect(out).toContain("Judge context INCOMPLETE");
     expect(out).toContain("serialized finding(s)");
     expect(out).toContain("Do NOT call f_review_judge");
@@ -611,7 +629,7 @@ describe("judge excerpt covers finding lines past the cap", () => {
     await writeFileReview(meta.runId, result, "# wide", d);
 
     const out = judgeContext(meta.runId, "wide.ts", d);
-    expect(out.length).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_CHARS);
+    expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_BYTES);
     expect(out).toContain("Judge context INCOMPLETE");
     expect(out).toContain("merged finding window(s)");
     expect(out).toContain("Do NOT call f_review_judge");
@@ -964,6 +982,6 @@ describe("judge context overflow (fail-closed)", () => {
     const out = await context(gitRepo(), [finding(1)], { whole: false });
     expect(out).not.toContain("Judge context INCOMPLETE");
     expect(out).toContain("### Criteria");
-    expect(out.length).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_CHARS);
+    expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_BYTES);
   });
 });

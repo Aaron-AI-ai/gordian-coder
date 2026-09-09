@@ -22,8 +22,7 @@ import { renderReviewContext, resolveOutputPath, resolveManifestPath, writeManif
 import { runFreshness } from "./run-store";
 import { loadRun } from "./artifact";
 import { readFileReviewResult } from "./artifact";
-import { judgeFeedbackFor, currentReviewTerminal, reworkCount, reviewReworkStatus } from "./judge";
-import { MAX_JUDGE_ROUNDS } from "./judge-store";
+import { judgeFeedbackFor, currentReviewTerminal, reworkCap, reworkCount, reviewReworkStatus } from "./judge";
 import { setState, getState, currentFile, activeStates, type ReviewState } from "./state";
 import { afterRef, MAX_ITER } from "../tools/read";
 
@@ -121,12 +120,12 @@ function startRunFileReview(
       `Do NOT re-review it; continue with the other files or call f_review_finalize.`
     );
   }
-  // Judge-cap enforcement: past MAX_JUDGE_ROUNDS reworks the latest review
+  // Judge-cap enforcement: past the run's rework cap the latest review
   // stands — an orchestrator that lost the cap message must not respawn
   // reviewer+judge pairs forever.
-  if (meta.judge && reworkCount(runId, file, cwd) > MAX_JUDGE_ROUNDS) {
+  if (meta.judge && reworkCount(runId, file, cwd) > reworkCap(meta)) {
     return (
-      `⚠️ ${file} already hit the judge rework cap (${MAX_JUDGE_ROUNDS}) in run ${runId} — ` +
+      `⚠️ ${file} already hit the judge rework cap (${reworkCap(meta)}) in run ${runId} — ` +
       `its latest review stands. Do NOT re-review; continue with the other files or call f_review_finalize.`
     );
   }

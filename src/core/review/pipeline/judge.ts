@@ -26,8 +26,9 @@ import { DEFAULT_JUDGE_THRESHOLD, JudgeIdentitySchema, JudgeSubmitSchema, MAX_IN
 import { buildJudgePrompt, contextOverflowTerminal, isContextOverflow, overflowContext } from "./judge-prompt";
 
 /** Effective rework cap for a run: `judgeRounds` snapshotted into the run
- * meta at plan time, else MAX_JUDGE_ROUNDS. */
-function reworkCap(meta: { judgeRounds?: number } | null | undefined): number {
+ * meta at plan time, else MAX_JUDGE_ROUNDS. Exported so every gate that
+ * refuses a re-review uses the SAME cap the judge enforces. */
+export function reworkCap(meta: { judgeRounds?: number } | null | undefined): number {
   return meta?.judgeRounds ?? MAX_JUDGE_ROUNDS;
 }
 
