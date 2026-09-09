@@ -18,7 +18,7 @@ import { createHash } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { SEVERITIES, verdict, type Finding, type Severity } from "../contract";
+import { SEVERITIES, dedupeFindings, verdict, type Finding, type Severity } from "../contract";
 import { collectTargets, resolveDiffRange, type CommitSpec } from "./context";
 import { FinalizeCacheSchema, MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, RUN_BATCH_SIZE, absoluteOutputPath, createRun, diskTextHash, filesSnapshotIdentity, finalizeFingerprint, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, runFreshness, unfinishedRuns } from "./run-store";
 import { loadRun, type RunMeta } from "./artifact";
@@ -348,10 +348,14 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
   const targetResults = results.filter((result) => meta.targets.includes(result.file));
   const resultByFile = new Map(targetResults.map((result) => [result.file, result]));
   const findings: Record<string, Finding[]> = {};
-  // Copy: the fcq merge below appends to these arrays, and the judge check
-  // hashes the parsed review objects — mutating them would unmatch every
-  // recorded judgment and report the run as unjudged.
-  for (const r of targetResults) findings[r.file] = [...r.findings];
+  // dedupeFindings returns a NEW array, which is also the copy this needs: the
+  // fcq merge below appends to it, and the judge check hashes the parsed review
+  // objects — mutating those would unmatch every recorded judgment and report
+  // the run as unjudged. Deduping again here, not only in writeRunReview,
+  // covers artifacts written before that collapse existed, and keeps the fcq
+  // merge honest: it pairs one fcq row with one reviewer finding, so a
+  // surviving repeat would ship as a second, unmerged row.
+  for (const r of targetResults) findings[r.file] = dedupeFindings(r.findings);
 
   // Static-analysis findings merge into the same per-file tables (rule `fcq:…`).
   const runRoot = runDir(runId, cwd);

@@ -85,6 +85,92 @@ export function hasFix(f: { asIs?: string; toBe?: string; suggestion?: string })
   return !!(asIs || toBe);
 }
 
+// ── duplicate collapsing ─────────────────────────────────────────
+//
+// A file over SEGMENT_THRESHOLD is reviewed as overlapping segments, each its
+// own target with its own submit, so an issue inside an overlap band — or in a
+// declaration that inFileRelated surfaces to a later segment — is reported
+// twice, with the two passes wording it slightly differently. Per-target dedup
+// cannot see across targets, so the collapse runs where segments merge back
+// into one file (finalizeReport / writeRunReview / run finalize).
+//
+// Precision over recall throughout: a duplicate that slips through is a
+// repeated row, an over-merge silently deletes a real finding. When in doubt,
+// both rows are kept.
+
+/** Normalized text for duplicate matching: case, whitespace and punctuation
+ * carry no meaning when two passes describe the same issue. */
+function normalizeText(s: string): string {
+  return s.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+
+/** How much fix detail a finding carries. The tiebreak when duplicates
+ * collapse, so a bare restatement never displaces the copy holding the code. */
+function fixWeight(f: Finding): number {
+  const { asIs, toBe } = splitFix(f);
+  return (toBe ? 2 : 0) + (asIs ? 1 : 0);
+}
+
+/**
+ * Identity keys for a finding. Two findings are the same issue when they share
+ * an anchor — file, line and category — AND agree on their rule OR on their
+ * message.
+ *
+ * The anchor alone is deliberately NOT enough: two unrelated issues routinely
+ * sit on one line (a null check and a naming violation), and collapsing those
+ * would delete a real finding. Category is part of the anchor for the same
+ * reason. What this is built to catch is wording drift between two passes over
+ * the same lines, not "anything reported here".
+ *
+ * ponytail: an issue the two passes anchor to DIFFERENT lines (off-by-one on a
+ * multi-line statement) survives as two rows. Anchoring a tolerance window
+ * would start merging neighbouring issues; leave it until it shows up.
+ */
+function dupKeys(f: Finding): string[] {
+  const anchor = `${f.file}\u001f${f.line ?? "-"}\u001f${f.category}`;
+  const rule = normalizeText(f.rule);
+  const message = normalizeText(f.message);
+  return [
+    ...(rule ? [`${anchor}\u001fr:${rule}`] : []),
+    ...(message ? [`${anchor}\u001fm:${message}`] : []),
+  ];
+}
+
+/** Fold `b` into the already-kept `a`: the copy with the most fix detail (then
+ * the fuller message) wins, but the merge never softens the severity — the CI
+ * gate reads it, and one pass rating the issue `major` is enough. */
+function mergeDuplicate(a: Finding, b: Finding): Finding {
+  const wa = fixWeight(a);
+  const wb = fixWeight(b);
+  const winner = wb > wa || (wb === wa && b.message.length > a.message.length) ? b : a;
+  const severity =
+    SEVERITIES[Math.min(SEVERITIES.indexOf(a.severity), SEVERITIES.indexOf(b.severity))];
+  return winner.severity === severity ? winner : { ...winner, severity };
+}
+
+/**
+ * Collapse duplicate findings, keeping the richest copy of each issue in first-
+ * seen order. Findings that share no identity key are all kept untouched.
+ */
+export function dedupeFindings(findings: readonly Finding[]): Finding[] {
+  const slotOf = new Map<string, number>();
+  const out: Finding[] = [];
+  for (const f of findings) {
+    const keys = dupKeys(f);
+    const slot = keys.map((k) => slotOf.get(k)).find((i) => i !== undefined);
+    if (slot === undefined) {
+      out.push(f);
+      for (const k of keys) slotOf.set(k, out.length - 1);
+      continue;
+    }
+    out[slot] = mergeDuplicate(out[slot], f);
+    // Register the keys this copy adds, so a third phrasing that matches only
+    // the newly-seen rule/message still lands in the same slot.
+    for (const k of keys) if (!slotOf.has(k)) slotOf.set(k, slot);
+  }
+  return out;
+}
+
 export const SubmitSchema = z.object({
   // Opaque identity injected for the current target/round. It prevents a
   // repeated state-changing call from being applied to the next target.

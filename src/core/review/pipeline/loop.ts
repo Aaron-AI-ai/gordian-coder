@@ -14,7 +14,7 @@
  */
 
 import { REQUIRED_CATEGORIES, SubmitSchema, coverage, degenerateReason, verdict, type Finding, type Severity,
-  hasFix,
+  dedupeFindings, hasFix,
 } from "../contract";
 
 import { resolveOutputPath, writeReport, renderReport } from "../report/output";
@@ -460,8 +460,11 @@ async function writeRunReview(
   partial: boolean
 ): Promise<string> {
   const file = targetPath(st.targets[0]); // single file per run session (segments share it)
-  // Merge segment-keyed findings back under the real file path.
-  const merged = Object.values(st.findings).flat();
+  // Merge segment-keyed findings back under the real file path. Segments
+  // overlap, so the same issue arrives from two of them — collapse before the
+  // artifact is written, or every downstream reader (aggregate report, fcq
+  // merge, fixer) sees the repeat.
+  const merged = dedupeFindings(Object.values(st.findings).flat());
   const explorationCalls = Object.values(st.callLog)
     .flatMap((byTool) => Object.values(byTool))
     .reduce((a, b) => a + b, 0);
@@ -526,7 +529,10 @@ async function finalizeReport(
   for (const [target, fs] of Object.entries(st.findings)) {
     (report[targetPath(target)] ??= []).push(...fs);
   }
-  const all = Object.values(st.findings).flat();
+  // Overlapping segments report the same issue twice; collapse per file so the
+  // report and the gate below count one issue once.
+  for (const file of Object.keys(report)) report[file] = dedupeFindings(report[file]);
+  const all = Object.values(report).flat();
   const forcedTargets = Object.keys(st.forcedNotes);
   const degraded = partial || forcedTargets.length > 0;
   // A partial/forced terminal result must never render a findings-only PASS in

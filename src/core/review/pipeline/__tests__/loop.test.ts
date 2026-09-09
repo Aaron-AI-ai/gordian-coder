@@ -188,6 +188,74 @@ describe("startReview / submitReview (full loop)", () => {
     expect(readdirSync(manifestDir).some((f) => f.endsWith("-targets.md"))).toBe(true);
   });
 
+  it("collapses an overlap-band issue reported by two segments of one file", async () => {
+    const d = gitRepo();
+    writeFileSync(join(d, "a.ts"), Array.from({ length: 1400 }, (_, i) => `// l${i}`).join("\n"));
+    setState(
+      "t",
+      baseState({
+        cwd: d,
+        targets: ["a.ts#1-500", "a.ts#441-940"], // as planSegments would emit them
+        wholeFile: true,
+        failOn: "major",
+      })
+    );
+    const dup = (n: number) => ({
+      assessed: [...REQUIRED_CATEGORIES],
+      findings: [
+        {
+          category: "correctness" as const,
+          severity: "major" as const,
+          file: "a.ts", // findings anchor to the real path, not the segment id
+          line: 450, // inside the 441-500 overlap
+          rule: "no-secret",
+          message: `hardcoded token (phrasing ${n})`,
+          toBe: "const token = process.env.TOKEN;", // major findings must carry a fix
+        },
+      ],
+    });
+    let last = "";
+    for (const n of [1, 2]) {
+      guardExploration(getState("t")!, "file_read", ""); // pass the final check first try
+      last = await submitReview(dup(n), "t");
+    }
+    expect(last).toContain("Review complete");
+    const md = readFileSync(join(d, /Report: (.+)$/.exec(last)![1]), "utf8");
+    expect(md.match(/^\| major \|/gm)).toHaveLength(1); // one row, not two
+    expect(md).toContain("**1건 발견**");
+    expect(md).toContain("**Verdict: FAIL** — 1 finding(s)"); // the gate counts it once
+  });
+
+  it("keeps two distinct issues that share a line across segments", async () => {
+    const d = gitRepo();
+    writeFileSync(join(d, "a.ts"), Array.from({ length: 1400 }, (_, i) => `// l${i}`).join("\n"));
+    setState(
+      "t",
+      baseState({ cwd: d, targets: ["a.ts#1-500", "a.ts#441-940"], wholeFile: true })
+    );
+    const one = (rule: string, message: string) => ({
+      assessed: [...REQUIRED_CATEGORIES],
+      findings: [
+        {
+          category: "correctness" as const,
+          severity: "major" as const,
+          file: "a.ts",
+          line: 450,
+          rule,
+          message,
+          toBe: "// fixed", // major findings must carry a fix
+        },
+      ],
+    });
+    guardExploration(getState("t")!, "file_read", "");
+    await submitReview(one("no-secret", "hardcoded token"), "t");
+    guardExploration(getState("t")!, "file_read", "");
+    const done = await submitReview(one("naming", "variable name is not descriptive"), "t");
+    const md = readFileSync(join(d, /Report: (.+)$/.exec(done)![1]), "utf8");
+    expect(md.match(/^\| major \|/gm)).toHaveLength(2);
+    expect(md).toContain("**2건 발견**");
+  });
+
   it("submit without an active review is rejected", async () => {
     expect(await submitReview({ assessed: [], findings: [] }, "nope")).toBe(NO_ACTIVE_REVIEW);
   });

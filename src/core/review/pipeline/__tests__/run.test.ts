@@ -394,7 +394,7 @@ describe("planReview", () => {
 });
 
 describe("run-mode session (startReview/submitReview with runId)", () => {
-  const fullSubmit = (file: string) => ({
+  const fullSubmit = (file: string, over: Record<string, unknown> = {}) => ({
     assessed: [...REQUIRED_CATEGORIES],
     findings: [
       {
@@ -405,6 +405,7 @@ describe("run-mode session (startReview/submitReview with runId)", () => {
         rule: "r1",
         message: "issue",
         suggestion: "fix",
+        ...over,
       },
     ],
   });
@@ -491,14 +492,43 @@ describe("run-mode session (startReview/submitReview with runId)", () => {
     expect(st.targets.length).toBeGreaterThan(1); // segmented
     expect(st.targets.every((t) => t.startsWith("big.ts#"))).toBe(true);
 
-    for (let i = 0; i < st.targets.length; i++) {
+    const segments = st.targets.length;
+    for (let i = 0; i < segments; i++) {
       guardExploration(st, "file_read", "");
-      await submitReview(fullSubmit("big.ts"), "rs");
+      // A distinct issue per segment, so the merge is visible as N rows.
+      await submitReview(fullSubmit("big.ts", { line: i + 1, rule: `r${i}` }), "rs");
     }
     const results = readRunResults(meta.runId, d);
     expect(results).toHaveLength(1); // merged into one file review
     expect(results[0].file).toBe("big.ts");
-    expect(results[0].findings.length).toBe(st.targets.length); // one per segment
+    expect(results[0].findings.length).toBe(segments); // one per segment
+  });
+
+  it("collapses one issue found by every overlapping segment into a single row", async () => {
+    const d = gitRepo();
+    const big = Array.from({ length: 1400 }, (_, i) => `// l${i}`).join("\n") + "\n";
+    writeFileSync(join(d, "big.ts"), big);
+    Bun.spawnSync(["git", "add", "-A"], { cwd: d });
+    Bun.spawnSync(["git", "commit", "-qm", "big"], { cwd: d });
+
+    const meta = await createRun({ ...baseMeta(["big.ts"]), whole: true }, d);
+    await startReview({ runId: meta.runId, files: ["big.ts"] }, d, "rs");
+    const st = getState("rs")!;
+    const segments = st.targets.length;
+    expect(segments).toBeGreaterThan(1);
+
+    for (let i = 0; i < segments; i++) {
+      guardExploration(st, "file_read", "");
+      // Same issue at line 450 — it sits in the 441-500 overlap band, so every
+      // segment covering it reports it, each wording the message differently.
+      await submitReview(
+        fullSubmit("big.ts", { line: 450, rule: "no-secret", message: `phrasing ${i}` }),
+        "rs"
+      );
+    }
+    const results = readRunResults(meta.runId, d);
+    expect(results[0].findings).toHaveLength(1);
+    expect(results[0].findings[0].line).toBe(450);
   });
 
   it("idle watchdog past the cap saves a PARTIAL per-file review", async () => {
