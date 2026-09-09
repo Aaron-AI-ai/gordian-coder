@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { judgeContext, judgeFeedbackFor, submitJudge } from "../judge";
-import { loadJudgment, readRunJudgments } from "../judge-store";
+import { artifactIdentity, currentPendingParts, loadJudgment, readRunJudgments } from "../judge-store";
 import { DEFAULT_JUDGE_THRESHOLD, MAX_INVALID_JUDGE_SUBMISSIONS, MAX_JUDGE_ROUNDS, type FileJudgment, type JudgeAttempt, type JudgeSubmitPayload } from "../judge-store";
 import { JUDGE_CONTEXT_MAX_BYTES, JUDGE_CRITERIA } from "../judge-prompt";
 import { planReview, finalizeRun } from "../run";
@@ -983,5 +983,50 @@ describe("judge context overflow (fail-closed)", () => {
     expect(out).not.toContain("Judge context INCOMPLETE");
     expect(out).toContain("### Criteria");
     expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_BYTES);
+  });
+});
+
+describe("pendingParts", () => {
+  it("pendingParts가 없는 기존 판정 파일도 그대로 읽힌다", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "md", d);
+    mkdirSync(join(runDir(meta.runId, d), "judgments"), { recursive: true });
+    writeFileSync(
+      join(runDir(meta.runId, d), "judgments", `${reviewSlug("a.ts")}.json`),
+      JSON.stringify({ file: "a.ts", attempts: [], invalidSubmissions: [] })
+    );
+    expect(loadJudgment(meta.runId, "a.ts", d).pendingParts).toEqual([]);
+  });
+
+  it("현재 아티팩트에 속한 part만 돌려준다", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "md", d);
+    const review = readFileReviewResult(meta.runId, "a.ts", d)!;
+    const judgment = loadJudgment(meta.runId, "a.ts", d);
+    judgment.pendingParts = [
+      {
+        reviewRevision: review.revision,
+        reviewArtifactHash: artifactIdentity(review),
+        part: 0,
+        score: 80,
+        feedback: "f",
+        coverageGaps: [],
+        findingJudgments: [],
+        at: new Date().toISOString(),
+      },
+      {
+        reviewRevision: review.revision,
+        reviewArtifactHash: "다른-아티팩트-해시",
+        part: 1,
+        score: 80,
+        feedback: "f",
+        coverageGaps: [],
+        findingJudgments: [],
+        at: new Date().toISOString(),
+      },
+    ];
+    expect(currentPendingParts(judgment, review).map((p) => p.part)).toEqual([0]);
   });
 });

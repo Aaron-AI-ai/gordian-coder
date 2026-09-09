@@ -99,10 +99,33 @@ export const JudgeTerminalSchema = z.object({
 
 export type JudgeTerminal = z.infer<typeof JudgeTerminalSchema>;
 
+/**
+ * 한 part의 심사 제출. 모든 part가 모이면 하나의 JudgeAttempt로 합성되어
+ * `attempts`로 옮겨가므로, 여기 남아있는 항목은 아직 미완인 심사를 뜻한다.
+ *
+ * attempt와 같은 방식으로 리뷰 아티팩트에 바인딩된다. 재리뷰로 새 revision이
+ * 나오면 해시가 어긋나 자동으로 무효가 된다.
+ */
+export const JudgePartSubmissionSchema = z.object({
+  reviewRevision: z.number().int().positive(),
+  reviewArtifactHash: z.string(),
+  /** 0..findingParts.length-1 은 지적 part, 그 다음 번호가 coverage part. */
+  part: z.number().int().nonnegative(),
+  score: z.number().min(0).max(100),
+  feedback: z.string(),
+  coverageGaps: z.array(z.string()),
+  findingJudgments: z.array(FindingJudgmentSchema),
+  at: z.string(),
+});
+
+export type JudgePartSubmission = z.infer<typeof JudgePartSubmissionSchema>;
+
 export const FileJudgmentSchema = z.object({
   file: z.string(),
   attempts: z.array(JudgeAttemptSchema),
   invalidSubmissions: z.array(InvalidJudgeSubmissionSchema).default([]),
+  /** 아직 전부 모이지 않은 part 제출. 합성되면 비워진다. */
+  pendingParts: z.array(JudgePartSubmissionSchema).default([]),
   terminal: JudgeTerminalSchema.optional(),
 });
 
@@ -303,7 +326,7 @@ export function loadJudgment(runId: string, file: string, cwd: string): FileJudg
       /* fall through to empty */
     }
   }
-  return { file, attempts: [], invalidSubmissions: [] };
+  return { file, attempts: [], invalidSubmissions: [], pendingParts: [] };
 }
 
 /** Every file's judgment for a run (finalize summary input). */
@@ -323,4 +346,16 @@ export function readRunJudgments(runId: string, cwd: string): FileJudgment[] {
     }
   }
   return out;
+}
+
+/** 현재 리뷰 아티팩트에 속한 part 제출만. 다른 revision에 남은 것은 버린다. */
+export function currentPendingParts(
+  judgment: FileJudgment,
+  review: PersistedFileReviewResult
+): JudgePartSubmission[] {
+  const hash = artifactIdentity(review);
+  return judgment.pendingParts.filter(
+    (submission) =>
+      submission.reviewRevision === review.revision && submission.reviewArtifactHash === hash
+  );
 }
