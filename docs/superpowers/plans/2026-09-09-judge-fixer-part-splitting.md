@@ -275,9 +275,9 @@ describe("synthesiseParts", () => {
       submission(2, 90, [16, 17, 18, 19]),
       submission(3, 50, [], { coverageGaps: ["트랜잭션 경계 미점검"] }),
     ]);
-    // 지적 = (8*85 + 8*60 + 4*90) / 20 = 74.5
-    // 최종 = 74.5 * 0.8 + 50 * 0.2 = 69.6
-    expect(out.score).toBeCloseTo(69.6, 5);
+    // 지적 = (8*85 + 8*60 + 4*90) / 20 = 1520 / 20 = 76
+    // 최종 = 76 * 0.8 + 50 * 0.2 = 70.8
+    expect(out.score).toBeCloseTo(70.8, 5);
   });
 
   it("모든 part의 findingJudgments를 인덱스 순으로 합친다", () => {
