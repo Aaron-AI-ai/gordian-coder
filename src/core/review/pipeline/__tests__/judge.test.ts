@@ -1459,6 +1459,96 @@ describe("part 제출", () => {
     expect(out).toContain("INCOMPLETE");
   });
 
+  it("제출한 part 번호가 실제로 읽힌다", async () => {
+    // JudgeSubmitSchema는 non-strict라 `part`를 선언하지 않으면 조용히 떼어낸다.
+    // 떨어져 나가면 이 제출은 part 0으로 보이고, part 1의 인덱스 집합은 part 0의
+    // 것과 달라 거절된다 — 그래서 이 테스트는 필드가 읽힐 때에만 통과한다.
+    const { d, runId, plan } = await splitRun();
+    const out = await submitJudge(partPayload(runId, 1, plan.findingParts[1]!, 90), d);
+    expect(out).toContain("part 2/");
+    expect(loadJudgment(runId, "big.ts", d).pendingParts.map((p) => p.part)).toEqual([1]);
+  });
+
+  it("part 자체가 앞뒤가 안 맞으면 제출 시점에 거절한다", async () => {
+    // 합성까지 미루면 전 part의 작업이 함께 버려진다. part 단위로 걸러야 싸게 복구된다.
+    const { d, runId, plan } = await splitRun();
+    const payload = partPayload(runId, 0, plan.findingParts[0]!, 90);
+    payload.findingJudgments = payload.findingJudgments.map((j) => ({ ...j, valid: false }));
+    const out = await submitJudge(payload, d);
+    expect(out).toContain("Invalid judge submission");
+    expect(out).toContain("part 0");
+    expect(loadJudgment(runId, "big.ts", d).pendingParts).toHaveLength(0);
+  });
+
+  it("지적 part의 coverageGaps는 비어있음 규칙을 받지 않는다", async () => {
+    // 부분만 본 심사관의 간극 신고는 합성에서 버려진다. 규칙을 그대로 걸면
+    // 버려질 값 때문에 정상 제출이 거절된다 — coverage part에만 적용한다.
+    const { d, runId, plan } = await splitRun();
+    const out = await submitJudge(
+      { ...partPayload(runId, 0, plan.findingParts[0]!, 90), coverageGaps: ["부분만 본 신고"] },
+      d
+    );
+    expect(out).toContain("part 1/");
+    expect(loadJudgment(runId, "big.ts", d).pendingParts).toHaveLength(1);
+  });
+
+  it("coverage part는 간극을 신고하면서 통과 점수를 줄 수 없다", async () => {
+    const { d, runId, plan } = await splitRun();
+    const out = await submitJudge(
+      { ...partPayload(runId, plan.findingParts.length, [], 90), coverageGaps: ["에러 경로"] },
+      d
+    );
+    expect(out).toContain("Invalid judge submission");
+    expect(out).toContain("coverageGaps");
+    expect(loadJudgment(runId, "big.ts", d).pendingParts).toHaveLength(0);
+  });
+
+  it("coverage 간극이 신고되면 합성 점수를 임계값 아래로 낮춰 REWORK로 남긴다", async () => {
+    // coverage part가 0점을 줘도 0.8*90 = 72로 임계값을 넘는다. 어느 심사관도
+    // 단독으로 만들 수 없는 조합이고, 거절하면 16개 part가 전부 버려진다.
+    const { d, runId, plan } = await splitRun();
+    for (let p = 0; p < plan.findingParts.length; p++) {
+      await submitJudge(partPayload(runId, p, plan.findingParts[p]!, 90), d);
+    }
+    const out = await submitJudge(
+      { ...partPayload(runId, plan.findingParts.length, [], 0), coverageGaps: ["에러 경로 L100-200"] },
+      d
+    );
+    expect(out).toContain("Judge REWORK");
+
+    const judgment = loadJudgment(runId, "big.ts", d);
+    expect(judgment.pendingParts).toHaveLength(0);
+    expect(judgment.attempts).toHaveLength(1);
+    expect(judgment.attempts[0]!.verdict).toBe("rework");
+    expect(judgment.attempts[0]!.score).toBe(DEFAULT_JUDGE_THRESHOLD - 1);
+    expect(judgment.attempts[0]!.findingJudgments).toHaveLength(30);
+    // 낮춘 사실과 이유가 feedback에 남는다 — 아니면 보고서의 점수를 아무도 유도할 수 없다.
+    expect(judgment.attempts[0]!.feedback).toContain("Score reduced from 72");
+    expect(judgment.attempts[0]!.feedback).toContain("coverageGaps");
+    // 기록된 attempt는 다시 읽어도 validatePersistedAttempts를 통과한다.
+    expect(loadJudgment(runId, "big.ts", d).attempts).toHaveLength(1);
+  });
+
+  it("일부 판정이 거짓인데 합성 점수가 통과선을 넘으면 낮춰서 REWORK로 남긴다", async () => {
+    const { d, runId, plan } = await splitRun();
+    for (let p = 0; p < plan.findingParts.length; p++) {
+      const payload = partPayload(runId, p, plan.findingParts[p]!, p === 0 ? 30 : 100);
+      if (p === 0) {
+        payload.findingJudgments = payload.findingJudgments.map((j) => ({ ...j, valid: false }));
+      }
+      await submitJudge(payload, d);
+    }
+    const out = await submitJudge(partPayload(runId, plan.findingParts.length, [], 100), d);
+    expect(out).toContain("Judge REWORK");
+
+    const attempt = loadJudgment(runId, "big.ts", d).attempts[0]!;
+    expect(attempt.verdict).toBe("rework");
+    expect(attempt.score).toBe(DEFAULT_JUDGE_THRESHOLD - 1);
+    expect(attempt.feedback).toContain("Score reduced from");
+    expect(attempt.feedback).toContain("finding judgment");
+    expect(loadJudgment(runId, "big.ts", d).attempts).toHaveLength(1);
+  });
+
   it("분할되지 않은 리뷰는 part 없이 지금처럼 제출된다", async () => {
     const d = gitRepo();
     const meta = await createRun(baseMeta(), d);

@@ -53,7 +53,7 @@ export function planJudgeParts(
 const COVERAGE_WEIGHT = 0.2;
 
 /** 합성된 feedback의 길이 상한. JudgeSubmitSchema의 capped(4000)과 같다. */
-const FEEDBACK_MAX_CHARS = 4_000;
+export const FEEDBACK_MAX_CHARS = 4_000;
 
 export interface PartSubmission {
   /** 0..findingParts.length-1 은 지적 part, 그 다음 번호가 coverage part. */

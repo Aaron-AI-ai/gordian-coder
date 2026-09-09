@@ -24,7 +24,7 @@ import { loadRun } from "./artifact";
 import { runDir, type PersistedFileReviewResult } from "./artifact";
 import { DEFAULT_JUDGE_THRESHOLD, JudgeIdentitySchema, JudgeSubmitSchema, MAX_INVALID_JUDGE_SUBMISSIONS, MAX_JUDGE_ROUNDS, artifactIdentity, attemptMatchesReview, currentPendingParts, judgmentPath, consistencyValidationError, indexValidationError, loadJudgment, loadReviewResult, persistJudgment, persistJudgmentSync, submissionHash, terminalMatchesReview, terminalMessage, type FileJudgment, type JudgeAttempt, type JudgeSubmitPayload, type JudgeTerminal } from "./judge-store";
 import { buildPartPrompt, contextOverflowTerminal, isContextOverflow, judgePartPlanFor, overflowContext } from "./judge-prompt";
-import { synthesiseParts } from "./judge-parts";
+import { FEEDBACK_MAX_CHARS, synthesiseParts } from "./judge-parts";
 
 /** Effective rework cap for a run: `judgeRounds` snapshotted into the run
  * meta at plan time, else MAX_JUDGE_ROUNDS. Exported so every gate that
@@ -409,6 +409,29 @@ async function submitJudgeSerialized(
       );
     }
 
+    // Every cross-field rule this part CAN answer for, applied where a failure
+    // is still cheap: one part is re-judged, not all of them. The one rule that
+    // does not transfer is coverageGaps-must-be-empty — a finding part sees a
+    // slice of the file, its gap report is discarded by synthesiseParts, and
+    // holding it to that rule would refuse a submission over a value nobody
+    // reads. So it is masked out for every part but the coverage part.
+    const isCoveragePart = part >= plan.findingParts.length;
+    const partInconsistent = consistencyValidationError(
+      isCoveragePart ? submission : { ...submission, coverageGaps: [] },
+      review.findings,
+      threshold
+    );
+    if (partInconsistent) {
+      return recordInvalidSubmission(
+        runId,
+        file,
+        review,
+        payload,
+        `part ${part}: ${partInconsistent}`,
+        cwd
+      );
+    }
+
     const submitted = new Set(pending.map((entry) => entry.part));
     const firstMissing = (): number | undefined =>
       Array.from({ length: totalParts }, (_, index) => index).find((index) => !submitted.has(index));
@@ -453,6 +476,37 @@ async function submitJudgeSerialized(
     // reads as a duplicate, and nothing could ever complete it.
     await persistJudgment(runId, file, cwd, judgment);
     submission = { ...submission, ...merged };
+
+    // The merged payload is a shape no single judge chose, so the pass-side
+    // rules can refuse a combination every part answered honestly: a coverage
+    // part scoring 0 still cannot pull 0.8·90 under the threshold, and a part
+    // that correctly rejects findings can be outvoted by the others. Refusing
+    // it would discard every part's work behind a bare "Retry k/3". Record the
+    // honest REWORK instead — the verdict still follows the score, and the
+    // attempt survives persistedAttemptValidationError on reload.
+    //
+    // Only the pass-side rules are clamped. Below the threshold the sole rule
+    // is "feedback must be non-empty", which no clamp can satisfy and which
+    // keeps its existing invalid-submission handling below.
+    const mergedError = consistencyValidationError(submission, review.findings, threshold);
+    if (mergedError && submission.score >= threshold && threshold > 0) {
+      const mean = submission.score;
+      const clamped = threshold - 1;
+      submission = {
+        ...submission,
+        score: clamped,
+        // The reduction has to be visible: otherwise the recorded number
+        // silently disagrees with the weighted-mean formula and the report
+        // shows a figure nobody can derive.
+        feedback: [
+          `⚠️ Score reduced from ${mean} (the weighted mean of the part scores) to ` +
+            `${clamped}, so this review is recorded as REWORK: ${mergedError}.`,
+          submission.feedback,
+        ]
+          .join("\n\n")
+          .slice(0, FEEDBACK_MAX_CHARS),
+      };
+    }
   }
 
   const invalidIndices = indexValidationError(review.findings, submission.findingJudgments);
