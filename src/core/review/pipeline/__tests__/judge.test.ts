@@ -93,6 +93,35 @@ const judgePayload = (
   ...over,
 });
 
+/** n건의 지적을 서로 멀리 떨어뜨려 윈도우 병합을 막는다. */
+const manyFindings = (n: number): FileReviewResult => ({
+  file: "big.ts",
+  assessed: [...REQUIRED_CATEGORIES],
+  findings: Array.from({ length: n }, (_, i) => ({
+    category: "correctness" as const,
+    severity: "major" as const,
+    file: "big.ts",
+    line: 1 + i * 120,
+    rule: `r${i}`,
+    message: "이슈 ".repeat(200),
+    asIs: "코드 ".repeat(300),
+    toBe: "고친 코드 ".repeat(300),
+  })),
+  explorationCalls: 2,
+  partial: false,
+});
+
+/** 3000줄짜리 파일을 가진 whole-file 런. */
+async function bigRun() {
+  const d = gitRepo();
+  writeFileSync(
+    join(d, "big.ts"),
+    Array.from({ length: 3000 }, (_, i) => `const v${i} = ${i}; // 설명 주석`).join("\n") + "\n"
+  );
+  const meta = await createRun(baseMeta({ targets: ["big.ts"], whole: true, range: null }), d);
+  return { d, meta };
+}
+
 describe("judgeContext", () => {
   it("rejects an unknown run", () => {
     expect(judgeContext("ghost", "a.ts", dir())).toContain("Unknown run");
@@ -547,19 +576,25 @@ describe("judge excerpt covers finding lines past the cap", () => {
     expect(judgment.attempts).toHaveLength(0);
     expect(judgment.terminal).toBeUndefined();
 
-    // A direct, non-part-aware submitJudge call must still never manufacture a
-    // PASS for this review. Assert the GUARANTEE, not today's mechanism: right
-    // now the unscoped overflow re-check in submitJudgeSerialized terminalizes
-    // it before that could happen; once Task 6 rewrites submission to be
-    // part-aware, index validation will refuse it instead. Either way, no PASS.
+    // The salvage now completes end to end: this review's ONE part is the
+    // coverage part, so submitting it records an ordinary attempt instead of
+    // the terminal the unscoped overflow re-check used to write on first
+    // submit. Serving a context nobody could ever answer was the dead end.
+    // The no-PASS guarantee this test used to assert is not lost — it is
+    // scoped to what it protects. It forbids passing a review whose FINDINGS
+    // and evidence could not be shown to the judge; here there are no
+    // findings, coverage is the only criterion in play, and the coverage
+    // prompt states over which lines it was judged. A review WITH findings
+    // never reaches this path (see buildPartPrompt), and the sibling
+    // oversized-findings test below still asserts no PASS for that shape.
     const direct = await submitJudge(
       judgePayload(meta.runId, 100, { file: "clean-big.ts", findingJudgments: [] }),
       d
     );
-    expect(direct).not.toContain("✅ Judge PASS");
-    expect(
-      loadJudgment(meta.runId, "clean-big.ts", d).attempts.some((a) => a.verdict === "pass")
-    ).toBe(false);
+    expect(direct).toContain("Judge PASS");
+    const judged = loadJudgment(meta.runId, "clean-big.ts", d);
+    expect(judged.terminal).toBeUndefined();
+    expect(judged.attempts).toHaveLength(1);
   });
 
   it("terminalizes a truncated review when any finding lacks a line anchor", async () => {
@@ -1086,35 +1121,6 @@ describe("pendingParts", () => {
 });
 
 describe("judge part 프롬프트", () => {
-  /** n건의 지적을 서로 멀리 떨어뜨려 윈도우 병합을 막는다. */
-  const manyFindings = (n: number): FileReviewResult => ({
-    file: "big.ts",
-    assessed: [...REQUIRED_CATEGORIES],
-    findings: Array.from({ length: n }, (_, i) => ({
-      category: "correctness" as const,
-      severity: "major" as const,
-      file: "big.ts",
-      line: 1 + i * 120,
-      rule: `r${i}`,
-      message: "이슈 ".repeat(200),
-      asIs: "코드 ".repeat(300),
-      toBe: "고친 코드 ".repeat(300),
-    })),
-    explorationCalls: 2,
-    partial: false,
-  });
-
-  /** 3000줄짜리 파일을 가진 whole-file 런. */
-  async function bigRun() {
-    const d = gitRepo();
-    writeFileSync(
-      join(d, "big.ts"),
-      Array.from({ length: 3000 }, (_, i) => `const v${i} = ${i}; // 설명 주석`).join("\n") + "\n"
-    );
-    const meta = await createRun(baseMeta({ targets: ["big.ts"], whole: true, range: null }), d);
-    return { d, meta };
-  }
-
   it("지적이 많으면 여러 part로 나뉜다", async () => {
     const { d, meta } = await bigRun();
     await writeFileReview(meta.runId, manyFindings(30), "md", d);
@@ -1358,5 +1364,108 @@ describe("judgeContext의 part 처리", () => {
     expect(out).toContain("part 1");
     expect(out).toContain("part=1");
     expect(out).not.toContain("Every part");
+  });
+});
+
+describe("part 제출", () => {
+  /** 30건짜리 리뷰를 제출하고 그 part 계획을 돌려준다. */
+  async function splitRun() {
+    const { d, meta } = await bigRun();
+    await writeFileReview(meta.runId, manyFindings(30), "md", d);
+    const review = readFileReviewResult(meta.runId, "big.ts", d)!;
+    const plan = judgePartPlanFor(
+      loadRun(meta.runId, d)!,
+      review,
+      loadJudgment(meta.runId, "big.ts", d),
+      d
+    );
+    return { d, runId: meta.runId, plan };
+  }
+
+  const partPayload = (runId: string, part: number, indices: number[], score: number) => ({
+    runId,
+    file: "big.ts",
+    part,
+    findingJudgments: indices.map((index) => ({
+      index, valid: true, evidenced: true, severityFit: true, actionable: true, note: "ok",
+    })),
+    coverageGaps: [],
+    score,
+    feedback: "1. 줄 앵커 재확인",
+  });
+
+  it("중간 part는 다음 part를 지시하고 attempt를 만들지 않는다", async () => {
+    const { d, runId, plan } = await splitRun();
+    const out = await submitJudge(partPayload(runId, 0, plan.findingParts[0]!, 90), d);
+    expect(out).toContain("part 1");
+    expect(loadJudgment(runId, "big.ts", d).attempts).toHaveLength(0);
+    expect(loadJudgment(runId, "big.ts", d).pendingParts).toHaveLength(1);
+  });
+
+  it("그 part에 속하지 않은 인덱스를 거부한다", async () => {
+    const { d, runId, plan } = await splitRun();
+    const wrong = plan.findingParts[1]!;
+    const out = await submitJudge(partPayload(runId, 0, wrong, 90), d);
+    expect(out).toContain("Invalid judge submission");
+    expect(loadJudgment(runId, "big.ts", d).pendingParts).toHaveLength(0);
+  });
+
+  it("존재하지 않는 part 번호를 거부한다", async () => {
+    const { d, runId, plan } = await splitRun();
+    const total = plan.findingParts.length + 1;
+    const out = await submitJudge(partPayload(runId, total, [], 90), d);
+    expect(out).toContain("Invalid judge submission");
+    expect(loadJudgment(runId, "big.ts", d).terminal).toBeUndefined();
+  });
+
+  it("같은 part를 두 번 제출해도 한 번만 쌓인다", async () => {
+    const { d, runId, plan } = await splitRun();
+    await submitJudge(partPayload(runId, 0, plan.findingParts[0]!, 90), d);
+    const again = await submitJudge(partPayload(runId, 0, plan.findingParts[0]!, 20), d);
+    expect(again).toContain("already submitted");
+    const pending = loadJudgment(runId, "big.ts", d).pendingParts;
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.score).toBe(90);
+  });
+
+  it("모든 part가 모이면 하나의 attempt로 합성한다", async () => {
+    const { d, runId, plan } = await splitRun();
+    for (let p = 0; p < plan.findingParts.length; p++) {
+      await submitJudge(partPayload(runId, p, plan.findingParts[p]!, 90), d);
+    }
+    const last = await submitJudge(partPayload(runId, plan.findingParts.length, [], 90), d);
+    expect(last).toContain("Judge PASS");
+    const judgment = loadJudgment(runId, "big.ts", d);
+    expect(judgment.attempts).toHaveLength(1);
+    expect(judgment.pendingParts).toHaveLength(0);
+    expect(judgment.attempts[0]!.findingJudgments).toHaveLength(30);
+    expect(judgment.attempts[0]!.verdict).toBe("pass");
+  });
+
+  it("합성 점수가 가중평균 산식을 따른다", async () => {
+    const { d, runId, plan } = await splitRun();
+    for (let p = 0; p < plan.findingParts.length; p++) {
+      await submitJudge(partPayload(runId, p, plan.findingParts[p]!, 100), d);
+    }
+    await submitJudge(partPayload(runId, plan.findingParts.length, [], 0), d);
+    // 지적 100점 * 0.8 + coverage 0점 * 0.2 = 80
+    expect(loadJudgment(runId, "big.ts", d).attempts[0]!.score).toBeCloseTo(80, 5);
+  });
+
+  it("part가 남은 채로는 finalize가 미판정으로 처리한다", async () => {
+    const { d, runId, plan } = await splitRun();
+    await submitJudge(partPayload(runId, 0, plan.findingParts[0]!, 90), d);
+    const out = await finalizeRun(runId, d);
+    expect(out).toContain("INCOMPLETE");
+  });
+
+  it("분할되지 않은 리뷰는 part 없이 지금처럼 제출된다", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "md", d);
+    const out = await submitJudge(judgePayload(meta.runId, 90), d);
+    expect(out).toContain("Judge PASS");
+    expect(loadJudgment(meta.runId, "a.ts", d).attempts).toHaveLength(1);
+    expect(loadJudgment(meta.runId, "a.ts", d).pendingParts).toHaveLength(0);
   });
 });

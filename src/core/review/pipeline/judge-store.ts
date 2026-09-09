@@ -46,6 +46,10 @@ export type FindingJudgment = z.infer<typeof FindingJudgmentSchema>;
 export const JudgeSubmitSchema = z.object({
   runId: z.string(),
   file: z.string(),
+  /** 분할 심사에서 이 제출이 담당한 part. 분할되지 않은 리뷰는 생략한다.
+   * 선언하지 않으면 non-strict z.object가 조용히 떼어내 모든 제출이 part 0으로
+   * 보인다 — 거절이 아니라 오인이므로 스키마에 반드시 있어야 한다. */
+  part: z.number().int().nonnegative().optional(),
   // Do not truncate this array: segmented reviews can legitimately merge more
   // than 60 findings, and every persisted finding must receive a judgment.
   findingJudgments: z.array(FindingJudgmentSchema),

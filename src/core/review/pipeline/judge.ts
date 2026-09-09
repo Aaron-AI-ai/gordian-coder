@@ -22,8 +22,9 @@ import { join, resolve } from "node:path";
 
 import { loadRun } from "./artifact";
 import { runDir, type PersistedFileReviewResult } from "./artifact";
-import { DEFAULT_JUDGE_THRESHOLD, JudgeIdentitySchema, JudgeSubmitSchema, MAX_INVALID_JUDGE_SUBMISSIONS, MAX_JUDGE_ROUNDS, artifactIdentity, attemptMatchesReview, currentPendingParts, judgmentPath, consistencyValidationError, indexValidationError, loadJudgment, loadReviewResult, persistJudgment, persistJudgmentSync, submissionHash, terminalMatchesReview, terminalMessage, type FileJudgment, type JudgeAttempt, type JudgeTerminal } from "./judge-store";
-import { buildJudgePrompt, buildPartPrompt, contextOverflowTerminal, isContextOverflow, judgePartPlanFor, overflowContext } from "./judge-prompt";
+import { DEFAULT_JUDGE_THRESHOLD, JudgeIdentitySchema, JudgeSubmitSchema, MAX_INVALID_JUDGE_SUBMISSIONS, MAX_JUDGE_ROUNDS, artifactIdentity, attemptMatchesReview, currentPendingParts, judgmentPath, consistencyValidationError, indexValidationError, loadJudgment, loadReviewResult, persistJudgment, persistJudgmentSync, submissionHash, terminalMatchesReview, terminalMessage, type FileJudgment, type JudgeAttempt, type JudgeSubmitPayload, type JudgeTerminal } from "./judge-store";
+import { buildPartPrompt, contextOverflowTerminal, isContextOverflow, judgePartPlanFor, overflowContext } from "./judge-prompt";
+import { synthesiseParts } from "./judge-parts";
 
 /** Effective rework cap for a run: `judgeRounds` snapshotted into the run
  * meta at plan time, else MAX_JUDGE_ROUNDS. Exported so every gate that
@@ -225,6 +226,16 @@ function attemptMessage(
   ].join("\n");
 }
 
+/** The orchestrator instruction that keeps a split judgment moving. Same
+ * wording judgeContext hands back when the part asked for is already in. */
+function nextPartInstruction(runId: string, file: string, next: number): string[] {
+  return [
+    `Spawn a NEW f-judge subagent (fresh session) with this prompt:`,
+    `  "Call f_review_judge_context with runId=\"${runId}\", file=\"${file}\", part=${next}, ` +
+      `evaluate that part, then call f_review_judge with part=${next}."`,
+  ];
+}
+
 async function recordInvalidSubmission(
   runId: string,
   file: string,
@@ -329,11 +340,32 @@ async function submitJudgeSerialized(
     );
   }
 
-  // Re-check the same budget enforced by judgeContext. A caller can invoke the
-  // state-changing submit tool directly; it must not manufacture PASS for a
-  // review whose complete findings/evidence could never fit in the judge's
-  // bounded context.
-  const prompt = buildJudgePrompt(meta, review, judgment, cwd);
+  // The part plan is never stored — it is recomputed here and matched against
+  // what the submission claims. `judgePartPlanFor` folds this judgment's round
+  // number into its measurement, so it is deterministic only against the SAME
+  // judgment object already loaded above; reloading a fresher one mid-flight
+  // would shift the expected index sets and reject valid submissions.
+  const plan = judgePartPlanFor(meta, review, judgment, cwd);
+  const totalParts = plan.findingParts.length + (plan.hasCoveragePart ? 1 : 0);
+  const part = parsed.success ? parsed.data.part ?? 0 : 0;
+  if (part < 0 || part >= totalParts) {
+    return recordInvalidSubmission(
+      runId,
+      file,
+      review,
+      payload,
+      `part ${part} does not exist (this review has ${totalParts} part(s))`,
+      cwd
+    );
+  }
+
+  // Re-check the same budget enforced by judgeContext, SCOPED to the part this
+  // submission claims. A caller can invoke the state-changing submit tool
+  // directly; it must not manufacture PASS for a review whose findings and
+  // evidence could never fit in the judge's bounded context. Unscoped, this
+  // check terminalized on first submit exactly the reviews the split salvages —
+  // the coverage-only and oversized-findings cases judgeContext now serves.
+  const prompt = buildPartPrompt(meta, review, judgment, cwd, part, plan);
   if (isContextOverflow(prompt)) {
     judgment.terminal = contextOverflowTerminal(review, prompt.reason);
     await persistJudgment(runId, file, cwd, judgment);
@@ -350,25 +382,99 @@ async function submitJudgeSerialized(
       cwd
     );
   }
-  const invalidIndices = indexValidationError(review.findings, parsed.data.findingJudgments);
+
+  // What is validated and recorded below: one part's submission until the last
+  // one arrives, then the synthesis of them all.
+  let submission: JudgeSubmitPayload = parsed.data;
+
+  if (totalParts > 1) {
+    const pending = currentPendingParts(judgment, review);
+    // The coverage part judges no findings; a finding part must carry exactly
+    // the index set the recomputed plan assigns it.
+    const expected = plan.findingParts[part] ?? [];
+    const received = submission.findingJudgments.map((entry) => entry.index);
+    const same =
+      received.length === expected.length &&
+      new Set(received).size === expected.length &&
+      expected.every((index) => received.includes(index));
+    if (!same) {
+      return recordInvalidSubmission(
+        runId,
+        file,
+        review,
+        payload,
+        `part ${part} must judge exactly indices [${expected.join(", ")}] ` +
+          `(received [${received.join(", ")}])`,
+        cwd
+      );
+    }
+
+    const submitted = new Set(pending.map((entry) => entry.part));
+    const firstMissing = (): number | undefined =>
+      Array.from({ length: totalParts }, (_, index) => index).find((index) => !submitted.has(index));
+    if (submitted.has(part)) {
+      const next = firstMissing();
+      return [
+        `ℹ️ part ${part} of ${file} was already submitted; no new record was made.`,
+        ...(next === undefined ? [] : nextPartInstruction(runId, file, next)),
+      ].join("\n");
+    }
+
+    judgment.pendingParts = [
+      ...pending,
+      {
+        reviewRevision: review.revision,
+        reviewArtifactHash: artifactIdentity(review),
+        part,
+        score: submission.score,
+        feedback: submission.feedback,
+        coverageGaps: submission.coverageGaps,
+        findingJudgments: submission.findingJudgments,
+        at: new Date().toISOString(),
+      },
+    ];
+    submitted.add(part);
+
+    const next = firstMissing();
+    if (next !== undefined) {
+      await persistJudgment(runId, file, cwd, judgment);
+      return [
+        `📝 part ${part + 1}/${totalParts} recorded for ${file} (score ${submission.score}).`,
+        ...nextPartInstruction(runId, file, next),
+      ].join("\n");
+    }
+
+    // Every part is in — synthesiseParts' precondition — so one judgment can be
+    // assembled and taken down the ordinary attempt path from here.
+    const merged = synthesiseParts(plan, judgment.pendingParts);
+    judgment.pendingParts = [];
+    // Consumed even if the synthesis fails validation below. Left in place they
+    // would freeze this judgment with every part submitted: each re-submission
+    // reads as a duplicate, and nothing could ever complete it.
+    await persistJudgment(runId, file, cwd, judgment);
+    submission = { ...submission, ...merged };
+  }
+
+  const invalidIndices = indexValidationError(review.findings, submission.findingJudgments);
   if (invalidIndices) {
     return recordInvalidSubmission(runId, file, review, payload, invalidIndices, cwd);
   }
-  const inconsistent = consistencyValidationError(parsed.data, review.findings, threshold);
+  const inconsistent = consistencyValidationError(submission, review.findings, threshold);
   if (inconsistent) {
     return recordInvalidSubmission(runId, file, review, payload, inconsistent, cwd);
   }
 
-  const verdict: JudgeAttempt["verdict"] = parsed.data.score >= threshold ? "pass" : "rework";
+  // Synthesised or not, the verdict comes from the score and the threshold.
+  const verdict: JudgeAttempt["verdict"] = submission.score >= threshold ? "pass" : "rework";
   const attempt: JudgeAttempt = {
     reviewRevision: review.revision,
     reviewArtifactHash: artifactIdentity(review),
-    submissionHash: submissionHash(parsed.data),
-    score: parsed.data.score,
+    submissionHash: submissionHash(submission),
+    score: submission.score,
     verdict,
-    feedback: parsed.data.feedback,
-    coverageGaps: parsed.data.coverageGaps,
-    findingJudgments: parsed.data.findingJudgments,
+    feedback: submission.feedback,
+    coverageGaps: submission.coverageGaps,
+    findingJudgments: submission.findingJudgments,
     at: new Date().toISOString(),
   };
   judgment.attempts.push(attempt);
@@ -379,7 +485,7 @@ async function submitJudgeSerialized(
         status: "judge-incomplete",
         reviewRevision: review.revision,
         reviewArtifactHash: artifactIdentity(review),
-        reason: `score ${parsed.data.score} remained below threshold ${threshold} after ${reworkCap(meta)} rework rounds`,
+        reason: `score ${submission.score} remained below threshold ${threshold} after ${reworkCap(meta)} rework rounds`,
         at: new Date().toISOString(),
       };
     }
