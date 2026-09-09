@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { judgeContext, judgeFeedbackFor, submitJudge } from "../judge";
-import { artifactIdentity, currentPendingParts, loadJudgment, readRunJudgments } from "../judge-store";
+import { artifactIdentity, currentPendingParts, loadJudgment, persistJudgmentSync, readRunJudgments } from "../judge-store";
 import { DEFAULT_JUDGE_THRESHOLD, MAX_INVALID_JUDGE_SUBMISSIONS, MAX_JUDGE_ROUNDS, type FileJudgment, type JudgeAttempt, type JudgeSubmitPayload } from "../judge-store";
 import { JUDGE_CONTEXT_MAX_BYTES, JUDGE_CRITERIA, buildJudgePrompt, buildPartPrompt, isContextOverflow, judgePartPlanFor } from "../judge-prompt";
 import { planReview, finalizeRun } from "../run";
@@ -515,7 +515,11 @@ describe("judge excerpt covers finding lines past the cap", () => {
     expect(out).toContain("line2100"); // the finding's anchor is visible to the judge
   });
 
-  it("terminalizes a truncated zero-finding review instead of allowing a prefix-only PASS", async () => {
+  it("salvages a truncated zero-finding review with a coverage-only part instead of terminalizing", async () => {
+    // judgeContext now plans parts before falling back to the old terminal
+    // path (Task 4's buildPartPrompt salvages exactly this case with a
+    // coverage-only part over the lines it can show); the old expectation
+    // that this always terminalizes predates that wiring.
     const d = gitRepo();
     const big = Array.from({ length: 2400 }, (_, index) => `clean-line-${index + 1}`).join("\n");
     writeFileSync(join(d, "clean-big.ts"), `${big}\n`);
@@ -535,22 +539,13 @@ describe("judge excerpt covers finding lines past the cap", () => {
 
     const out = judgeContext(meta.runId, "clean-big.ts", d);
     expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_BYTES);
-    expect(out).toContain("terminal Judge INCOMPLETE");
-    expect(out).toContain("zero-finding review has no anchors");
-    expect(out).not.toContain("Judge every finding by its index");
+    expect(out).toContain("COVERAGE ONLY");
+    expect(out).toContain("of 2400");
+    expect(out).not.toContain("terminal Judge INCOMPLETE");
 
     const judgment = loadJudgment(meta.runId, "clean-big.ts", d);
     expect(judgment.attempts).toHaveLength(0);
-    expect(judgment.terminal?.status).toBe("judge-incomplete");
-    expect(judgment.terminal?.reviewArtifactHash).toBeDefined();
-    expect(judgeContext(meta.runId, "clean-big.ts", d)).toContain("This revision is terminal");
-
-    const direct = await submitJudge(
-      judgePayload(meta.runId, 100, { file: "clean-big.ts", findingJudgments: [] }),
-      d
-    );
-    expect(direct).toContain("Judge INCOMPLETE");
-    expect(loadJudgment(meta.runId, "clean-big.ts", d).attempts).toHaveLength(0);
+    expect(judgment.terminal).toBeUndefined();
   });
 
   it("terminalizes a truncated review when any finding lacks a line anchor", async () => {
@@ -579,7 +574,10 @@ describe("judge excerpt covers finding lines past the cap", () => {
     expect(judgment.terminal?.status).toBe("judge-incomplete");
   });
 
-  it("fails closed when serialized findings cannot fit the total context budget", async () => {
+  it("splits oversized findings across parts instead of failing closed", async () => {
+    // Each finding's own serialized JSON fits comfortably; only combining all
+    // 8 into one call blew JUDGE_FINDINGS_MAX_BYTES. judgeContext now plans
+    // parts first, so this is exactly the case part-splitting was built for.
     const d = gitRepo();
     const meta = await createRun(baseMeta({ whole: true, range: null }), d);
     const result = reviewResult();
@@ -596,18 +594,24 @@ describe("judge excerpt covers finding lines past the cap", () => {
 
     const out = judgeContext(meta.runId, "a.ts", d);
     expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_BYTES);
-    expect(out).toContain("Judge context INCOMPLETE");
-    expect(out).toContain("serialized finding(s)");
-    expect(out).toContain("Do NOT call f_review_judge");
-    expect(out).not.toContain("Judge every finding by its index");
+    expect(out).not.toContain("Judge context INCOMPLETE");
+    expect(out).toMatch(/part 1\/\d+/);
+    expect(out).toMatch(/This file is judged in \d+ parts; submit with part=0\./);
 
-    // Directly bypassing judgeContext must still never manufacture a PASS.
-    const terminal = await submitJudge(judgePayload(meta.runId, 100), d);
-    expect(terminal).toContain("Judge INCOMPLETE");
-    expect(loadJudgment(meta.runId, "a.ts", d).attempts).toHaveLength(0);
-    expect(loadJudgment(meta.runId, "a.ts", d).terminal?.reason).toContain(
-      "bounded judge context unavailable"
-    );
+    const judgment = loadJudgment(meta.runId, "a.ts", d);
+    expect(judgment.terminal).toBeUndefined();
+
+    // Every planned part must itself fit the budget — not just the first one.
+    const runMetaLoaded = loadRun(meta.runId, d)!;
+    const review = readFileReviewResult(meta.runId, "a.ts", d)!;
+    const plan = judgePartPlanFor(runMetaLoaded, review, judgment, d);
+    const total = plan.findingParts.length + (plan.hasCoveragePart ? 1 : 0);
+    expect(total).toBeGreaterThan(1);
+    for (let part = 0; part < total; part++) {
+      const partOut = judgeContext(meta.runId, "a.ts", d, part);
+      expect(partOut).not.toContain("does not exist");
+      expect(partOut).not.toContain("Judge context INCOMPLETE");
+    }
   });
 
   it("bounds very wide source lines and refuses to omit an anchored evidence window", async () => {
@@ -894,31 +898,56 @@ describe("judge context overflow (fail-closed)", () => {
     toBe: "fix",
   });
 
-  it("refuses to judge when a truncated change leaves a finding unanchored", async () => {
-    // An unanchored finding cannot be checked against a targeted window, so a
-    // judge would score it against absence and could still award PASS.
-    const out = await context(hugeRepo(4000), [finding(1), finding()]);
-    expect(out).toContain("Judge context INCOMPLETE");
-    expect(out).toContain("1 finding(s) have no line anchor");
-    expect(out).toContain("Do NOT call f_review_judge");
+  it("separates an unanchored finding into its own part instead of failing the whole review", async () => {
+    // With two findings, planning now puts the anchored one in its own part
+    // (which builds fine) and the unanchored one in another (which still
+    // cannot be checked against a targeted window and fails closed on
+    // request) — the file is no longer lost wholesale to one bad finding.
+    const d = hugeRepo(4000);
+    const meta = await createRun(baseMeta({ whole: true }), d);
+    await writeFileReview(
+      meta.runId,
+      {
+        file: "a.ts",
+        assessed: [...REQUIRED_CATEGORIES],
+        findings: [finding(1), finding()],
+        explorationCalls: 2,
+        partial: false,
+      },
+      "# r",
+      d
+    );
+
+    const anchoredPart = judgeContext(meta.runId, "a.ts", d, 0);
+    expect(anchoredPart).not.toContain("Judge context INCOMPLETE");
+    expect(anchoredPart).toContain('"index": 0');
+
+    const unanchoredPart = judgeContext(meta.runId, "a.ts", d, 1);
+    expect(unanchoredPart).toContain("Judge context INCOMPLETE");
+    expect(unanchoredPart).toContain("1 finding(s) have no line anchor");
+    expect(unanchoredPart).toContain("Do NOT call f_review_judge");
+
+    const judgment = loadJudgment(meta.runId, "a.ts", d);
+    expect(judgment.terminal?.status).toBe("judge-incomplete");
   });
 
-  it("refuses to judge a zero-finding review of a truncated change", async () => {
-    // With no findings there are no anchors to recover the hidden code, so the
-    // judge would see only the prefix and call the whole file clean.
+  it("salvages a zero-finding review of a truncated change with a coverage-only part", async () => {
+    // With no findings there are no anchors to recover the hidden code from a
+    // full 5-criteria prompt, but the coverage-only part is scoped to only the
+    // lines it actually shows, so it can still judge coverage over those.
     const out = await context(hugeRepo(4000), []);
-    expect(out).toContain("Judge context INCOMPLETE");
-    expect(out).toContain("no anchors for the omitted code");
+    expect(out).not.toContain("Judge context INCOMPLETE");
+    expect(out).toContain("COVERAGE ONLY");
   });
 
-  it("refuses to judge when the findings alone exceed the budget", async () => {
+  it("splits findings across parts when they alone exceed the budget together", async () => {
     const many = Array.from({ length: 60 }, (_, i) => ({
       ...finding(i + 1),
       message: "m".repeat(400),
     }));
     const out = await context(hugeRepo(50), many);
-    expect(out).toContain("Judge context INCOMPLETE");
-    expect(out).toContain("serialized finding(s) exceed");
+    expect(out).not.toContain("Judge context INCOMPLETE");
+    expect(out).toMatch(/part 1\/\d+/);
   });
 
   it("refuses to judge when the finding windows still do not fit", async () => {
@@ -929,7 +958,10 @@ describe("judge context overflow (fail-closed)", () => {
     expect(out).toContain("finding window(s) plus the base exceed");
   });
 
-  it("marks the artifact terminal so the run fails closed", async () => {
+  it("leaves a salvaged zero-finding review unjudged (not terminal), and the run still fails closed", async () => {
+    // This file is no longer terminal — the coverage-only part salvages it —
+    // but nothing has submitted a verdict yet, so finalize must still fail
+    // closed on it as unjudged rather than silently treating it as done.
     const d = hugeRepo(4000);
     const meta = await createRun(baseMeta({ whole: true }), d);
     await writeFileReview(
@@ -938,14 +970,14 @@ describe("judge context overflow (fail-closed)", () => {
       "# r",
       d
     );
-    expect(judgeContext(meta.runId, "a.ts", d)).toContain("Judge context INCOMPLETE");
-    // Terminal, not merely unjudged: a retry must not be able to produce a PASS.
+    const out = judgeContext(meta.runId, "a.ts", d);
+    expect(out).not.toContain("Judge context INCOMPLETE");
+    expect(out).toContain("COVERAGE ONLY");
     const judgment = loadJudgment(meta.runId, "a.ts", d);
-    expect(judgment.terminal?.status).toBe("judge-incomplete");
-    expect(judgment.terminal?.reason).toContain("bounded judge context unavailable");
+    expect(judgment.terminal).toBeUndefined();
 
-    const out = await finalizeRun(meta.runId, d);
-    expect(out).toContain("INCOMPLETE");
+    const result = await finalizeRun(meta.runId, d);
+    expect(result).toContain("INCOMPLETE");
   });
 
   it("refuses to judge a large deletion, whose source no longer exists", async () => {
@@ -1212,5 +1244,46 @@ describe("judge part 프롬프트", () => {
     expect(prompt).not.toContain("COVERAGE ONLY");
     expect(prompt).toContain("Validity (40%)");
     expect(prompt).toBe(buildJudgePrompt(runMetaLoaded, review, judgment, d) as string);
+  });
+});
+
+describe("judgeContext의 part 처리", () => {
+  it("분할되지 않은 리뷰는 part 인자 없이 지금처럼 동작한다", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+    const out = judgeContext(meta.runId, "a.ts", d);
+    expect(out).toContain(JUDGE_CRITERIA.split("\n")[0]!);
+    expect(out).not.toContain("part 1/");
+  });
+
+  it("존재하지 않는 part 번호를 거부한다", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+    expect(judgeContext(meta.runId, "a.ts", d, 5)).toContain("does not exist");
+  });
+
+  it("이미 제출된 part를 다시 요청하면 다음 part를 알려준다", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+    const review = readFileReviewResult(meta.runId, "a.ts", d)!;
+    const judgment = loadJudgment(meta.runId, "a.ts", d);
+    judgment.pendingParts = [
+      {
+        reviewRevision: review.revision,
+        reviewArtifactHash: artifactIdentity(review),
+        part: 0,
+        score: 80,
+        feedback: "f",
+        coverageGaps: [],
+        findingJudgments: [],
+        at: new Date().toISOString(),
+      },
+    ];
+    persistJudgmentSync(meta.runId, "a.ts", d, judgment);
+    const out = judgeContext(meta.runId, "a.ts", d, 0);
+    expect(out).toContain("already submitted");
   });
 });

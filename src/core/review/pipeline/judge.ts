@@ -22,8 +22,8 @@ import { join, resolve } from "node:path";
 
 import { loadRun } from "./artifact";
 import { runDir, type PersistedFileReviewResult } from "./artifact";
-import { DEFAULT_JUDGE_THRESHOLD, JudgeIdentitySchema, JudgeSubmitSchema, MAX_INVALID_JUDGE_SUBMISSIONS, MAX_JUDGE_ROUNDS, artifactIdentity, attemptMatchesReview, judgmentPath, consistencyValidationError, indexValidationError, loadJudgment, loadReviewResult, persistJudgment, persistJudgmentSync, submissionHash, terminalMatchesReview, terminalMessage, type FileJudgment, type JudgeAttempt, type JudgeTerminal } from "./judge-store";
-import { buildJudgePrompt, contextOverflowTerminal, isContextOverflow, overflowContext } from "./judge-prompt";
+import { DEFAULT_JUDGE_THRESHOLD, JudgeIdentitySchema, JudgeSubmitSchema, MAX_INVALID_JUDGE_SUBMISSIONS, MAX_JUDGE_ROUNDS, artifactIdentity, attemptMatchesReview, currentPendingParts, judgmentPath, consistencyValidationError, indexValidationError, loadJudgment, loadReviewResult, persistJudgment, persistJudgmentSync, submissionHash, terminalMatchesReview, terminalMessage, type FileJudgment, type JudgeAttempt, type JudgeTerminal } from "./judge-store";
+import { buildJudgePrompt, buildPartPrompt, contextOverflowTerminal, isContextOverflow, judgePartPlanFor, overflowContext } from "./judge-prompt";
 
 /** Effective rework cap for a run: `judgeRounds` snapshotted into the run
  * meta at plan time, else MAX_JUDGE_ROUNDS. Exported so every gate that
@@ -72,7 +72,7 @@ export function reviewReworkStatus(
 
 /** Everything a judge subagent needs: the change, the submitted review, the
  * criteria, and the submission instructions. Stateless — no session joins. */
-export function judgeContext(runId: string, file: string, cwd: string): string {
+export function judgeContext(runId: string, file: string, cwd: string, part?: number): string {
   const meta = loadRun(runId, cwd);
   if (!meta) return `Unknown run: ${runId}. Call f_review_plan first (or check the runId).`;
   if (!meta.targets.includes(file)) {
@@ -111,8 +111,27 @@ export function judgeContext(runId: string, file: string, cwd: string): string {
       `Judging is INCOMPLETE — do NOT judge or re-review it; it is flagged in the final report.`
     );
   }
-  const prompt = buildJudgePrompt(meta, result, judgment, cwd);
-  if (!isContextOverflow(prompt)) return prompt;
+  const plan = judgePartPlanFor(meta, result, judgment, cwd);
+  const total = plan.findingParts.length + (plan.hasCoveragePart ? 1 : 0);
+  const requested = part ?? 0;
+  if (requested < 0 || requested >= total) {
+    return `❌ part ${requested} does not exist for ${file} — this review has ${total} part(s) (0..${total - 1}).`;
+  }
+
+  const submitted = currentPendingParts(judgment, result).map((p) => p.part);
+  if (submitted.includes(requested)) {
+    const next = Array.from({ length: total }, (_, i) => i).find((i) => !submitted.includes(i));
+    return next === undefined
+      ? `ℹ️ Every part of ${file} was already submitted; the verdict is being assembled. Do NOT judge it again.`
+      : `ℹ️ part ${requested} of ${file} was already submitted. Spawn a NEW f-judge for part ${next}: call f_review_judge_context with runId="${runId}", file="${file}", part=${next}.`;
+  }
+
+  const prompt = buildPartPrompt(meta, result, judgment, cwd, requested, plan);
+  if (!isContextOverflow(prompt)) {
+    return total === 1
+      ? prompt
+      : `${prompt}\n\nThis file is judged in ${total} parts; submit with part=${requested}.`;
+  }
 
   // Context creation itself is the terminal decision: asking a small judge to
   // retry cannot make an oversized immutable artifact smaller. Persist it now
