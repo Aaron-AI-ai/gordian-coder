@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { judgeContext, judgeFeedbackFor, submitJudge } from "../judge";
 import { artifactIdentity, currentPendingParts, loadJudgment, readRunJudgments } from "../judge-store";
 import { DEFAULT_JUDGE_THRESHOLD, MAX_INVALID_JUDGE_SUBMISSIONS, MAX_JUDGE_ROUNDS, type FileJudgment, type JudgeAttempt, type JudgeSubmitPayload } from "../judge-store";
-import { JUDGE_CONTEXT_MAX_BYTES, JUDGE_CRITERIA, buildJudgePrompt, buildPartPrompt, judgePartPlanFor } from "../judge-prompt";
+import { JUDGE_CONTEXT_MAX_BYTES, JUDGE_CRITERIA, buildJudgePrompt, buildPartPrompt, isContextOverflow, judgePartPlanFor } from "../judge-prompt";
 import { planReview, finalizeRun } from "../run";
 import { createRun, writeFileReview } from "../run-store";
 import { loadRun, type RunMeta } from "../artifact";
@@ -1102,6 +1102,14 @@ describe("judge part 프롬프트", () => {
     // part 0에 없는 지적의 rule은 프롬프트에 없어야 한다
     const absent = plan.findingParts[1]![0]!;
     expect(prompt).not.toContain(`"rule": "r${absent}"`);
+
+    // 두 번째 part는 원본 리뷰의 인덱스를 그대로 싣는다. 부분집합을 그냥
+    // 직렬화하면 0부터 다시 세어 심사관이 엉뚱한 지적에 판정을 붙인다.
+    const second = buildPartPrompt(runMetaLoaded, review, judgment, d, 1, plan) as string;
+    expect(absent).toBeGreaterThan(0);
+    expect(second).toContain(`"index": ${absent}`);
+    expect(second).toContain(`"rule": "r${absent}"`);
+    expect(second).not.toContain(`"index": 0`);
   });
 
   it("coverage part는 지적 요약만 담고 채점 기준 5번을 지시한다", async () => {
@@ -1133,5 +1141,76 @@ describe("judge part 프롬프트", () => {
     expect(buildPartPrompt(runMetaLoaded, review, judgment, d, 0, plan)).toBe(
       buildJudgePrompt(runMetaLoaded, review, judgment, d) as string
     );
+  });
+
+  /** 프롬프트가 실제로 보여준 마지막 줄. 헤더의 주장과 대조한다. */
+  const shownTo = (prompt: string): number => Number(/LINE_RANGE: 1-(\d+)/.exec(prompt)![1]);
+
+  it("coverage part 헤더는 실제로 보여준 줄 범위만 주장한다", async () => {
+    // 바이트 예산을 문자수 상한으로 넘기면 개요는 1000줄에서 끊기는데 헤더는
+    // 3000줄을 다 보여준 척한다. 그러면 심사관은 본 적 없는 2300줄을 놓고
+    // "다 살펴봤나"를 답해야 하고, 없는 coverage gap을 지어낸다.
+    const { d, meta } = await bigRun();
+    await writeFileReview(meta.runId, manyFindings(30), "md", d);
+    const runMetaLoaded = loadRun(meta.runId, d)!;
+    const review = readFileReviewResult(meta.runId, "big.ts", d)!;
+    const judgment = loadJudgment(meta.runId, "big.ts", d);
+    const plan = judgePartPlanFor(runMetaLoaded, review, judgment, d);
+    const prompt = buildPartPrompt(
+      runMetaLoaded, review, judgment, d, plan.findingParts.length, plan
+    ) as string;
+
+    const shown = shownTo(prompt);
+    expect(shown).toBeLessThan(3000); // 3000줄은 예산에 들어가지 않는다
+    expect(prompt).toContain(`lines 1-${shown} of 3000`);
+    expect(prompt).toContain(`Lines ${shown + 1}-3000 were NOT shown`);
+    expect(prompt).not.toContain("(3000 lines)"); // 전체를 본 척하지 않는다
+    expect(prompt).not.toContain("… (truncated)"); // 문자수 절단 흔적이 없다
+    // 헤더가 밝힌 범위가 본문과 정확히 일치한다
+    expect(prompt).toContain(`\n${shown}|const v${shown - 1} =`);
+    expect(prompt).not.toContain(`\n${shown + 1}|const v${shown} =`);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_BYTES);
+  });
+
+  it("지적 없는 대형 파일도 coverage part로 심사된다", async () => {
+    // 지적이 0건이면 changeExcerpt에 앵커가 없어 기존 프롬프트는 무조건
+    // overflow로 닫힌다. 그 파일을 통째로 잃는 대신 coverage만 심사한다.
+    const { d, meta } = await bigRun();
+    await writeFileReview(
+      meta.runId,
+      { ...manyFindings(0), findings: [] },
+      "md",
+      d
+    );
+    const runMetaLoaded = loadRun(meta.runId, d)!;
+    const review = readFileReviewResult(meta.runId, "big.ts", d)!;
+    const judgment = loadJudgment(meta.runId, "big.ts", d);
+    expect(isContextOverflow(buildJudgePrompt(runMetaLoaded, review, judgment, d))).toBe(true);
+
+    const plan = judgePartPlanFor(runMetaLoaded, review, judgment, d);
+    expect(plan.findingParts).toEqual([]);
+    const prompt = buildPartPrompt(runMetaLoaded, review, judgment, d, 0, plan);
+    expect(typeof prompt).toBe("string");
+    expect(prompt as string).toContain("COVERAGE ONLY");
+    expect(prompt as string).toContain(`lines 1-${shownTo(prompt as string)} of 3000`);
+    expect(Buffer.byteLength(prompt as string, "utf8")).toBeLessThanOrEqual(
+      JUDGE_CONTEXT_MAX_BYTES
+    );
+  });
+
+  it("지적 없는 작은 파일은 기존 5개 기준 프롬프트를 그대로 받는다", async () => {
+    // coverage 예외는 base가 들어가지 않는 대형 파일에만 걸린다. 통째로
+    // 보이는 파일은 심사관이 다섯 기준을 모두 채점하던 동작을 유지한다.
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, { ...reviewResult(), findings: [] }, "md", d);
+    const runMetaLoaded = loadRun(meta.runId, d)!;
+    const review = readFileReviewResult(meta.runId, "a.ts", d)!;
+    const judgment = loadJudgment(meta.runId, "a.ts", d);
+    const plan = judgePartPlanFor(runMetaLoaded, review, judgment, d);
+    const prompt = buildPartPrompt(runMetaLoaded, review, judgment, d, 0, plan) as string;
+    expect(prompt).not.toContain("COVERAGE ONLY");
+    expect(prompt).toContain("Validity (40%)");
+    expect(prompt).toBe(buildJudgePrompt(runMetaLoaded, review, judgment, d) as string);
   });
 });

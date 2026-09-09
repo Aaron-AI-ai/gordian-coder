@@ -439,7 +439,21 @@ export function buildPartPrompt(
   }
   // An unsplit review gets exactly the prompt it has always got: one judge sees
   // the whole file and scores all five criteria, and parts never surface.
-  if (total === 1) return buildJudgePrompt(meta, result, judgment, cwd);
+  if (total === 1) {
+    const whole = buildJudgePrompt(meta, result, judgment, cwd);
+    // The one case with no way back: a CLEAN review of a file too large for the
+    // bounded base has no finding anchors from which to recover the code the
+    // base could not show, so the ordinary prompt fails closed on the anchor
+    // guard above and the file is lost to a terminal INCOMPLETE. Judging
+    // coverage over the lines that do fit beats not judging it at all.
+    // Conditioned on the overflow, not on the finding count: a clean file small
+    // enough to be shown whole keeps its unchanged 5-criteria judging, and
+    // synthesiseParts scores either shape correctly (no findings ⇒
+    // coverage.score). A review WITH findings never takes this path — dropping
+    // its findings from judging to salvage the prompt would silently pass them.
+    if (result.findings.length || !isContextOverflow(whole)) return whole;
+    return coveragePrompt(meta, result, cwd, part, total);
+  }
   if (part < plan.findingParts.length) {
     return buildJudgePrompt(meta, result, judgment, cwd, plan.findingParts[part], {
       number: part,
@@ -447,6 +461,42 @@ export function buildPartPrompt(
     });
   }
   return coveragePrompt(meta, result, cwd, part, total);
+}
+
+/**
+ * The file as shown to the coverage judge: whole when it fits the byte budget,
+ * otherwise the longest leading run of lines that does, plus how far that run
+ * actually reaches.
+ *
+ * `renderFileContent` caps CHARACTERS, so a byte budget cannot be handed to it
+ * as `maxChars`: a multi-byte source overruns it, and — worse — its character
+ * cut leaves the header still advertising `LINE_RANGE: 1-2000` while the body
+ * stops around line 1000. Asking "was every significant part examined?" under a
+ * heading that claims lines the judge never saw is how a clean review earns
+ * fabricated coverage gaps and a guaranteed rework. So the line count is scaled
+ * to the budget here and the range is reported honestly by the caller.
+ */
+function coverageOutline(
+  file: string,
+  content: string,
+  totalLines: number,
+  budget: number
+): { text: string; shownTo: number } {
+  // An explicit end line with a matching line cap and no character cap: the
+  // renderer then truncates nothing, so its header describes what is really there.
+  const render = (lines: number): string =>
+    renderFileContent(file, content, 1, lines, lines, Number.POSITIVE_INFINITY);
+
+  let shownTo = totalLines;
+  let text = render(shownTo);
+  // Shrink by the measured bytes-per-line ratio rather than a line at a time.
+  // The estimate only ever undershoots (the header is a fixed cost the ratio
+  // charges to the body), so this converges in two or three passes.
+  while (shownTo > 1 && byteLen(text) > budget) {
+    shownTo = Math.max(1, Math.floor((shownTo * budget) / byteLen(text)) - 1);
+    text = render(shownTo);
+  }
+  return { text, shownTo };
 }
 
 /**
@@ -476,38 +526,57 @@ function coveragePrompt(
         )
       )
     : ["  (no findings — the review reported no problem in this file)"];
-
-  const outline = renderFileContent(
-    result.file,
-    content,
-    1,
-    totalLines,
-    JUDGE_FILE_MAX_LINES,
-    JUDGE_CHANGE_MAX_BYTES
-  );
   const threshold = meta.judgeThreshold ?? DEFAULT_JUDGE_THRESHOLD;
-  const prompt = [
-    `You are judging the review of ${result.file} (run ${meta.runId}) — part ${part + 1}/${total}: COVERAGE ONLY.`,
-    `Score threshold: ${threshold}.`,
-    ``,
-    `Other parts have already scored the individual findings. Your ONLY job is`,
-    `criterion 5:`,
-    `Coverage — was every significant part of this change actually examined?`,
-    ``,
-    `Score 0-100 for coverage alone, and list every unexamined significant area`,
-    `in coverageGaps. Do NOT re-judge the findings themselves.`,
-    ``,
-    authoritativeRules(result.file, cwd),
-    `### The file under review (${totalLines} lines)`,
-    outline,
-    ``,
-    `### What the review reported (index, line, severity, rule)`,
-    ...summary,
-    ``,
-    `Call f_review_judge with runId="${meta.runId}", file="${result.file}", part=${part},`,
-    `findingJudgments=[] (this part judges no findings), your coverageGaps, your`,
-    `coverage score, and feedback naming what a next reviewer must examine.`,
-  ].join("\n");
+
+  const assemble = (heading: string[], outline: string): string =>
+    [
+      `You are judging the review of ${result.file} (run ${meta.runId}) — part ${part + 1}/${total}: COVERAGE ONLY.`,
+      `Score threshold: ${threshold}.`,
+      ``,
+      `Other parts have already scored the individual findings. Your ONLY job is`,
+      `criterion 5:`,
+      `Coverage — was every significant part of this change actually examined?`,
+      ``,
+      `Score 0-100 for coverage alone, and list every unexamined significant area`,
+      `in coverageGaps. Do NOT re-judge the findings themselves.`,
+      ``,
+      authoritativeRules(result.file, cwd),
+      ...heading,
+      outline,
+      ``,
+      `### What the review reported (index, line, severity, rule)`,
+      ...summary,
+      ``,
+      `Call f_review_judge with runId="${meta.runId}", file="${result.file}", part=${part},`,
+      `findingJudgments=[] (this part judges no findings), your coverageGaps, your`,
+      `coverage score, and feedback naming what a next reviewer must examine.`,
+    ].join("\n");
+
+  const wholeHeading = [`### The file under review (${totalLines} lines)`];
+  // Coverage is the one criterion that can be answered wrongly by omission, so
+  // a partial outline must say so — otherwise the judge reports every unshown
+  // line as an unexamined area the reviewer skipped.
+  const partialHeading = (shownTo: number): string[] => [
+    `### The file under review — lines 1-${shownTo} of ${totalLines}`,
+    `Lines ${shownTo + 1}-${totalLines} were NOT shown to you and are outside what`,
+    `you can judge. Do not score them as examined, and do not report them as`,
+    `coverage gaps — judge coverage only over the lines below.`,
+  ];
+
+  // Everything except the outline, measured with the longest heading variant,
+  // so what is left over is a budget the assembled prompt cannot exceed.
+  const budget = Math.min(
+    JUDGE_CHANGE_MAX_BYTES,
+    JUDGE_CONTEXT_MAX_BYTES - byteLen(assemble(partialHeading(totalLines), ""))
+  );
+  if (budget <= 0) {
+    return contextOverflow(
+      `the rules and finding summary for ${result.file} leave no room for the file itself`
+    );
+  }
+
+  const { text, shownTo } = coverageOutline(result.file, content, totalLines, budget);
+  const prompt = assemble(shownTo >= totalLines ? wholeHeading : partialHeading(shownTo), text);
   return byteLen(prompt) <= JUDGE_CONTEXT_MAX_BYTES
     ? prompt
     : contextOverflow(`the assembled coverage prompt is ${byteLen(prompt)} bytes`);
