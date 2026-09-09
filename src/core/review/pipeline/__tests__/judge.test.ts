@@ -546,6 +546,20 @@ describe("judge excerpt covers finding lines past the cap", () => {
     const judgment = loadJudgment(meta.runId, "clean-big.ts", d);
     expect(judgment.attempts).toHaveLength(0);
     expect(judgment.terminal).toBeUndefined();
+
+    // A direct, non-part-aware submitJudge call must still never manufacture a
+    // PASS for this review. Assert the GUARANTEE, not today's mechanism: right
+    // now the unscoped overflow re-check in submitJudgeSerialized terminalizes
+    // it before that could happen; once Task 6 rewrites submission to be
+    // part-aware, index validation will refuse it instead. Either way, no PASS.
+    const direct = await submitJudge(
+      judgePayload(meta.runId, 100, { file: "clean-big.ts", findingJudgments: [] }),
+      d
+    );
+    expect(direct).not.toContain("✅ Judge PASS");
+    expect(
+      loadJudgment(meta.runId, "clean-big.ts", d).attempts.some((a) => a.verdict === "pass")
+    ).toBe(false);
   });
 
   it("terminalizes a truncated review when any finding lacks a line anchor", async () => {
@@ -612,6 +626,14 @@ describe("judge excerpt covers finding lines past the cap", () => {
       expect(partOut).not.toContain("does not exist");
       expect(partOut).not.toContain("Judge context INCOMPLETE");
     }
+
+    // A direct, non-part-aware submitJudge call must still never manufacture a
+    // PASS for this review — see the note in the coverage-part test above.
+    const direct = await submitJudge(judgePayload(meta.runId, 100), d);
+    expect(direct).not.toContain("✅ Judge PASS");
+    expect(
+      loadJudgment(meta.runId, "a.ts", d).attempts.some((a) => a.verdict === "pass")
+    ).toBe(false);
   });
 
   it("bounds very wide source lines and refuses to omit an anchored evidence window", async () => {
@@ -1264,7 +1286,10 @@ describe("judgeContext의 part 처리", () => {
     expect(judgeContext(meta.runId, "a.ts", d, 5)).toContain("does not exist");
   });
 
-  it("이미 제출된 part를 다시 요청하면 다음 part를 알려준다", async () => {
+  it("part가 하나뿐인(분할 안 된) 리뷰는 그 part가 제출되면 전부 제출됐다고 안내한다", async () => {
+    // total === 1 here, so this exercises the "every part already submitted"
+    // branch — not the "here is the next part" branch (see the test below for
+    // that, which needs a genuinely split review to reach it).
     const d = gitRepo();
     const meta = await createRun(baseMeta(), d);
     await writeFileReview(meta.runId, reviewResult(), "# a", d);
@@ -1285,5 +1310,53 @@ describe("judgeContext의 part 처리", () => {
     persistJudgmentSync(meta.runId, "a.ts", d, judgment);
     const out = judgeContext(meta.runId, "a.ts", d, 0);
     expect(out).toContain("already submitted");
+    expect(out).toContain("Every part");
+  });
+
+  it("분할된 리뷰에서 이미 제출된 part를 다시 요청하면 다음 part 번호를 알려준다", async () => {
+    // Genuinely split (total > 1), reusing the 8-oversized-findings fixture.
+    // Only part 0 is pending, so judgeContext must name part 1 as the next
+    // one to spawn a fresh judge for — the branch the total===1 test above
+    // cannot reach.
+    const d = gitRepo();
+    const meta = await createRun(baseMeta({ whole: true, range: null }), d);
+    const result = reviewResult();
+    result.findings = Array.from({ length: 8 }, (_, index) => ({
+      category: "correctness" as const,
+      severity: "major" as const,
+      file: "a.ts",
+      line: 1,
+      rule: `rule-${index}`,
+      message: `failure-${index} ${"m".repeat(2000)}`,
+      suggestion: `fix-${index} ${"s".repeat(4000)}`,
+    }));
+    await writeFileReview(meta.runId, result, "# oversized findings", d);
+
+    const runMetaLoaded = loadRun(meta.runId, d)!;
+    const review = readFileReviewResult(meta.runId, "a.ts", d)!;
+    const judgment = loadJudgment(meta.runId, "a.ts", d);
+    const plan = judgePartPlanFor(runMetaLoaded, review, judgment, d);
+    const total = plan.findingParts.length + (plan.hasCoveragePart ? 1 : 0);
+    expect(total).toBeGreaterThan(1);
+
+    judgment.pendingParts = [
+      {
+        reviewRevision: review.revision,
+        reviewArtifactHash: artifactIdentity(review),
+        part: 0,
+        score: 80,
+        feedback: "f",
+        coverageGaps: [],
+        findingJudgments: [],
+        at: new Date().toISOString(),
+      },
+    ];
+    persistJudgmentSync(meta.runId, "a.ts", d, judgment);
+
+    const out = judgeContext(meta.runId, "a.ts", d, 0);
+    expect(out).toContain("already submitted");
+    expect(out).toContain("part 1");
+    expect(out).toContain("part=1");
+    expect(out).not.toContain("Every part");
   });
 });
