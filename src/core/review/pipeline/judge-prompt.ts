@@ -18,6 +18,7 @@ import { loadExtraRules, loadFrameworkGuide, renderExtraRules } from "../evidenc
 import { readFcqFile, renderFcqEvidence } from "../evidence/fcq";
 import { loadRun, type RunMeta } from "./artifact";
 import { runDir, type PersistedFileReviewResult } from "./artifact";
+import { planJudgeParts, type JudgePartPlan } from "./judge-parts";
 import {
   DEFAULT_JUDGE_THRESHOLD,
   artifactIdentity,
@@ -289,20 +290,41 @@ export function authoritativeRules(file: string, cwd: string): string {
   ].join("\n");
 }
 
+/**
+ * Which part of a split judgment a prompt covers.
+ *
+ * Carried instead of a pre-rendered label so the planner's size measurement and
+ * the real assembly render the SAME wording: a placeholder label shorter than
+ * the final one lets a part measure under budget and ship over it.
+ */
+interface JudgePartScope {
+  /** 0-based, and exactly what the judge must send back as `part`. */
+  number: number;
+  total: number;
+}
+
 export function buildJudgePrompt(
   meta: RunMeta,
   result: PersistedFileReviewResult,
   judgment: FileJudgment,
-  cwd: string
+  cwd: string,
+  indices?: number[],
+  scope?: JudgePartScope
 ): string | JudgeContextOverflow {
-  const findingsJson = JSON.stringify(result.findings, null, 2);
+  // The judge answers by index, so a part must show the ORIGINAL review index
+  // of every finding it carries — a bare subset renumbers from 0 and the
+  // verdicts come back pointing at the wrong findings.
+  const scopedIndices = indices ?? result.findings.map((_, index) => index);
+  const scoped: Finding[] = scopedIndices.map((index) => result.findings[index]!);
+  const scopedEntries = scopedIndices.map((index, at) => ({ index, ...scoped[at]! }));
+  const findingsJson = JSON.stringify(scopedEntries, null, 2);
   if (byteLen(findingsJson) > JUDGE_FINDINGS_MAX_BYTES) {
     return contextOverflow(
-      `${result.findings.length} serialized finding(s) exceed ${JUDGE_FINDINGS_MAX_BYTES} bytes`
+      `${scoped.length} serialized finding(s) exceed ${JUDGE_FINDINGS_MAX_BYTES} bytes`
     );
   }
 
-  const excerpt = changeExcerpt(meta, result.file, cwd, result.findings);
+  const excerpt = changeExcerpt(meta, result.file, cwd, scoped);
   if (isContextOverflow(excerpt)) return excerpt;
 
   const round = judgment.attempts.length + 1;
@@ -316,7 +338,15 @@ export function buildJudgePrompt(
       ? renderFcqEvidence(readFcqFile(runDir(meta.runId, cwd), result.file), meta.fcqFix)
       : "";
   const prompt = [
-    `You are judging the review of ${result.file} (run ${meta.runId}, judge round ${round}).`,
+    `You are judging the review of ${result.file} (run ${meta.runId}, judge round ${round})` +
+      (scope ? ` — part ${scope.number + 1}/${scope.total}.` : `.`),
+    ...(scope
+      ? [
+          `Judge ONLY the findings listed below, by the index each one carries.`,
+          `Criteria 1-4 only: a separate part scores coverage against the whole`,
+          `file, so do NOT report coverage gaps here.`,
+        ]
+      : []),
     `Score threshold: ${threshold} (score < ${threshold} ⇒ the review is sent back for rework).`,
     ``,
     `### Criteria`,
@@ -344,12 +374,141 @@ export function buildJudgePrompt(
     `### The submitted review (findings to judge, by index)`,
     findingsJson,
     ``,
-    `Judge every finding by its index, list coverage gaps, then call f_review_judge`,
-    `with runId="${meta.runId}", file="${result.file}", your findingJudgments, coverageGaps,`,
-    `score, and feedback. Feedback must be concrete, numbered instructions the`,
-    `next reviewer can follow (required when the score is below the threshold).`,
+    ...(scope
+      ? [
+          `Judge every finding by its index AS NUMBERED ABOVE, then call f_review_judge`,
+          `with runId="${meta.runId}", file="${result.file}", part=${scope.number}, your`,
+          `findingJudgments, coverageGaps=[] (another part scores coverage), score, and`,
+          `feedback. Feedback must be concrete, numbered instructions the next reviewer`,
+          `can follow (required when the score is below the threshold).`,
+        ]
+      : [
+          `Judge every finding by its index, list coverage gaps, then call f_review_judge`,
+          `with runId="${meta.runId}", file="${result.file}", your findingJudgments, coverageGaps,`,
+          `score, and feedback. Feedback must be concrete, numbered instructions the`,
+          `next reviewer can follow (required when the score is below the threshold).`,
+        ]),
   ].join("\n");
   return byteLen(prompt) <= JUDGE_CONTEXT_MAX_BYTES
     ? prompt
     : contextOverflow(`the assembled judge prompt is ${byteLen(prompt)} bytes`);
+}
+
+/** Cap on one finding-summary line. The coverage part needs the anchor and the
+ * rule, never the finding's prose — that is another part's job. */
+const COVERAGE_SUMMARY_MAX_CHARS = 120;
+
+/**
+ * This review's part plan. It measures by assembling the real prompt, so it is
+ * deterministic on the same inputs — submission validation recomputes it and
+ * checks the submitted part against the index set it names.
+ *
+ * O(n) assemblies, each re-reading the source. Accepted: findings are capped at
+ * 50 and this runs once per judge spawn.
+ */
+export function judgePartPlanFor(
+  meta: RunMeta,
+  result: PersistedFileReviewResult,
+  judgment: FileJudgment,
+  cwd: string
+): JudgePartPlan {
+  // The widest part numbering this review could produce, so the measured
+  // prompt is never shorter than the one actually built.
+  const widest: JudgePartScope = { number: result.findings.length, total: result.findings.length + 1 };
+  const measure = (indices: number[]): number => {
+    const prompt = buildJudgePrompt(meta, result, judgment, cwd, indices, widest);
+    // Assembly failing at all means the budget is already lost; report it as
+    // over budget so the planner splits further instead of shipping it.
+    return isContextOverflow(prompt) ? Number.MAX_SAFE_INTEGER : byteLen(prompt);
+  };
+  return planJudgeParts(result.findings.length, measure, JUDGE_CONTEXT_MAX_BYTES);
+}
+
+/** One part's prompt. `part === plan.findingParts.length` is the coverage part. */
+export function buildPartPrompt(
+  meta: RunMeta,
+  result: PersistedFileReviewResult,
+  judgment: FileJudgment,
+  cwd: string,
+  part: number,
+  plan: JudgePartPlan
+): string | JudgeContextOverflow {
+  const total = plan.findingParts.length + (plan.hasCoveragePart ? 1 : 0);
+  if (part < 0 || part >= total) {
+    return contextOverflow(`part ${part} does not exist (this review has ${total} part(s))`);
+  }
+  // An unsplit review gets exactly the prompt it has always got: one judge sees
+  // the whole file and scores all five criteria, and parts never surface.
+  if (total === 1) return buildJudgePrompt(meta, result, judgment, cwd);
+  if (part < plan.findingParts.length) {
+    return buildJudgePrompt(meta, result, judgment, cwd, plan.findingParts[part], {
+      number: part,
+      total,
+    });
+  }
+  return coveragePrompt(meta, result, cwd, part, total);
+}
+
+/**
+ * The coverage-only part: the file and a one-line-per-finding index, scored
+ * against criterion 5 alone. The finding bodies (message/asIs/toBe) stay out —
+ * what is judged here is not whether a finding holds but which areas the review
+ * never looked at, and the bodies are exactly what did not fit.
+ */
+function coveragePrompt(
+  meta: RunMeta,
+  result: PersistedFileReviewResult,
+  cwd: string,
+  part: number,
+  total: number
+): string | JudgeContextOverflow {
+  const ref = afterRef(meta.range);
+  const content = readFileAt(cwd, ref, result.file);
+  if (content === null) {
+    return contextOverflow(`source unavailable for the coverage part of ${result.file}`);
+  }
+  const totalLines = content.replace(/\n$/, "").split("\n").length;
+  const summary = result.findings.length
+    ? result.findings.map((finding, index) =>
+        `  ${index}. L${finding.line ?? "?"} [${finding.severity}] ${finding.rule}`.slice(
+          0,
+          COVERAGE_SUMMARY_MAX_CHARS
+        )
+      )
+    : ["  (no findings — the review reported no problem in this file)"];
+
+  const outline = renderFileContent(
+    result.file,
+    content,
+    1,
+    totalLines,
+    JUDGE_FILE_MAX_LINES,
+    JUDGE_CHANGE_MAX_BYTES
+  );
+  const threshold = meta.judgeThreshold ?? DEFAULT_JUDGE_THRESHOLD;
+  const prompt = [
+    `You are judging the review of ${result.file} (run ${meta.runId}) — part ${part + 1}/${total}: COVERAGE ONLY.`,
+    `Score threshold: ${threshold}.`,
+    ``,
+    `Other parts have already scored the individual findings. Your ONLY job is`,
+    `criterion 5:`,
+    `Coverage — was every significant part of this change actually examined?`,
+    ``,
+    `Score 0-100 for coverage alone, and list every unexamined significant area`,
+    `in coverageGaps. Do NOT re-judge the findings themselves.`,
+    ``,
+    authoritativeRules(result.file, cwd),
+    `### The file under review (${totalLines} lines)`,
+    outline,
+    ``,
+    `### What the review reported (index, line, severity, rule)`,
+    ...summary,
+    ``,
+    `Call f_review_judge with runId="${meta.runId}", file="${result.file}", part=${part},`,
+    `findingJudgments=[] (this part judges no findings), your coverageGaps, your`,
+    `coverage score, and feedback naming what a next reviewer must examine.`,
+  ].join("\n");
+  return byteLen(prompt) <= JUDGE_CONTEXT_MAX_BYTES
+    ? prompt
+    : contextOverflow(`the assembled coverage prompt is ${byteLen(prompt)} bytes`);
 }

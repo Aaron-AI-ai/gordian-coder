@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { judgeContext, judgeFeedbackFor, submitJudge } from "../judge";
 import { artifactIdentity, currentPendingParts, loadJudgment, readRunJudgments } from "../judge-store";
 import { DEFAULT_JUDGE_THRESHOLD, MAX_INVALID_JUDGE_SUBMISSIONS, MAX_JUDGE_ROUNDS, type FileJudgment, type JudgeAttempt, type JudgeSubmitPayload } from "../judge-store";
-import { JUDGE_CONTEXT_MAX_BYTES, JUDGE_CRITERIA } from "../judge-prompt";
+import { JUDGE_CONTEXT_MAX_BYTES, JUDGE_CRITERIA, buildJudgePrompt, buildPartPrompt, judgePartPlanFor } from "../judge-prompt";
 import { planReview, finalizeRun } from "../run";
 import { createRun, writeFileReview } from "../run-store";
 import { loadRun, type RunMeta } from "../artifact";
@@ -1028,5 +1028,110 @@ describe("pendingParts", () => {
       },
     ];
     expect(currentPendingParts(judgment, review).map((p) => p.part)).toEqual([0]);
+  });
+});
+
+describe("judge part 프롬프트", () => {
+  /** n건의 지적을 서로 멀리 떨어뜨려 윈도우 병합을 막는다. */
+  const manyFindings = (n: number): FileReviewResult => ({
+    file: "big.ts",
+    assessed: [...REQUIRED_CATEGORIES],
+    findings: Array.from({ length: n }, (_, i) => ({
+      category: "correctness" as const,
+      severity: "major" as const,
+      file: "big.ts",
+      line: 1 + i * 120,
+      rule: `r${i}`,
+      message: "이슈 ".repeat(200),
+      asIs: "코드 ".repeat(300),
+      toBe: "고친 코드 ".repeat(300),
+    })),
+    explorationCalls: 2,
+    partial: false,
+  });
+
+  /** 3000줄짜리 파일을 가진 whole-file 런. */
+  async function bigRun() {
+    const d = gitRepo();
+    writeFileSync(
+      join(d, "big.ts"),
+      Array.from({ length: 3000 }, (_, i) => `const v${i} = ${i}; // 설명 주석`).join("\n") + "\n"
+    );
+    const meta = await createRun(baseMeta({ targets: ["big.ts"], whole: true, range: null }), d);
+    return { d, meta };
+  }
+
+  it("지적이 많으면 여러 part로 나뉜다", async () => {
+    const { d, meta } = await bigRun();
+    await writeFileReview(meta.runId, manyFindings(30), "md", d);
+    const review = readFileReviewResult(meta.runId, "big.ts", d)!;
+    const plan = judgePartPlanFor(loadRun(meta.runId, d)!, review, loadJudgment(meta.runId, "big.ts", d), d);
+    expect(plan.findingParts.length).toBeGreaterThan(1);
+    expect(plan.hasCoveragePart).toBe(true);
+    // 모든 인덱스가 정확히 한 번씩 나타난다
+    expect(plan.findingParts.flat().sort((a, b) => a - b)).toEqual(
+      Array.from({ length: 30 }, (_, i) => i)
+    );
+  });
+
+  it("각 part 프롬프트가 예산 안에 들어간다", async () => {
+    const { d, meta } = await bigRun();
+    await writeFileReview(meta.runId, manyFindings(30), "md", d);
+    const runMetaLoaded = loadRun(meta.runId, d)!;
+    const review = readFileReviewResult(meta.runId, "big.ts", d)!;
+    const judgment = loadJudgment(meta.runId, "big.ts", d);
+    const plan = judgePartPlanFor(runMetaLoaded, review, judgment, d);
+    for (let part = 0; part < plan.findingParts.length; part++) {
+      const prompt = buildPartPrompt(runMetaLoaded, review, judgment, d, part, plan);
+      expect(typeof prompt).toBe("string");
+      expect(Buffer.byteLength(prompt as string, "utf8")).toBeLessThanOrEqual(
+        JUDGE_CONTEXT_MAX_BYTES
+      );
+    }
+  });
+
+  it("part 프롬프트는 그 part의 지적만 담고 번호를 밝힌다", async () => {
+    const { d, meta } = await bigRun();
+    await writeFileReview(meta.runId, manyFindings(30), "md", d);
+    const runMetaLoaded = loadRun(meta.runId, d)!;
+    const review = readFileReviewResult(meta.runId, "big.ts", d)!;
+    const judgment = loadJudgment(meta.runId, "big.ts", d);
+    const plan = judgePartPlanFor(runMetaLoaded, review, judgment, d);
+    const prompt = buildPartPrompt(runMetaLoaded, review, judgment, d, 0, plan) as string;
+    expect(prompt).toContain(`part 1/${plan.findingParts.length + 1}`);
+    // part 0에 없는 지적의 rule은 프롬프트에 없어야 한다
+    const absent = plan.findingParts[1]![0]!;
+    expect(prompt).not.toContain(`"rule": "r${absent}"`);
+  });
+
+  it("coverage part는 지적 요약만 담고 채점 기준 5번을 지시한다", async () => {
+    const { d, meta } = await bigRun();
+    await writeFileReview(meta.runId, manyFindings(30), "md", d);
+    const runMetaLoaded = loadRun(meta.runId, d)!;
+    const review = readFileReviewResult(meta.runId, "big.ts", d)!;
+    const judgment = loadJudgment(meta.runId, "big.ts", d);
+    const plan = judgePartPlanFor(runMetaLoaded, review, judgment, d);
+    const prompt = buildPartPrompt(
+      runMetaLoaded, review, judgment, d, plan.findingParts.length, plan
+    ) as string;
+    expect(prompt).toContain("Coverage");
+    expect(prompt).toContain("r0");            // 지적 요약에는 모든 rule이 있다
+    expect(prompt).not.toContain("고친 코드"); // 수정안 본문은 없다
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_BYTES);
+  });
+
+  it("part 하나로 끝나면 기존 프롬프트와 동일하다", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "md", d);
+    const runMetaLoaded = loadRun(meta.runId, d)!;
+    const review = readFileReviewResult(meta.runId, "a.ts", d)!;
+    const judgment = loadJudgment(meta.runId, "a.ts", d);
+    const plan = judgePartPlanFor(runMetaLoaded, review, judgment, d);
+    expect(plan.findingParts).toEqual([[0]]);
+    expect(plan.hasCoveragePart).toBe(false);
+    expect(buildPartPrompt(runMetaLoaded, review, judgment, d, 0, plan)).toBe(
+      buildJudgePrompt(runMetaLoaded, review, judgment, d) as string
+    );
   });
 });
