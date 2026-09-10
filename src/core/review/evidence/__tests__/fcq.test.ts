@@ -399,6 +399,27 @@ describe("run-mode integration", () => {
     expect(out).toContain("f_review_fix_context");
   });
 
+  it("범위 밖이라 버린 항목이 있으면 finalize가 그 수를 밝힌다", async () => {
+    // 버린 개수가 수정관에게만 보이면 아무 데도 남지 않는다. 정직한 항목이
+    // 잘못 버려진 경우에도 사람이 알 방법이 없다.
+    const d = gitRepo();
+    fakeFcq(d);
+    writeFileSync(join(d, ".f-review.json"), JSON.stringify({ fcq: true, fcqFix: true, fcqOptions: { bin: join(d, "fcq-bin"), timeout: 30 } }));
+    const plan = await planReview({ commit: "HEAD" }, d);
+    const runId = /Run created: (\S+)/.exec(plan)![1];
+    for (const file of ["src/A.java", "src/B.java"]) {
+      await writeFileReview(runId, { file, assessed: [...REQUIRED_CATEGORIES], findings: [], explorationCalls: 1, partial: false }, "# r", d);
+    }
+    // part 0을 선언하고, 어떤 위반에도 걸리지 않는 앵커를 하나 낸다.
+    const sub = await submitFix(
+      { runId, file: "src/A.java", part: 0, fixes: [{ line: 999, ruleId: "Nope", toBe: "x" }] },
+      d
+    );
+    expect(sub).toContain("dropped");
+    const out = await finalizeRun(runId, d);
+    expect(out).toContain("dropped");
+  });
+
   it("gates finalize on the fix pass when fcqFix is on", async () => {
     const d = gitRepo();
     fakeFcq(d);
@@ -420,12 +441,13 @@ describe("run-mode integration", () => {
     writeFileSync(join(d, ".f-review.json"), JSON.stringify({ fcq: true, fcqFix: true, fcqOptions: { bin: join(d, "fcq-bin"), timeout: 30 } }));
     const plan = await planReview({ commit: "HEAD" }, d);
     const fixBlock = plan.slice(plan.indexOf("FIX PASS"), plan.indexOf("JUDGE GATE") + 1 || undefined);
-    expect(fixBlock).toContain("fixed in several parts");
+    expect(fixBlock).toContain("fixed one part at a time");
+    expect(fixBlock).toContain("names the next part");
     expect(fixBlock).toContain("NEW f-fixer");
     // 분할 단위는 언제나 "part"다. 같은 프롬프트에서 "batch"는 동시에 띄우는
     // 서브에이전트 수(RUN_BATCH_SIZE)를 가리키므로, 분할을 그 낱말로 부르면
     // 둘이 뭉개진다.
-    const partLine = fixBlock.split("\n").find((l) => l.includes("fixed in several parts"))!;
+    const partLine = fixBlock.split("\n").find((l) => l.includes("fixed one part at a time"))!;
     expect(partLine).not.toContain("batch");
   });
 

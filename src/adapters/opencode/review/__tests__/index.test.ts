@@ -587,6 +587,25 @@ describe("part 파라미터", () => {
     expect(FIXER_AGENT_PROMPT).toContain("part");
   });
 
+  it("커맨드 템플릿의 절대 규칙이 part 규칙과 어긋나지 않는다", () => {
+    // "follow EXACTLY" 아래에서 "파일당 하나"와 "part당 하나"가 나란히 서 있으면
+    // LLM은 둘 중 하나를 임의로 고른다. 두 규칙 모두 part를 함께 말해야 한다.
+    const { mod } = moduleFor(gitRepo());
+    const cfg: { agent: Record<string, unknown>; command: Record<string, { template: string }> } = {
+      agent: {},
+      command: {},
+    };
+    mod.config(cfg as never);
+    // 줄바꿈 위치에 걸리지 않도록 공백을 눌러 비교한다.
+    const flat = cfg.command["f-review"]!.template.replace(/\s+/g, " ");
+    expect(flat).not.toContain("two subagents for the same file.");
+    expect(flat).toContain("two subagents for the same file AND part");
+    expect(flat).not.toContain("ONE f-fixer subagent per file with");
+    expect(flat).toContain("ONE f-fixer subagent per file AND part");
+    // 인자 설명 절에도 같은 절대 표현이 하나 더 있었다.
+    expect(flat).not.toContain("one f-fixer subagent per file for it");
+  });
+
   it("f_review_judge_context가 part를 코어까지 넘긴다", async () => {
     const d = gitRepo();
     const { mod } = moduleFor(d);

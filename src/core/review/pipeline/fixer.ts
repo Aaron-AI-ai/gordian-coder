@@ -90,6 +90,12 @@ export type FixSubmitPayload = z.infer<typeof FixSubmitSchema>;
 export const FileFixesSchema = z.object({
   file: z.string(),
   fixes: z.array(FixSchema).default([]),
+  /** Entries refused as outside the submitting part, summed over every
+   * submission. Carried to finalize: the count is reported to the fixer, which
+   * is told not to re-send them and then stops, so this file is the only place
+   * a human can still learn that something was thrown away. Defaulted for the
+   * fix files written before parts existed. */
+  dropped: z.number().int().nonnegative().default(0),
 });
 export type FileFixes = z.infer<typeof FileFixesSchema>;
 
@@ -108,7 +114,7 @@ export function loadFixes(runId: string, file: string, cwd: string): FileFixes {
       /* unreadable/corrupt — treat as not run */
     }
   }
-  return { file, fixes: [] };
+  return { file, fixes: [], dropped: 0 };
 }
 
 /**
@@ -308,6 +314,26 @@ function fixKey(line: number | undefined, rule: string): string {
 }
 
 /**
+ * The orchestrator instruction that keeps a split fix pass moving — the fix-side
+ * mirror of the judge's nextPartInstruction.
+ *
+ * Without it, no tool result the orchestrator ever sees names a next part:
+ * fixContext's "N parts" note goes to the FIXER, and the fixer is told to submit
+ * once and stop. So part 0 was fixed, the orchestrator moved on, and parts
+ * 1..N-1 shipped with the rule's own text — the precise failure the split was
+ * built to prevent. Finalize's recovery could not undo it either: re-spawning
+ * with no part just re-serves part 0.
+ */
+function nextFixPartInstruction(runId: string, file: string, next: number): string[] {
+  return [
+    `Spawn a NEW f-fixer subagent (fresh session) with this prompt:`,
+    `  "Call f_review_fix_context with runId=\"${runId}\", file=\"${file}\", part=${next}, ` +
+      `write the corrected code for every violation it lists, then call ` +
+      `f_review_fix_submit with part=${next}."`,
+  ];
+}
+
+/**
  * Persist one file's fixes, MERGED into what is already recorded.
  *
  * Not an overwrite: a file split across parts gets one submission per part, and
@@ -335,6 +361,18 @@ export async function submitFix(payload: unknown, cwd: string): Promise<string> 
       `(0..${plan.length - 1}). Nothing was recorded; re-submit with the part f_review_fix_context gave you.`
     );
   }
+  // The scoping below only holds if the part is actually declared, and a prompt
+  // telling the fixer to declare it is not a gate: one submission that omits it
+  // merges a stray anchor and silently reopens the case the scoping closes. So
+  // a split file refuses an undeclared submission. An unsplit one — the only
+  // shape that existed before parts — is untouched by this.
+  if (declared === undefined && plan.length > 1) {
+    return (
+      `❌ ${file} is fixed in ${plan.length} part(s) and this submission names none — nothing was recorded. ` +
+      `Re-submit with the \`part\` number f_review_fix_context gave you: without it these entries cannot be ` +
+      `scoped to the violations you were actually shown.`
+    );
+  }
   const keyOf = (index: number): string => fixKey(violations[index]!.line, violations[index]!.ruleId);
   // A declared part IS the scope. An entry anchored outside it is a violation
   // this fixer was never shown, so it is dropped rather than stored: kept, it
@@ -345,11 +383,12 @@ export async function submitFix(payload: unknown, cwd: string): Promise<string> 
   const ignored = fixes.length - accepted.length;
   // Read before the write: what this part already recorded decides whether its
   // fixer is sent back for its gaps, and it must not be lost by the merge.
-  const previous = loadFixes(runId, file, cwd).fixes;
+  const stored = loadFixes(runId, file, cwd);
+  const previous = stored.fixes;
   const merged = new Map(previous.map((f) => [fixKey(f.line, f.ruleId), f]));
   for (const fix of accepted) merged.set(fixKey(fix.line, fix.ruleId), fix);
   const nextFixes = [...merged.values()];
-  const body: FileFixes = { file, fixes: nextFixes };
+  const body: FileFixes = { file, fixes: nextFixes, dropped: stored.dropped + ignored };
   await Bun.write(fixesPath(runId, file, cwd), JSON.stringify(body, null, 2));
 
   const withCode = accepted.filter((f) => f.toBe?.trim()).length;
@@ -367,27 +406,16 @@ export async function submitFix(payload: unknown, cwd: string): Promise<string> 
     indices
       .map((index) => violations[index]!)
       .filter((v) => !entered.has(fixKey(v.line, v.ruleId)) && !already.has(fixKey(v.line, v.ruleId)));
-  // Scoped to the part(s) this submission answered. A split fixer only ever saw
-  // its own part's violations, so listing another part's back at it is an
-  // instruction to write code for lines it was never shown. With no declared
-  // part the scope is still guessed from the anchors — what every submission did
-  // before the field existed — and a submission matching no part at all (empty,
-  // or all-junk anchors) falls back to the whole list: that fixer has nothing to
-  // go on either way.
-  const guessed = plan.filter((indices) => indices.some((index) => entered.has(keyOf(index))));
-  const parts =
-    declared !== undefined
-      ? [plan[declared]!]
-      : guessed.length
-        ? guessed
-        : [violations.map((_, index) => index)];
-  const missing = gaps(parts.flat());
-  // A fixer already sent back once is not sent back again — decided per part on
-  // that part's OWN prior state. Asking whether ANY touched violation was
-  // already recorded let a single entry straying across the part boundary count
-  // part 1's recorded fixes as part 2's retry, so part 2's real gaps got a ⚠️
-  // and "COMPLETE" instead of the send-back they needed.
-  const fresh = gaps(parts.filter((part) => !part.some((index) => already.has(keyOf(index)))).flat());
+  // The part this submission answered — the declared one, or the only one there
+  // is. A split fixer never saw another part's violations, so listing them back
+  // at it is an instruction to write code for lines it was never shown. (The old
+  // guess from the anchors is gone: with the guard above, an undeclared
+  // submission can only ever belong to a single-part file.)
+  const scope = plan[declared ?? 0]!;
+  const missing = gaps(scope);
+  // A fixer already sent back once is not sent back again — decided on this
+  // part's OWN prior state, never on another part's recorded fixes.
+  const fresh = scope.some((index) => already.has(keyOf(index))) ? [] : missing;
   const recorded = [
     `✅ ${file}: ${accepted.length} fix(es) recorded (${withCode} with code, ${fp} false positive(s)).`,
     ignored
@@ -403,6 +431,9 @@ export async function submitFix(payload: unknown, cwd: string): Promise<string> 
         ? `⚠️ ${missing.length} violation(s) still have no entry — they ship with the rule text only.`
         : "",
       "This subagent's task is COMPLETE.",
+      ...(declared !== undefined && declared + 1 < plan.length
+        ? nextFixPartInstruction(runId, file, declared + 1)
+        : []),
     ]
       .filter(Boolean)
       .join("\n");
@@ -465,12 +496,16 @@ export function fixCoverage(
   runId: string,
   files: string[],
   cwd: string
-): { file: string; violations: number; fixed: number }[] {
-  return files.map((file) => ({
-    file,
-    violations: readFcqFile(runDir(runId, cwd), file).length,
-    fixed: loadFixes(runId, file, cwd).fixes.filter((f) => f.toBe?.trim() || f.falsePositive).length,
-  }));
+): { file: string; violations: number; fixed: number; dropped: number }[] {
+  return files.map((file) => {
+    const recorded = loadFixes(runId, file, cwd);
+    return {
+      file,
+      violations: readFcqFile(runDir(runId, cwd), file).length,
+      fixed: recorded.fixes.filter((f) => f.toBe?.trim() || f.falsePositive).length,
+      dropped: recorded.dropped,
+    };
+  });
 }
 
 /** Severities the fix pass is expected to cover — every one fcq reports. */

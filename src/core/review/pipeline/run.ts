@@ -28,7 +28,7 @@ import { defaultLabel, loadBaseline, manifestTimestamp, renderReviewContext, res
 import { readRunJudgments } from "./judge-store";
 import { DEFAULT_JUDGE_THRESHOLD } from "./judge-store";
 import { fcqFindings, mergeFcqFindings, readFcqFile, readFcqSummary, renderFcqSection, runFcq } from "../evidence/fcq";
-import { applyFixes, fixCoverage, loadAllFixes, loadFixes } from "./fixer";
+import { applyFixes, fixCoverage, fixPartPlan, loadAllFixes, loadFixes } from "./fixer";
 import { rubricSources } from "../evidence/rubric";
 
 export interface PlanReviewArgs {
@@ -227,7 +227,7 @@ export async function planReview(args: PlanReviewArgs, cwd: string): Promise<str
   }
 }
 
-function renderPlanInstructions(meta: RunMeta, cwd: string): string {
+export function renderPlanInstructions(meta: RunMeta, cwd: string): string {
   // List every target: the orchestrator dispatches from this text, so a
   // truncated list would silently drop files onto the single finalize retry.
   const list = meta.targets.map((target) => `  - ${target}`);
@@ -240,13 +240,22 @@ function renderPlanInstructions(meta: RunMeta, cwd: string): string {
     meta.fcqFix && meta.fcq?.status === "ok"
       ? meta.targets.filter((f) => readFcqFile(runDir(meta.runId, cwd), f).length > 0)
       : [];
+  // Recomputed here, deterministically, from the same inputs the fix tools use.
+  const fixParts = new Map(filesToFix.map((f) => [f, fixPartPlan(meta.runId, f, cwd).length]));
+  const anySplitFix = [...fixParts.values()].some((n) => n > 1);
   const fixSteps = filesToFix.length
     ? [
         [
           `FIX PASS — spawn ONE subagent of type \`f-fixer\` (NOT f-reviewer, NOT f-judge — only f-fixer can call these tools) for EACH of these ${filesToFix.length} file(s), and ONLY these — the others have no static-analysis violations:`,
-          ...filesToFix.map((f) => `     - ${f}`),
-          `   Prompt: "Call f_review_fix_context with runId=\"${meta.runId}\" and file=\"<file>\", write the corrected code for every violation, then call f_review_fix_submit."`,
-          `   A file with many violations is fixed in several parts: when the context says so, spawn a NEW f-fixer for each remaining part once the previous one has submitted, calling both tools with the part number that tool result named.`,
+          // The part count comes with the file: the orchestrator never calls
+          // f_review_fix_context itself, so this line is its only way to know a
+          // file is more than one subagent's work before it dispatches.
+          ...filesToFix.map(
+            (f) =>
+              `     - ${f}${fixParts.get(f)! > 1 ? ` — ${fixParts.get(f)} part(s): one f-fixer EACH, in order, starting at part=0` : ""}`
+          ),
+          `   Prompt: "Call f_review_fix_context with runId=\"${meta.runId}\" and file=\"<file>\"${anySplitFix ? ", part=<part> (start at 0 for a file listed with parts)" : ""}, write the corrected code for every violation, then call f_review_fix_submit${anySplitFix ? " with that same part" : ""}."`,
+          `   A file with several parts is fixed one part at a time: each f_review_fix_submit result names the next part to spawn a NEW f-fixer for, and the file is done only when a result names none.`,
           `   It runs independently of the review — same batch limit. WAIT for every fix subagent to return before you finalize: finalize merges whatever is on disk at that moment, and a fix that lands afterwards is not in the report.`,
         ].join("\n"),
       ]
@@ -502,14 +511,32 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
       ? (() => {
           const cov = fixCoverage(runId, meta.targets, cwd).filter((c) => c.violations > 0);
           const unfixed = cov.reduce((n, c) => n + (c.violations - c.fixed), 0);
-          if (!unfixed) return "";
+          // The only place a human learns an entry was thrown away: submitFix
+          // reports the count to the fixer, and that fixer is told not to
+          // re-send it and then stops.
+          const dropped = cov.reduce((n, c) => n + c.dropped, 0);
+          const droppedWarn = dropped
+            ? `\nℹ️ ${dropped} submitted fix entry(ies) were dropped as outside their declared part ` +
+              `(${cov.filter((c) => c.dropped).map((c) => c.file).join(", ")}) — normally an f-fixer ` +
+              `guessing at a violation it was never shown.`
+            : "";
+          if (!unfixed) return droppedWarn;
           const never = cov.filter((c) => c.fixed === 0).map((c) => c.file);
+          const split = cov.filter((c) => c.violations - c.fixed > 0 && fixPartPlan(runId, c.file, cwd).length > 1);
           return (
             `\n⚠️ fcqFix is on but ${unfixed} violation(s) have no fix — they ship with the rule text only` +
             (never.length ? `; the fix pass produced nothing for ${never.join(", ")}` : "") +
             `.\nSpawn ONE subagent of type \`f-fixer\` for each of those files (f_review_fix_context / ` +
             `f_review_fix_submit), WAIT for them to return, then call f_review_finalize again — ` +
-            `the report is rewritten with the fixes. Do this at most once.`
+            `the report is rewritten with the fixes. Do this at most once.` +
+            // Without a part these files re-serve part 0 and the retry cannot
+            // reach the violations that are actually missing.
+            (split.length
+              ? `\nThese file(s) are fixed in parts — spawn one f-fixer per part, starting at part=0 and ` +
+                `following the part each submit result names: ` +
+                split.map((c) => `${c.file} (${fixPartPlan(runId, c.file, cwd).length} parts)`).join(", ") + `.`
+              : "") +
+            droppedWarn
           );
         })()
       : "";

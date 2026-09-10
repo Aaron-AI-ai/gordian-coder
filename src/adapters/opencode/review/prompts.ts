@@ -261,7 +261,7 @@ Parse the arguments into \`f_review_plan\` parameters (all optional):
 - \`--deep=N\` → \`deepPasses\` (review rounds per file, 1-5; default comes from
   project config \`deepPasses\`)
 - \`fcqFix: true\` in config → the plan adds a FIX PASS step; spawn one f-fixer
-  subagent per file for it.
+  subagent per file, and per part for a file the plan lists with parts.
 - \`--judge\` → \`judge: true\` (judge gate: an independent f-judge subagent scores
   each file's review; failing reviews are re-reviewed with feedback. Default
   comes from project config \`judge\`)
@@ -293,7 +293,9 @@ Parallel workflow (default):
      no tool result names another part. A part is never a batch — the batch
      limit above is only about how many subagents run at once.
    - Never review a file yourself, never spawn a subagent for a file outside
-     the plan's target list, and never spawn two subagents for the same file.
+     the plan's target list, and never spawn two subagents for the same file
+     AND part (a file split into parts gets one subagent per part — that is
+     not the same file twice).
    - Each step names the subagent it needs. Spawn THAT one — the three are not
      interchangeable and each can only call its own tools:
        f-reviewer → f_review_context / f_review_submit
@@ -301,7 +303,9 @@ Parallel workflow (default):
        f-judge    → f_review_judge_context / f_review_judge
      A prompt handed to the wrong subagent fails on its first tool call.
    - If the plan includes a FIX PASS step, spawn ONE f-fixer subagent per file
-     with the prompt it gives. The fix pass writes the corrected code for the
+     AND part with the prompt it gives — the plan lists the part count next to
+     each file, and each submit result names the next part to spawn for. The
+     fix pass writes the corrected code for the
      static-analysis violations; without it they reach the report with only
      the rule's own text as their fix.
    - If the plan enables the judge gate, follow its judge steps exactly: after
