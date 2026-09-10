@@ -691,6 +691,21 @@ describe("fixer part 분할", () => {
     const out = renderPlanInstructions(meta, d);
     expect(out).toContain("4 part(s)");
     expect(out).toContain("part=0");
+    // "모든 fix 서브에이전트가 돌아오면 finalize"는 part 0의 fixer가 돌아온
+    // 순간 글자 그대로 참이 된다 — 사슬이 돌기도 전에 finalize가 불린다.
+    expect(out).not.toContain("every fix subagent has returned, call");
+    expect(out).toContain("every part of it included");
+    // 복구도 파일당 하나로 못박히면 분할 파일은 part 0만 다시 돈다.
+    expect(out).toContain("one subagent per part");
+  });
+
+  it("분할이 없으면 finalize/복구 문구가 예전 그대로다", async () => {
+    const { d, runId } = await bigFixRun(3);
+    const meta = { ...loadRun(runId, d)!, fcqFix: true };
+    const out = renderPlanInstructions(meta, d);
+    expect(out).toContain("every fix subagent has returned, call f_review_finalize");
+    expect(out).not.toContain("every part of it included");
+    expect(out).not.toContain("part(s):");
   });
 
   it("분할된 fix 컨텍스트가 제출할 part 번호를 알려준다", async () => {

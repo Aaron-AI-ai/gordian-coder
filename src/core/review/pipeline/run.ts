@@ -260,6 +260,18 @@ export function renderPlanInstructions(meta: RunMeta, cwd: string): string {
         ].join("\n"),
       ]
     : [];
+  // "every fix subagent has returned" is literally true the moment part 0's
+  // fixer returns, so on its own it licenses a finalize in the middle of the
+  // part chain — the partial result the split exists to prevent. Shared by both
+  // branches below; an unsplit run reads exactly as it did before.
+  const fixReturned = filesToFix.length
+    ? ` AND every fix subagent has returned${anySplitFix ? ", every part of it included" : ""}`
+    : "";
+  // Same hazard on the recovery path: "ONLY those files ONCE" caps a split
+  // file's retry at one subagent, which can only re-serve part 0.
+  const recoveryParts = anySplitFix
+    ? ` A file finalize lists with parts needs one subagent per part — that is still one recovery round.`
+    : "";
   const judgeSteps = meta.judge
     ? [
         [
@@ -267,12 +279,12 @@ export function renderPlanInstructions(meta: RunMeta, cwd: string): string {
           `   "Call f_review_judge_context with runId=\"${meta.runId}\" and file=\"<file>\", evaluate that review, then call f_review_judge."`,
         ].join("\n"),
         `Follow the message f_review_judge returns EXACTLY: it either accepts the file, tells you to spawn a NEW f-judge for the next part of the same review, or tells you to re-spawn the f-reviewer for that file (judge feedback is injected automatically) and judge again. A large review is judged in several parts — each part needs its OWN fresh f-judge subagent, one after another, called with the part number the previous tool result named. The rework cap is enforced by the tool — never re-spawn beyond what it instructs.`,
-        `When every file is accepted${filesToFix.length ? " AND every fix subagent has returned" : ""}, call f_review_finalize with runId="${meta.runId}".`,
-        `If finalize reports missing files, re-spawn subagents for ONLY those files ONCE (judging each again), then finalize again.`,
+        `When every file is accepted${fixReturned}, call f_review_finalize with runId="${meta.runId}".`,
+        `If finalize reports missing files, re-spawn subagents for ONLY those files ONCE (judging each again), then finalize again.${recoveryParts}`,
       ]
     : [
-        `When every file has been dispatched${filesToFix.length ? " AND every fix subagent has returned" : ""}, call f_review_finalize with runId="${meta.runId}".`,
-        `If finalize reports missing files, re-spawn subagents for ONLY those files ONCE, then finalize again.`,
+        `When every file has been dispatched${fixReturned}, call f_review_finalize with runId="${meta.runId}".`,
+        `If finalize reports missing files, re-spawn subagents for ONLY those files ONCE, then finalize again.${recoveryParts}`,
       ];
   const fcqLine = !meta.fcq
     ? []

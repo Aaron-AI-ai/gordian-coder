@@ -636,6 +636,19 @@ describe("part 파라미터", () => {
     expect(JUDGE_AGENT_PROMPT).toContain("exactly once");
   });
 
+  it("다음 part 지시를 오케스트레이터에게 그대로 넘기라고 말한다", () => {
+    // 다음 part를 지목하는 줄은 서브에이전트의 툴 결과에 떨어진다. 서브에이전트는
+    // 에이전트를 띄울 수 없으니, 그 줄을 그대로 옮겨 적지 않으면 자기를 띄운
+    // 오케스트레이터에게 닿지 않고 사슬이 거기서 끊긴다.
+    for (const prompt of [FIXER_AGENT_PROMPT, JUDGE_AGENT_PROMPT]) {
+      const flat = prompt.replace(/\s+/g, " ");
+      expect(flat).toContain("VERBATIM");
+      // 중계와 소환이 같은 말로 읽히면 안 된다 — 금지는 그대로 서 있어야 한다.
+      expect(flat).toContain("Relaying it is not spawning");
+      expect(flat).toContain("never spawn agents");
+    }
+  });
+
   it("f_review_judge_context가 part를 코어까지 넘긴다", async () => {
     const d = gitRepo();
     const { mod } = moduleFor(d);

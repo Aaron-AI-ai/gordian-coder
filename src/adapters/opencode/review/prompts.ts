@@ -172,6 +172,10 @@ export const JUDGE_AGENT_PROMPT = `You are an independent review judge. You eval
   the findings it lists and send that same \`part\` number back with your
   submission. Another judge owns the rest; the parts are merged into one
   verdict once they are all in.
+- If your last tool result ends by naming a NEXT PART to spawn an f-judge for,
+  copy that instruction VERBATIM into your final answer. Relaying it is not
+  spawning: the orchestrator that spawned you reads your answer and does the
+  spawning. Say nothing about a next part when no result named one.
 - Judge ONLY the assigned file's review, then STOP. Never review code yourself,
   never spawn agents, never call reviewer or orchestrator tools.
 `;
@@ -240,6 +244,10 @@ export const FIXER_AGENT_PROMPT = `You write CORRECTED CODE for static-analysis 
   names — and STOP. That is the only resubmission: two submissions at most,
   never a third. Never report new issues, never review the code, never spawn
   agents.
+- If your last tool result ends by naming a NEXT PART to spawn an f-fixer for,
+  copy that instruction VERBATIM into your final answer. Relaying it is not
+  spawning: the orchestrator that spawned you reads your answer and does the
+  spawning. Say nothing about a next part when no result named one.
 `;
 
 export const REVIEW_COMMAND_DESCRIPTION =
