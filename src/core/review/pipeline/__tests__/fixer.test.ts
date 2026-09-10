@@ -15,8 +15,8 @@ import {
   FIX_CONTEXT_MAX_BYTES,
   fixWindows,
 } from "../fixer";
-import { createRun } from "../run-store";
-import { renderPlanInstructions } from "../run";
+import { createRun, writeFileReview } from "../run-store";
+import { finalizeRun, renderPlanInstructions } from "../run";
 import { loadRun, runDir } from "../artifact";
 import { fcqFindings } from "../../evidence/fcq";
 import type { FcqFileViolation } from "../../evidence/fcq";
@@ -696,6 +696,50 @@ describe("fixer part 분할", () => {
     const late = await submit(0);
     expect(late).toContain("COMPLETE");
     expect(late).not.toContain("NEW f-fixer");
+  });
+
+  it("note만 달린 위반이 남아도 회수 안내가 제출 가능한 part를 지목한다", async () => {
+    // fixCoverage는 toBe도 falsePositive도 없는 항목을 미해결로 세고,
+    // unfixedFixParts는 항목이 있다는 이유로 해결로 셌다. 그래서 남은 빈틈이
+    // note뿐인 분할 파일은 part 안내를 통째로 잃었고, submitFix는 분할 파일의
+    // 무선언 제출을 거절하므로 오케스트레이터는 실행할 수 없는 지시를 받았다.
+    const { d, runId } = await bigFixRun(60);
+    const plan = fixPartPlan(runId, "src/Big.java", d);
+    const entry = (i: number) => ({ line: 1 + i * 20, ruleId: `Rule${i}`, toBe: "x" });
+    // 마지막 part만 note로 답하고 나머지는 코드로 답한다.
+    const last = plan.length - 1;
+    for (let part = 0; part < plan.length; part++) {
+      await submitFix(
+        {
+          runId,
+          file: "src/Big.java",
+          part,
+          fixes: plan[part]!.map((i) =>
+            part === last ? { line: 1 + i * 20, ruleId: `Rule${i}`, note: "메서드를 쪼개야 함" } : entry(i)
+          ),
+        },
+        d
+      );
+    }
+    expect(fixCoverage(runId, ["src/Big.java"], d)[0]!.fixed).toBeLessThan(60);
+    // 두 셈법이 같은 기준을 쓰므로 그 part가 그대로 잡힌다.
+    expect(unfixedFixParts(runId, "src/Big.java", d).parts).toEqual([last]);
+
+    await writeFileReview(
+      runId,
+      {
+        file: "src/Big.java",
+        assessed: ["correctness", "security", "performance", "maintainability", "tests", "framework"],
+        findings: [],
+        explorationCalls: 2,
+        partial: false,
+      } as never,
+      "# big",
+      d
+    );
+    const out = await finalizeRun(runId, d);
+    expect(out).toContain("fixed in parts");
+    expect(out).toContain(`part=${last}`);
   });
 
   it("unfixedFixParts는 빈틈이 남은 part만 돌려준다", async () => {

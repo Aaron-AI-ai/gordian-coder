@@ -174,7 +174,21 @@ export function fixPartPlan(runId: string, file: string, cwd: string): number[][
   return planFixParts(cwd, file, readFcqFile(runDir(runId, cwd), file).slice(0, FIX_MAX_ITEMS));
 }
 
-/** Which parts of a file still have a violation nobody recorded a fix for. */
+/**
+ * Whether a recorded entry actually resolves its violation.
+ *
+ * A bare `note` does not: the violation still ships with the rule's own text.
+ * Shared by fixCoverage and unfixedFixParts because they answer the same
+ * question for the same message — while they disagreed, a split file whose only
+ * remaining gaps were note-only was counted as unfixed by one and fully covered
+ * by the other, so finalize named the file but no part. submitFix refuses an
+ * undeclared submission on a split file, which made that recovery unactionable.
+ */
+function isResolved(fix: Fix): boolean {
+  return Boolean(fix.toBe?.trim() || fix.falsePositive);
+}
+
+/** Which parts of a file still have a violation nobody resolved. */
 export interface FixPartGaps {
   /** Part numbers with at least one unfixed violation, ascending. */
   parts: number[];
@@ -192,9 +206,11 @@ export interface FixPartGaps {
 export function unfixedFixParts(runId: string, file: string, cwd: string): FixPartGaps {
   const violations = readFcqFile(runDir(runId, cwd), file).slice(0, FIX_MAX_ITEMS);
   const plan = planFixParts(cwd, file, violations);
-  const recorded = new Set(loadFixes(runId, file, cwd).fixes.map((f) => fixKey(f.line, f.ruleId)));
+  const resolved = new Set(
+    loadFixes(runId, file, cwd).fixes.filter(isResolved).map((f) => fixKey(f.line, f.ruleId))
+  );
   const uncovered = (index: number): boolean =>
-    !recorded.has(fixKey(violations[index]!.line, violations[index]!.ruleId));
+    !resolved.has(fixKey(violations[index]!.line, violations[index]!.ruleId));
   return {
     parts: plan.flatMap((indices, part) => (indices.some(uncovered) ? [part] : [])),
     total: plan.length,
@@ -538,7 +554,7 @@ export function fixCoverage(
     return {
       file,
       violations: readFcqFile(runDir(runId, cwd), file).length,
-      fixed: recorded.fixes.filter((f) => f.toBe?.trim() || f.falsePositive).length,
+      fixed: recorded.fixes.filter(isResolved).length,
       dropped: recorded.dropped,
     };
   });

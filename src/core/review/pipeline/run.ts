@@ -26,7 +26,7 @@ import { RUNS_DIR, reviewArtifactHash, runDir } from "./artifact";
 import { loadConfigSource, resolveDeepPasses } from "../config";
 import { defaultLabel, loadBaseline, manifestTimestamp, renderReviewContext, resolveOutputPath, writeReport } from "../report/output";
 import { readRunJudgments } from "./judge-store";
-import { DEFAULT_JUDGE_THRESHOLD } from "./judge-store";
+import { DEFAULT_JUDGE_THRESHOLD, describeTruncation } from "./judge-store";
 import { fcqFindings, mergeFcqFindings, readFcqFile, readFcqSummary, renderFcqSection, runFcq } from "../evidence/fcq";
 import { applyFixes, fixCoverage, fixPartPlan, loadAllFixes, loadFixes, unfixedFixParts } from "./fixer";
 import { rubricSources } from "../evidence/rubric";
@@ -447,7 +447,7 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
     // whole change, and nothing else says so.
     judgeTruncated = reviewed.flatMap((file) => {
       const shown = currentAttempt(file)?.truncated;
-      return shown ? [`${file} (${shown.view} ${shown.shown}/${shown.total})`] : [];
+      return shown ? [`${file} (${describeTruncation(shown)})`] : [];
     });
   }
 
@@ -551,7 +551,13 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
           const split = cov
             .filter((c) => c.violations - c.fixed > 0)
             .map((c) => ({ file: c.file, ...unfixedFixParts(runId, c.file, cwd) }))
-            .filter((c) => c.total > 1 && c.parts.length > 0);
+            .filter((c) => c.total > 1)
+            // A split file with a gap must always name a part: submitFix refuses
+            // an undeclared submission on one, so "spawn an f-fixer for this
+            // file" with no part is an instruction nobody can carry out. The
+            // per-part list can still be empty here — violations past
+            // FIX_MAX_ITEMS belong to no part at all — so fall back to part 0.
+            .map((c) => (c.parts.length ? c : { ...c, parts: [0] }));
           return (
             `\n⚠️ fcqFix is on but ${unfixed} violation(s) have no fix — they ship with the rule text only` +
             (never.length ? `; the fix pass produced nothing for ${never.join(", ")}` : "") +

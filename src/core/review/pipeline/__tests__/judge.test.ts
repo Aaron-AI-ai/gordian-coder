@@ -12,6 +12,7 @@ import { judgeContext, judgeFeedbackFor, submitJudge } from "../judge";
 import { artifactIdentity, currentPendingParts, loadJudgment, persistJudgmentSync, readRunJudgments } from "../judge-store";
 import { DEFAULT_JUDGE_THRESHOLD, MAX_INVALID_JUDGE_SUBMISSIONS, MAX_JUDGE_ROUNDS, type FileJudgment, type JudgeAttempt, type JudgeSubmitPayload } from "../judge-store";
 import { JUDGE_CONTEXT_MAX_BYTES, JUDGE_CRITERIA, buildJudgePrompt, buildPartPrompt, isContextOverflow, judgePartPlanFor } from "../judge-prompt";
+import { describeTruncation } from "../judge-store";
 import { planReview, finalizeRun } from "../run";
 import { createRun, writeFileReview } from "../run-store";
 import { loadRun, type RunMeta } from "../artifact";
@@ -603,6 +604,15 @@ describe("submitJudge", () => {
     // 같은 제출을 0-기준으로 "part 0"이라 부르면 방금 본 "part 1/16"과 어긋난다.
     expect(again).toContain(`part 1/${total}`);
     expect(again).not.toContain("part 0 of");
+
+    // 같은 문장이 judgeContext에도 있다. 한쪽만 1-기준으로 바꾸면 오케스트레이터가
+    // 두 결과를 나란히 읽고 엉뚱한 part를 띄운다 — 그래서 둘은 한 헬퍼를 쓴다.
+    const ctx = judgeContext(meta.runId, "big.ts", d, 0);
+    expect(ctx).toContain(`part 1/${total} of big.ts was already submitted`);
+    expect(again).toContain(`part 1/${total} of big.ts was already submitted`);
+    expect(ctx).not.toContain("part 0 of");
+    // 툴 인자는 0-기준 그대로다.
+    expect(ctx).toContain("part=1");
   });
 
   it("part가 하나뿐인 coverage 프롬프트는 없는 다른 part를 말하지 않는다", async () => {
@@ -633,6 +643,22 @@ describe("submitJudge", () => {
     // 범위 밖 part가 프롬프트 조립까지 흘러가면 overflow로 돌아와 리뷰를
     // 영구 종료시킨다. 거절은 거절로 끝나야 한다.
     expect(loadJudgment(meta.runId, "big.ts", d).terminal).toBeUndefined();
+  });
+
+  it("잘림 기록의 문구는 개요와 줄 수를 섞어 읽히지 않는다", async () => {
+    // {view:"outline"}의 shown은 선언 개수, total은 줄 수다. "50/1500"으로
+    // 찍으면 1500줄 중 50줄을 봤다는 뜻으로 읽힌다 — F4가 새로 넣은 바로 그
+    // 화면에 대해 틀린 말이다.
+    expect(describeTruncation({ view: "outline", shown: 50, total: 1500 })).toContain(
+      "declaration"
+    );
+    expect(describeTruncation({ view: "outline", shown: 50, total: 1500 })).toContain("line");
+    expect(describeTruncation({ view: "lines", shown: 269, total: 1500 })).toBe(
+      "269 of 1500 line(s)"
+    );
+    expect(describeTruncation({ view: "diff", shown: 40, total: 90 })).toBe(
+      "40 of 90 diff line(s)"
+    );
   });
 
   it("전체를 본 판정에는 잘림 기록이 붙지 않는다", async () => {
@@ -1339,6 +1365,29 @@ describe("judge part 프롬프트", () => {
     expect(prompt).toContain("r0");            // 지적 요약에는 모든 rule이 있다
     expect(prompt).not.toContain("고친 코드"); // 수정안 본문은 없다
     expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_BYTES);
+  });
+
+  it("planner가 재는 프롬프트는 실제 unsplit 프롬프트보다 항상 크다", async () => {
+    // judgePartPlanFor는 widest scope로 재고, 그 값이 예산 안이면 part 하나로
+    // 계획한다. 그런데 실제로 조립되는 것은 scope 없는 프롬프트다. 이 부등식이
+    // 뒤집히면 "한 part로 계획했는데 조립에서 overflow" — 파일이 통째로
+    // terminal INCOMPLETE가 된다. 상수 여유(~111B)라 입력으로는 깎이지 않지만
+    // 문구를 고치면 조용히 음수가 될 수 있다.
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "md", d);
+    const runMetaLoaded = loadRun(meta.runId, d)!;
+    const review = readFileReviewResult(meta.runId, "a.ts", d)!;
+    const judgment = loadJudgment(meta.runId, "a.ts", d);
+    const all = review.findings.map((_, index) => index);
+    const unscoped = buildJudgePrompt(runMetaLoaded, review, judgment, d) as string;
+    const widest = buildJudgePrompt(runMetaLoaded, review, judgment, d, all, {
+      number: review.findings.length,
+      total: review.findings.length + 1,
+    }) as string;
+    expect(Buffer.byteLength(unscoped, "utf8")).toBeLessThan(
+      Buffer.byteLength(widest, "utf8")
+    );
   });
 
   it("part 하나로 끝나면 기존 프롬프트와 동일하다", async () => {

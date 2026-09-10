@@ -83,6 +83,25 @@ export const JudgeTruncationSchema = z.object({
 
 export type JudgeTruncation = z.infer<typeof JudgeTruncationSchema>;
 
+/**
+ * One truncated view, in words.
+ *
+ * The units differ by view — `outline` counts DECLARATIONS against LINES — so
+ * they are named here rather than left to a bare "50/1500", which reads as
+ * "50 of 1500 lines shown" and is wrong for the one view that does not count
+ * lines at all.
+ */
+export function describeTruncation(shown: JudgeTruncation): string {
+  switch (shown.view) {
+    case "outline":
+      return `${shown.shown} declaration(s) outlined over ${shown.total} line(s), no bodies`;
+    case "diff":
+      return `${shown.shown} of ${shown.total} diff line(s)`;
+    default:
+      return `${shown.shown} of ${shown.total} line(s)`;
+  }
+}
+
 export const JudgeAttemptSchema = z.object({
   /** Monotonic FileReviewResult revision this attempt judged. */
   reviewRevision: z.number().int().positive().default(1),

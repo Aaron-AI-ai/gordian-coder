@@ -71,6 +71,20 @@ export function reviewReworkStatus(
   return attempt.verdict;
 }
 
+/**
+ * The "you already sent this one" sentence, in the 1-based numbering every
+ * other part message uses.
+ *
+ * Shared by judgeContext and submitJudge on purpose: the two describe the SAME
+ * submission, and they drifted apart once already — one 0-based, one 1-based,
+ * in the same file. An orchestrator reading both back to back spawns the wrong
+ * part. Bare part numbers in prose are 1-based; a `part=N` tool argument stays
+ * 0-based, which is why the two are never in the same clause.
+ */
+function alreadySubmittedLine(file: string, part: number, total: number): string {
+  return `ℹ️ part ${part + 1}/${total} of ${file} was already submitted`;
+}
+
 /** Everything a judge subagent needs: the change, the submitted review, the
  * criteria, and the submission instructions. Stateless — no session joins. */
 export function judgeContext(runId: string, file: string, cwd: string, part?: number): string {
@@ -126,7 +140,8 @@ export function judgeContext(runId: string, file: string, cwd: string, part?: nu
     const next = Array.from({ length: total }, (_, i) => i).find((i) => !submitted.includes(i));
     return next === undefined
       ? `ℹ️ Every part of ${file} was already submitted; the verdict is being assembled. Do NOT judge it again.`
-      : `ℹ️ part ${requested} of ${file} was already submitted. Spawn a NEW f-judge for part ${next}: call f_review_judge_context with runId="${runId}", file="${file}", part=${next}.`;
+      : `${alreadySubmittedLine(file, requested, total)}. Spawn a NEW f-judge for the next part: ` +
+        `call f_review_judge_context with runId="${runId}", file="${file}", part=${next}.`;
   }
 
   const prompt = buildPartPrompt(meta, result, judgment, cwd, requested, plan);
@@ -475,7 +490,7 @@ async function submitJudgeSerialized(
     if (submitted.has(part)) {
       const next = firstMissing();
       return [
-        `ℹ️ part ${part + 1}/${totalParts} of ${file} was already submitted; no new record was made.`,
+        `${alreadySubmittedLine(file, part, totalParts)}; no new record was made.`,
         ...(next === undefined ? [] : nextPartInstruction(runId, file, next)),
       ].join("\n");
     }
