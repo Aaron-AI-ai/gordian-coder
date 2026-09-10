@@ -19,6 +19,7 @@ import { readFcqFile, renderFcqEvidence } from "../evidence/fcq";
 import { loadRun, type RunMeta } from "./artifact";
 import { runDir, type PersistedFileReviewResult } from "./artifact";
 import { planJudgeParts, type JudgePartPlan } from "./judge-parts";
+import { fileDeclarations } from "./segment";
 import {
   DEFAULT_JUDGE_THRESHOLD,
   artifactIdentity,
@@ -545,10 +546,45 @@ export function buildPartPrompt(
   return coveragePrompt(meta, result, cwd, part, total);
 }
 
+/** What the coverage judge was actually shown. `whole` is the entire change;
+ * `outline` is every declaration without its body; `partial` is a leading cut. */
+type CoverageView = { text: string; shownTo: number; kind: "whole" | "outline" | "partial" };
+
+/**
+ * The file as a declaration outline: every declared symbol with the line it
+ * starts on, and no bodies.
+ *
+ * Spec §2 asks the coverage part for 파일 구조 — file structure — and the byte
+ * cap on raw leading lines is not that: on the spec's own 1431-line case it
+ * shows roughly the first 497, so criterion 5 (a fifth of the verdict) is
+ * scored over a third of the file and the rest is reported back as unexamined.
+ * A whole-file outline fits the same file in a few KB.
+ *
+ * `null` when the file yields no declarations — `fileDeclarations` knows the
+ * TS/JS/Python shapes, so a Java or Kotlin source comes back empty — or when
+ * the outline is itself too big. Either way the leading-lines outline stays as
+ * the fallback: worse, but never worse than nothing.
+ */
+function declarationOutline(
+  file: string,
+  content: string,
+  totalLines: number,
+  budget: number
+): string | null {
+  const declared = [...fileDeclarations(content)].sort((a, b) => a[1] - b[1]);
+  if (!declared.length) return null;
+  const text = [
+    `File: ${file} (Total lines: ${totalLines})`,
+    `DECLARATION OUTLINE — every symbol this file declares, and its line.`,
+    ...declared.map(([name, line]) => `L${line}: ${name}`),
+  ].join("\n");
+  return byteLen(text) <= budget ? text : null;
+}
+
 /**
  * The file as shown to the coverage judge: whole when it fits the byte budget,
- * otherwise the longest leading run of lines that does, plus how far that run
- * actually reaches.
+ * else a declaration outline of the whole file, else the longest leading run of
+ * lines that fits, plus how far that run actually reaches.
  *
  * `renderFileContent` caps CHARACTERS, so a byte budget cannot be handed to it
  * as `maxChars`: a multi-byte source overruns it, and — worse — its character
@@ -563,7 +599,7 @@ function coverageOutline(
   content: string,
   totalLines: number,
   budget: number
-): { text: string; shownTo: number } {
+): CoverageView {
   // An explicit end line with a matching line cap and no character cap: the
   // renderer then truncates nothing, so its header describes what is really there.
   const render = (lines: number): string =>
@@ -571,6 +607,11 @@ function coverageOutline(
 
   let shownTo = totalLines;
   let text = render(shownTo);
+  if (byteLen(text) <= budget) return { text, shownTo, kind: "whole" };
+
+  const outline = declarationOutline(file, content, totalLines, budget);
+  if (outline) return { text: outline, shownTo: totalLines, kind: "outline" };
+
   // Shrink by the measured bytes-per-line ratio rather than a line at a time.
   // The estimate only ever undershoots (the header is a fixed cost the ratio
   // charges to the body), so this converges in two or three passes.
@@ -578,7 +619,7 @@ function coverageOutline(
     shownTo = Math.max(1, Math.floor((shownTo * budget) / byteLen(text)) - 1);
     text = render(shownTo);
   }
-  return { text, shownTo };
+  return { text, shownTo, kind: "partial" };
 }
 
 /**
@@ -663,12 +704,24 @@ function coveragePrompt(
           `coverage gaps — judge coverage only over the lines below.`,
         ];
 
+  const outlineHeading = [
+    `### The file under review — ${totalLines} lines, STRUCTURE ONLY`,
+    `The file is too large to show whole, so below is every symbol it declares`,
+    `with the line it starts on — no bodies. Judge coverage over that structure:`,
+    `which declared areas the review never looked at. Do NOT report a`,
+    `declaration as a gap merely because you cannot see its body.`,
+  ];
+
   const of = diff ? diff.replace(/\n$/, "").split("\n").length : totalLines;
   // Everything except the outline, measured with the longest heading variant,
   // so what is left over is a budget the assembled prompt cannot exceed.
   const budget = Math.min(
     JUDGE_CHANGE_MAX_BYTES,
-    JUDGE_CONTEXT_MAX_BYTES - byteLen(assemble(partialHeading(of, of), ""))
+    JUDGE_CONTEXT_MAX_BYTES -
+      Math.max(
+        byteLen(assemble(partialHeading(of, of), "")),
+        byteLen(assemble(outlineHeading, ""))
+      )
   );
   if (budget <= 0) {
     return contextOverflow(
@@ -676,10 +729,16 @@ function coveragePrompt(
     );
   }
 
-  const { text, shownTo } = diff
+  const view = diff
     ? diffOutline(diff, of, budget)
     : coverageOutline(result.file, content, totalLines, budget);
-  const prompt = assemble(shownTo >= of ? wholeHeading : partialHeading(shownTo, of), text);
+  const heading =
+    view.kind === "whole"
+      ? wholeHeading
+      : view.kind === "outline"
+        ? outlineHeading
+        : partialHeading(view.shownTo, of);
+  const prompt = assemble(heading, view.text);
   return byteLen(prompt) <= JUDGE_CONTEXT_MAX_BYTES
     ? prompt
     : contextOverflow(`the assembled coverage prompt is ${byteLen(prompt)} bytes`);
@@ -688,13 +747,9 @@ function coveragePrompt(
 /** The diff as the coverage judge sees it: whole when it fits the byte budget,
  * else its leading lines. The half line a byte cut leaves is dropped, so the
  * reported count matches what is actually there. */
-function diffOutline(
-  diff: string,
-  totalDiffLines: number,
-  budget: number
-): { text: string; shownTo: number } {
-  if (byteLen(diff) <= budget) return { text: diff, shownTo: totalDiffLines };
+function diffOutline(diff: string, totalDiffLines: number, budget: number): CoverageView {
+  if (byteLen(diff) <= budget) return { text: diff, shownTo: totalDiffLines, kind: "whole" };
   const kept = sliceBytes(diff, budget).split("\n");
   const text = kept.length > 1 ? kept.slice(0, -1).join("\n") : kept.join("\n");
-  return { text, shownTo: text.split("\n").length };
+  return { text, shownTo: text.split("\n").length, kind: "partial" };
 }

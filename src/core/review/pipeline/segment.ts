@@ -72,8 +72,10 @@ const DECL_PATTERNS = [
   /^\s*(?:async\s+)?def\s+([A-Za-z_$][\w$]*)/, // python
 ];
 
-/** Declared symbol → 1-based line of its first declaration. */
-function fileDeclarations(content: string): Map<string, number> {
+/** Declared symbol → 1-based line of its first declaration. Knows the
+ * TS/JS/Python shapes in DECL_PATTERNS; a source it cannot parse yields an
+ * empty map, and every caller must have a fallback for that. */
+export function fileDeclarations(content: string): Map<string, number> {
   const decls = new Map<string, number>();
   const lines = content.replace(/\n$/, "").split("\n");
   lines.forEach((line, i) => {

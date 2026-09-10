@@ -111,6 +111,24 @@ const manyFindings = (n: number): FileReviewResult => ({
   partial: false,
 });
 
+/** 선언이 파일 전체에 흩어진 대형 whole-file 런. 앞부분만 보여주면 뒤쪽
+ * 선언은 심사관 눈에 아예 없다. */
+async function structuredRun() {
+  const d = gitRepo();
+  const body = (i: number) =>
+    [
+      `export function handler${i}(input: string): string {`,
+      ...Array.from({ length: 28 }, (_, j) => `  // ${i}-${j} 아주 긴 설명 주석을 여러 번 반복한다 반복한다 반복한다`),
+      `}`,
+    ].join("\n");
+  writeFileSync(
+    join(d, "big.ts"),
+    Array.from({ length: 50 }, (_, i) => body(i)).join("\n") + "\n"
+  );
+  const meta = await createRun(baseMeta({ targets: ["big.ts"], whole: true, range: null }), d);
+  return { d, meta };
+}
+
 /** 3000줄짜리 파일 중 몇 줄만 바꾼 diff 모드 런. */
 async function bigDiffRun() {
   const d = dir();
@@ -1281,6 +1299,46 @@ describe("judge part 프롬프트", () => {
     expect(prompt).toContain(`\n${shown}|const v${shown - 1} =`);
     expect(prompt).not.toContain(`\n${shown + 1}|const v${shown} =`);
     expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_BYTES);
+  });
+
+  it("통째로 못 보여주는 파일은 앞부분 원문이 아니라 선언 개요를 받는다", async () => {
+    // 명세 §2가 요구하는 입력은 "파일 구조와 전체 지적 요약"이다. 앞에서부터
+    // 예산만큼 잘라 붙이면 기준 5번(배점의 20%)을 파일 앞 3분의 1만 보고
+    // 채점하게 되고, 뒤쪽 선언은 전부 "안 살펴본 영역"으로 신고된다.
+    const { d, meta } = await structuredRun();
+    await writeFileReview(meta.runId, { ...manyFindings(0), findings: [] }, "md", d);
+    const runMetaLoaded = loadRun(meta.runId, d)!;
+    const review = readFileReviewResult(meta.runId, "big.ts", d)!;
+    const judgment = loadJudgment(meta.runId, "big.ts", d);
+    const plan = judgePartPlanFor(runMetaLoaded, review, judgment, d);
+    const prompt = buildPartPrompt(
+      runMetaLoaded, review, judgment, d, plan.findingParts.length, plan
+    ) as string;
+    expect(typeof prompt).toBe("string");
+    // 마지막 선언까지 전부 보인다 — 앞부분 절단이면 없다.
+    expect(prompt).toContain("handler0");
+    expect(prompt).toContain("handler49");
+    // 본문은 싣지 않는다.
+    expect(prompt).not.toContain("아주 긴 설명 주석");
+    // 앞부분만 보여준 척하는 안내가 아니다.
+    expect(prompt).not.toContain("were NOT shown to you");
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_BYTES);
+  });
+
+  it("선언을 못 찾는 파일은 지금까지의 앞부분 개요로 물러선다", async () => {
+    // fileDeclarations는 TS/JS/Python만 안다. Java 소스는 선언이 0건이라
+    // 개요를 만들 수 없고, 그때는 바이트 상한 원문 개요가 그대로 남아야 한다.
+    const { d, meta } = await bigRun();
+    await writeFileReview(meta.runId, { ...manyFindings(0), findings: [] }, "md", d);
+    const runMetaLoaded = loadRun(meta.runId, d)!;
+    const review = readFileReviewResult(meta.runId, "big.ts", d)!;
+    const judgment = loadJudgment(meta.runId, "big.ts", d);
+    const plan = judgePartPlanFor(runMetaLoaded, review, judgment, d);
+    const prompt = buildPartPrompt(
+      runMetaLoaded, review, judgment, d, plan.findingParts.length, plan
+    ) as string;
+    expect(prompt).toContain("were NOT shown to you");
+    expect(prompt).toContain("of 3000");
   });
 
   it("diff 모드에서는 coverage part도 diff만 보여준다", async () => {
