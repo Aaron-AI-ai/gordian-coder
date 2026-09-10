@@ -559,6 +559,34 @@ describe("submitJudge", () => {
     expect(await submitJudge(judgePayload(meta.runId, 100), d)).toContain("Judge INCOMPLETE");
   });
 
+  it("잘린 화면으로 내린 판정은 무엇을 봤는지 함께 기록한다", async () => {
+    // coverage-only 구제로 통과한 대형 클린 리뷰는, 심사관이 파일 전체를 본
+    // 판정과 파일에서 구분되지 않았다. 리포트도 나중에 읽는 사람도 알 길이
+    // 없다.
+    const { d, meta } = await bigRun();
+    await writeFileReview(meta.runId, { ...manyFindings(0), findings: [] }, "md", d);
+    const out = await submitJudge(
+      { runId: meta.runId, file: "big.ts", part: 0, findingJudgments: [], coverageGaps: [], score: 90, feedback: "ok" },
+      d
+    );
+    expect(out).toContain("Judge PASS");
+    const attempt = loadJudgment(meta.runId, "big.ts", d).attempts[0]!;
+    expect(attempt.verdict).toBe("pass");
+    expect(attempt.truncated).toBeDefined();
+    expect(attempt.truncated!.view).toBe("lines");
+    expect(attempt.truncated!.total).toBe(3000);
+    expect(attempt.truncated!.shown).toBeGreaterThan(0);
+    expect(attempt.truncated!.shown).toBeLessThan(3000);
+  });
+
+  it("전체를 본 판정에는 잘림 기록이 붙지 않는다", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+    await submitJudge(judgePayload(meta.runId, 90), d);
+    expect(loadJudgment(meta.runId, "a.ts", d).attempts[0]!.truncated).toBeUndefined();
+  });
+
   it("truncates runaway judge feedback instead of persisting a blob", async () => {
     const d = gitRepo();
     const meta = await createRun(baseMeta(), d);

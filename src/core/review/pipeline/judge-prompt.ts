@@ -25,6 +25,7 @@ import {
   artifactIdentity,
   type FileJudgment,
   type JudgeTerminal,
+  type JudgeTruncation,
 } from "./judge-store";
 
 /** Cap on the change excerpt embedded in the judge context. */
@@ -181,8 +182,11 @@ export function contextOverflow(reason: string): JudgeContextOverflow {
   return { reason };
 }
 
-export function isContextOverflow(value: string | JudgeContextOverflow): value is JudgeContextOverflow {
-  return typeof value !== "string";
+/** Structural, not "not a string": the part context below is an object too. */
+export function isContextOverflow<T>(
+  value: T | JudgeContextOverflow
+): value is JudgeContextOverflow {
+  return typeof value === "object" && value !== null && "reason" in value;
 }
 
 /** Merge overlapping finding windows so nearby anchors do not inject the same
@@ -507,7 +511,14 @@ export function judgePartPlanFor(
   return planJudgeParts(result.findings.length, measure, JUDGE_CONTEXT_MAX_BYTES);
 }
 
-/** One part's prompt. `part === plan.findingParts.length` is the coverage part. */
+/** A part's prompt, plus what its judge was NOT shown. */
+export interface JudgePartContext {
+  prompt: string;
+  /** Set when this part scored less than the whole change. */
+  truncated?: JudgeTruncation;
+}
+
+/** One part's prompt, as a plain string. */
 export function buildPartPrompt(
   meta: RunMeta,
   result: PersistedFileReviewResult,
@@ -516,8 +527,21 @@ export function buildPartPrompt(
   part: number,
   plan: JudgePartPlan
 ): string | JudgeContextOverflow {
+  const built = buildPartContext(meta, result, judgment, cwd, part, plan);
+  return isContextOverflow(built) ? built : built.prompt;
+}
+
+/** One part's prompt. `part === plan.findingParts.length` is the coverage part. */
+export function buildPartContext(
+  meta: RunMeta,
+  result: PersistedFileReviewResult,
+  judgment: FileJudgment,
+  cwd: string,
+  part: number,
+  plan: JudgePartPlan
+): JudgePartContext | JudgeContextOverflow {
   const total = plan.findingParts.length + (plan.hasCoveragePart ? 1 : 0);
-  if (part < 0 || part >= total) {
+  if (!Number.isInteger(part) || part < 0 || part >= total) {
     return contextOverflow(`part ${part} does not exist (this review has ${total} part(s))`);
   }
   // An unsplit review gets exactly the prompt it has always got: one judge sees
@@ -534,21 +558,31 @@ export function buildPartPrompt(
     // synthesiseParts scores either shape correctly (no findings ⇒
     // coverage.score). A review WITH findings never takes this path — dropping
     // its findings from judging to salvage the prompt would silently pass them.
-    if (result.findings.length || !isContextOverflow(whole)) return whole;
+    if (result.findings.length || !isContextOverflow(whole)) {
+      return isContextOverflow(whole) ? whole : { prompt: whole };
+    }
     return coveragePrompt(meta, result, cwd, part, total);
   }
   if (part < plan.findingParts.length) {
-    return buildJudgePrompt(meta, result, judgment, cwd, plan.findingParts[part], {
+    const prompt = buildJudgePrompt(meta, result, judgment, cwd, plan.findingParts[part], {
       number: part,
       total,
     });
+    return isContextOverflow(prompt) ? prompt : { prompt };
   }
   return coveragePrompt(meta, result, cwd, part, total);
 }
 
 /** What the coverage judge was actually shown. `whole` is the entire change;
  * `outline` is every declaration without its body; `partial` is a leading cut. */
-type CoverageView = { text: string; shownTo: number; kind: "whole" | "outline" | "partial" };
+type CoverageView = {
+  text: string;
+  /** How far into the change the view reaches — what the heading claims. */
+  shownTo: number;
+  kind: "whole" | "outline" | "partial";
+  /** Declarations listed, for `outline`. */
+  declared?: number;
+};
 
 /**
  * The file as a declaration outline: every declared symbol with the line it
@@ -610,7 +644,14 @@ function coverageOutline(
   if (byteLen(text) <= budget) return { text, shownTo, kind: "whole" };
 
   const outline = declarationOutline(file, content, totalLines, budget);
-  if (outline) return { text: outline, shownTo: totalLines, kind: "outline" };
+  if (outline) {
+    return {
+      text: outline,
+      shownTo: totalLines,
+      kind: "outline",
+      declared: outline.split("\n").length - 2,
+    };
+  }
 
   // Shrink by the measured bytes-per-line ratio rather than a line at a time.
   // The estimate only ever undershoots (the header is a fixed cost the ratio
@@ -634,7 +675,7 @@ function coveragePrompt(
   cwd: string,
   part: number,
   total: number
-): string | JudgeContextOverflow {
+): JudgePartContext | JudgeContextOverflow {
   const ref = afterRef(meta.range);
   const content = readFileAt(cwd, ref, result.file);
   if (content === null) {
@@ -739,9 +780,18 @@ function coveragePrompt(
         ? outlineHeading
         : partialHeading(view.shownTo, of);
   const prompt = assemble(heading, view.text);
-  return byteLen(prompt) <= JUDGE_CONTEXT_MAX_BYTES
-    ? prompt
-    : contextOverflow(`the assembled coverage prompt is ${byteLen(prompt)} bytes`);
+  if (byteLen(prompt) > JUDGE_CONTEXT_MAX_BYTES) {
+    return contextOverflow(`the assembled coverage prompt is ${byteLen(prompt)} bytes`);
+  }
+  // What the judge did NOT see, recorded so a later reader can tell a salvaged
+  // coverage-only PASS from one made over the whole change.
+  const truncated: JudgeTruncation | undefined =
+    view.kind === "whole"
+      ? undefined
+      : view.kind === "outline"
+        ? { view: "outline", shown: view.declared ?? 0, total: totalLines }
+        : { view: diff ? "diff" : "lines", shown: view.shownTo, total: of };
+  return truncated ? { prompt, truncated } : { prompt };
 }
 
 /** The diff as the coverage judge sees it: whole when it fits the byte budget,

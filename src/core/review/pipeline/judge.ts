@@ -23,7 +23,7 @@ import { join, resolve } from "node:path";
 import { loadRun } from "./artifact";
 import { runDir, type PersistedFileReviewResult } from "./artifact";
 import { DEFAULT_JUDGE_THRESHOLD, JudgeIdentitySchema, JudgeSubmitSchema, MAX_INVALID_JUDGE_SUBMISSIONS, MAX_JUDGE_ROUNDS, artifactIdentity, attemptMatchesReview, currentPendingParts, judgmentPath, consistencyValidationError, indexValidationError, loadJudgment, loadReviewResult, persistJudgment, persistJudgmentSync, submissionHash, terminalMatchesReview, terminalMessage, type FileJudgment, type JudgeAttempt, type JudgeSubmitPayload, type JudgeTerminal } from "./judge-store";
-import { buildPartPrompt, contextOverflowTerminal, isContextOverflow, judgePartPlanFor, overflowContext } from "./judge-prompt";
+import { buildPartContext, buildPartPrompt, contextOverflowTerminal, isContextOverflow, judgePartPlanFor, overflowContext } from "./judge-prompt";
 import { FEEDBACK_MAX_CHARS, synthesiseParts } from "./judge-parts";
 
 /** Effective rework cap for a run: `judgeRounds` snapshotted into the run
@@ -397,9 +397,9 @@ async function submitJudgeSerialized(
   // evidence could never fit in the judge's bounded context. Unscoped, this
   // check terminalized on first submit exactly the reviews the split salvages —
   // the coverage-only and oversized-findings cases judgeContext now serves.
-  const prompt = buildPartPrompt(meta, review, judgment, cwd, part, plan);
-  if (isContextOverflow(prompt)) {
-    judgment.terminal = contextOverflowTerminal(review, prompt.reason);
+  const context = buildPartContext(meta, review, judgment, cwd, part, plan);
+  if (isContextOverflow(context)) {
+    judgment.terminal = contextOverflowTerminal(review, context.reason);
     await persistJudgment(runId, file, cwd, judgment);
     return terminalMessage(file, judgment.terminal);
   }
@@ -553,6 +553,15 @@ async function submitJudgeSerialized(
     return recordInvalidSubmission(runId, file, review, payload, inconsistent, cwd, budget);
   }
 
+  // What the judge was actually shown, when it was less than the whole change.
+  // The coverage part owns it, whichever part happened to arrive last — so for
+  // a split review it is re-derived here rather than read off `context`.
+  const shownContext =
+    totalParts > 1 && plan.hasCoveragePart
+      ? buildPartContext(meta, review, judgment, cwd, plan.findingParts.length, plan)
+      : context;
+  const truncated = isContextOverflow(shownContext) ? undefined : shownContext.truncated;
+
   // Synthesised or not, the verdict comes from the score and the threshold.
   const verdict: JudgeAttempt["verdict"] = submission.score >= threshold ? "pass" : "rework";
   const attempt: JudgeAttempt = {
@@ -564,6 +573,7 @@ async function submitJudgeSerialized(
     feedback: submission.feedback,
     coverageGaps: submission.coverageGaps,
     findingJudgments: submission.findingJudgments,
+    ...(truncated ? { truncated } : {}),
     at: new Date().toISOString(),
   };
   judgment.attempts.push(attempt);

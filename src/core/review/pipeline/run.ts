@@ -405,6 +405,7 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
   let judgeBelowThreshold: string[] = [];
   let judgeUnjudged: string[] = [];
   let judgeIncomplete: string[] = [];
+  let judgeTruncated: string[] = [];
   if (meta.judge) {
     const threshold = meta.judgeThreshold ?? DEFAULT_JUDGE_THRESHOLD;
     const judgments = allJudgments;
@@ -441,6 +442,13 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
     judgeUnjudged = reviewed.filter(
       (file) => !currentTerminal(file) && !currentAttempt(file)
     );
+    // Not a quality reason — the verdict stands. But a PASS reached over a
+    // salvaged partial view is not the same evidence as one reached over the
+    // whole change, and nothing else says so.
+    judgeTruncated = reviewed.flatMap((file) => {
+      const shown = currentAttempt(file)?.truncated;
+      return shown ? [`${file} (${shown.view} ${shown.shown}/${shown.total})`] : [];
+    });
   }
 
   const qualityReasons: string[] = [];
@@ -510,6 +518,9 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
     `${renderFcqSection(meta.fcq, fcqSummary)}${context}`
   );
 
+  const truncatedWarn = judgeTruncated.length
+    ? ` ℹ️ ${judgeTruncated.length} file(s) were judged over a partial view of the change: ${judgeTruncated.join(", ")}.`
+    : "";
   const forcedWarn = forced.length
     ? ` ⚠️ ${forced.length} file(s) force-advanced by bounded recovery: ${forced.join(", ")}.`
     : "";
@@ -564,17 +575,17 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
   if (missing.length) {
     response = (
       `⚠️ INCOMPLETE — ${reviewed.length}/${meta.targets.length} file(s) reviewed; missing: ${missing.join(", ")}.` +
-      `${gate}${forcedWarn} Partial report: ${path}\n` +
+      `${gate}${forcedWarn}${truncatedWarn} Partial report: ${path}\n` +
       `Re-spawn ONE f-reviewer subagent per missing file (same runId), then call f_review_finalize again. Do this at most once.`
     );
   } else if (qualityIncomplete) {
     response = (
       `⚠️ Run terminated — INCOMPLETE: ${reviewed.length}/${meta.targets.length} review artifact(s) present; ` +
-      `${qualityReasons.join("; ")}.${gate}${forcedWarn}${fixWarn} Report: ${path}`
+      `${qualityReasons.join("; ")}.${gate}${forcedWarn}${truncatedWarn}${fixWarn} Report: ${path}`
     );
   } else {
     const fcqNote = fcqSummary ? ` (incl. ${fcqSummary.targetViolations} from fcq)` : "";
-    response = `✅ Run complete — ${reviewed.length} file(s), ${all.length} issue(s)${fcqNote}.${gate}${forcedWarn}${fixWarn} Report: ${path}`;
+    response = `✅ Run complete — ${reviewed.length} file(s), ${all.length} issue(s)${fcqNote}.${gate}${forcedWarn}${truncatedWarn}${fixWarn} Report: ${path}`;
   }
   await Bun.write(
     cachePath,

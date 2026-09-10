@@ -64,6 +64,25 @@ export type JudgeSubmitPayload = z.infer<typeof JudgeSubmitSchema>;
 // Persisted judgment shape — validated on every load: judgment files are
 // external state (CLAUDE.md: runtime validation), and a shape-corrupt file
 // must degrade to "never judged", not crash the rework round or finalize.
+/**
+ * What the judge was shown, when it was not the whole change.
+ *
+ * A coverage-only PASS salvaged from a file too large to show whole is
+ * otherwise indistinguishable on disk from a judgment made over everything.
+ * Optional, so every judgment file written before this still loads.
+ */
+export const JudgeTruncationSchema = z.object({
+  /** `lines` — a leading run of source lines; `outline` — every declaration of
+   * the whole file with no bodies; `diff` — a leading run of diff lines. */
+  view: z.enum(["lines", "outline", "diff"]),
+  /** Lines shown, or declarations listed for `outline`. */
+  shown: z.number().int().nonnegative(),
+  /** Lines the change has, or the file's line count for `outline`. */
+  total: z.number().int().nonnegative(),
+});
+
+export type JudgeTruncation = z.infer<typeof JudgeTruncationSchema>;
+
 export const JudgeAttemptSchema = z.object({
   /** Monotonic FileReviewResult revision this attempt judged. */
   reviewRevision: z.number().int().positive().default(1),
@@ -78,6 +97,8 @@ export const JudgeAttemptSchema = z.object({
   feedback: z.string(),
   coverageGaps: z.array(z.string()),
   findingJudgments: z.array(FindingJudgmentSchema),
+  /** Set when this verdict was reached over less than the whole change. */
+  truncated: JudgeTruncationSchema.optional(),
   at: z.string(), // ISO timestamp
 });
 
