@@ -516,4 +516,86 @@ describe("fixer part 분할", () => {
     expect(out).not.toContain("NO entry");
     expect(out).toContain("COMPLETE");
   });
+
+  it("선언된 part가 제출 범위를 정한다 — 앞 part의 헛짚은 앵커가 뒤 part의 재요청을 삼키지 않는다", async () => {
+    const { d, runId } = await bigFixRun(60);
+    const plan = fixPartPlan(runId, "src/Big.java", d);
+    const entry = (i: number) => ({ line: 1 + i * 20, ruleId: `Rule${i}`, toBe: "x" });
+    const strayIndex = plan[1]![0]!;
+    // part 0의 fixer가 자기 몫을 다 채우면서, 본 적도 없는 part 1의 앵커를
+    // 하나 지어낸다. 앵커 추론만으로는 이 한 줄이 part 1을 "이미 제출됨"으로
+    // 만들어 다음 fixer의 재요청을 삼켰다.
+    const first = await submitFix(
+      { runId, file: "src/Big.java", part: 0, fixes: [...plan[0]!.map(entry), entry(strayIndex)] },
+      d
+    );
+    expect(first).toContain("COMPLETE");
+    // 지어낸 앵커는 저장되지 않는다. 남으면 part 1의 진짜 위반이 이미 고쳐진
+    // 것처럼 보이고, finalize가 그 코드를 리포트에 그대로 싣는다.
+    expect(loadFixes(runId, "src/Big.java", d).fixes.map((f) => f.ruleId)).not.toContain(
+      `Rule${strayIndex}`
+    );
+
+    // part 1의 fixer가 자기 항목 하나를 빠뜨린 채 제출한다 — 돌려보내야 한다.
+    const skipped = plan[1]![1]!;
+    const out = await submitFix(
+      {
+        runId,
+        file: "src/Big.java",
+        part: 1,
+        fixes: plan[1]!.filter((i) => i !== skipped).map(entry),
+      },
+      d
+    );
+    expect(out).toContain("NO entry");
+    expect(out).toContain(`L${1 + skipped * 20} `);
+    expect(out).not.toContain("COMPLETE");
+  });
+
+  it("선언된 part는 자기 몫만 본다 — 다른 part의 미기입을 자기에게 떠넘기지 않는다", async () => {
+    const { d, runId } = await bigFixRun(60);
+    const plan = fixPartPlan(runId, "src/Big.java", d);
+    const entry = (i: number) => ({ line: 1 + i * 20, ruleId: `Rule${i}`, toBe: "x" });
+    const out = await submitFix(
+      { runId, file: "src/Big.java", part: 0, fixes: plan[0]!.map(entry) },
+      d
+    );
+    expect(out).not.toContain("NO entry");
+    expect(out).toContain("COMPLETE");
+  });
+
+  it("범위 밖 part를 선언하면 거절하고 아무것도 기록하지 않는다", async () => {
+    const { d, runId } = await bigFixRun(60);
+    const plan = fixPartPlan(runId, "src/Big.java", d);
+    const out = await submitFix(
+      {
+        runId,
+        file: "src/Big.java",
+        part: plan.length,
+        fixes: [{ line: 1, ruleId: "Rule0", toBe: "x" }],
+      },
+      d
+    );
+    expect(out).toContain("does not exist");
+    expect(loadFixes(runId, "src/Big.java", d).fixes).toHaveLength(0);
+  });
+
+  it("part를 선언하지 않으면 지금과 똑같이 앵커로 범위를 잡는다", async () => {
+    const { d, runId } = await bigFixRun(60);
+    const plan = fixPartPlan(runId, "src/Big.java", d);
+    const entry = (i: number) => ({ line: 1 + i * 20, ruleId: `Rule${i}`, toBe: "x" });
+    const out = await submitFix({ runId, file: "src/Big.java", fixes: plan[0]!.map(entry) }, d);
+    expect(out).toContain("COMPLETE");
+    expect(out).not.toContain("NO entry");
+    expect(loadFixes(runId, "src/Big.java", d).fixes).toHaveLength(plan[0]!.length);
+  });
+
+  it("분할된 fix 컨텍스트가 제출할 part 번호를 알려준다", async () => {
+    const { d, runId } = await bigFixRun(60);
+    expect(fixContext(runId, "src/Big.java", d, 1)).toContain("part=1");
+    // 쪼개지지 않은 파일은 part를 아예 꺼내지 않는다.
+    const small = await bigFixRun(3);
+    expect(fixContext(small.runId, "src/Big.java", small.d)).not.toContain("part=");
+  });
+
 });

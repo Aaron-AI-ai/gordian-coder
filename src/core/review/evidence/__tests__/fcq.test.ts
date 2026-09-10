@@ -414,6 +414,21 @@ describe("run-mode integration", () => {
     expect(fixBlock).not.toContain("src/B.java");
   });
 
+  it("fix 지시문이 part 흐름을 알려준다", async () => {
+    const d = gitRepo();
+    fakeFcq(d);
+    writeFileSync(join(d, ".f-review.json"), JSON.stringify({ fcq: true, fcqFix: true, fcqOptions: { bin: join(d, "fcq-bin"), timeout: 30 } }));
+    const plan = await planReview({ commit: "HEAD" }, d);
+    const fixBlock = plan.slice(plan.indexOf("FIX PASS"), plan.indexOf("JUDGE GATE") + 1 || undefined);
+    expect(fixBlock).toContain("fixed in several parts");
+    expect(fixBlock).toContain("NEW f-fixer");
+    // 분할 단위는 언제나 "part"다. 같은 프롬프트에서 "batch"는 동시에 띄우는
+    // 서브에이전트 수(RUN_BATCH_SIZE)를 가리키므로, 분할을 그 낱말로 부르면
+    // 둘이 뭉개진다.
+    const partLine = fixBlock.split("\n").find((l) => l.includes("fixed in several parts"))!;
+    expect(partLine).not.toContain("batch");
+  });
+
   it("skips the fix pass entirely when no target has a violation", async () => {
     const d = gitRepo();
     fakeFcq(d);

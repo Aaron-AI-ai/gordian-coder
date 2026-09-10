@@ -169,22 +169,38 @@ export function createReviewModule(input: PluginInput): {
 
   const f_review_judge_context = tool({
     description:
-      "Judge-agent entry point (run mode): returns the change under review, the submitted findings, and the scoring criteria for one file of a run. Call before f_review_judge.",
+      "Judge-agent entry point (run mode): returns the change under review, the submitted findings, and the scoring criteria for one file of a run. A large review is judged in several parts; the result says which part this is and how many there are, and every later tool result names the part to do next. Each part needs its OWN fresh f-judge subagent. Call before f_review_judge.",
     args: {
       runId: z.string().min(1).describe("The runId of the reviewed run"),
       file: z.string().min(1).describe("The reviewed file to judge"),
+      part: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe(
+          "Which part of a split judgment to fetch. Pass only the part number a previous tool result told you to fetch; omit it otherwise."
+        ),
     },
     async execute(args) {
-      return judgeContext(args.runId, args.file, cwd);
+      return judgeContext(args.runId, args.file, cwd, args.part);
     },
   });
 
   const f_review_judge = tool({
     description:
-      "Submit a judge verdict for one file's review. The pass/rework verdict is derived from the score threshold; the result tells the orchestrator whether to accept the review or re-spawn the reviewer with feedback (rework cap enforced).",
+      "Submit a judge verdict for one file's review. The pass/rework verdict is derived from the score threshold; the result tells the orchestrator whether to accept the review, spawn a fresh f-judge for the next part of the same review, or re-spawn the reviewer with feedback (rework cap enforced).",
     args: {
       runId: z.string().min(1),
       file: z.string().min(1),
+      part: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe(
+          "The part number f_review_judge_context gave you. Omit it when it gave none."
+        ),
       findingJudgments: z
         .array(
           z.object({
@@ -212,13 +228,21 @@ export function createReviewModule(input: PluginInput): {
 
   const f_review_fix_context = tool({
     description:
-      "Fix pass (f-fixer only): the source of one file plus every static-analysis violation in it, to be turned into corrected code.",
+      "Fix pass (f-fixer only): the source of one file plus every static-analysis violation in it, to be turned into corrected code. A file with many violations is fixed in several parts; the result says which part this is, how many there are, and the part number to send back with the submission. Each part needs its OWN fresh f-fixer subagent.",
     args: {
       runId: z.string().min(1).describe("The runId returned by f_review_plan"),
       file: z.string().min(1).describe("Repo-relative path of the file to fix"),
+      part: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe(
+          "Which part of a split fix pass to fetch. Pass only the part number a previous tool result told you to fetch; omit it otherwise."
+        ),
     },
     async execute(args) {
-      return fixContext(args.runId, args.file, cwd);
+      return fixContext(args.runId, args.file, cwd, args.part);
     },
   });
 
@@ -228,6 +252,14 @@ export function createReviewModule(input: PluginInput): {
     args: {
       runId: z.string().min(1),
       file: z.string().min(1),
+      part: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe(
+          "The part number f_review_fix_context gave you — it scopes this submission to that part's violations. Omit it when it gave none."
+        ),
       fixes: z
         .array(
           z.object({

@@ -23,6 +23,8 @@ import {
   JUDGE_AGENT_TOOLS,
   reviewerAgentSteps,
   JUDGE_AGENT_STEPS,
+  JUDGE_AGENT_PROMPT,
+  FIXER_AGENT_PROMPT,
   REVIEW_COMMAND_NAME,
 } from "../prompts";
 import { MAX_RESUMES, DEFAULT_MAX_TOOL_CALLS } from "../../../../core/review";
@@ -517,5 +519,133 @@ describe("judge tool wiring", () => {
       ctx
     )) as string;
     expect(verdict).toContain("✅ Judge PASS");
+  });
+});
+
+describe("part 파라미터", () => {
+  // 이 어댑터가 코어의 분할 경로를 노출하는 유일한 지점이라, 여기 스키마가
+  // 방어의 전부다. 정수가 아닌 part(1.5)는 코어의 범위 검사를 그대로 통과해
+  // plan[1.5]!.map 에서 TypeError를 던졌다 — 거절 메시지가 아니라 예외였다.
+  const PART_TOOLS = [
+    "f_review_judge_context",
+    "f_review_judge",
+    "f_review_fix_context",
+    "f_review_fix_submit",
+  ] as const;
+
+  /** The arg schema, narrowed to the one method this test needs: ZodRawShape
+   * types its values as the opaque core type, which has no safeParse. */
+  const partArg = (schema: unknown): { safeParse(v: unknown): { success: boolean } } =>
+    schema as { safeParse(v: unknown): { success: boolean } };
+
+  it("네 개의 툴 모두 part를 받고, 정수/음수를 검증한다", () => {
+    const { mod } = moduleFor(gitRepo());
+    for (const name of PART_TOOLS) {
+      const part = partArg(mod.tools[name].args.part);
+      expect(part, `${name} must expose part`).toBeDefined();
+      expect(part.safeParse(0).success, `${name}: 0 is valid`).toBe(true);
+      expect(part.safeParse(3).success, `${name}: 3 is valid`).toBe(true);
+      expect(part.safeParse(undefined).success, `${name}: part is optional`).toBe(true);
+      expect(part.safeParse(1.5).success, `${name}: 1.5 must be refused`).toBe(false);
+      expect(part.safeParse(-1).success, `${name}: -1 must be refused`).toBe(false);
+    }
+  });
+
+  it("툴 설명이 part 흐름을 오케스트레이터에게 알린다", () => {
+    const { mod } = moduleFor(gitRepo());
+    for (const name of ["f_review_judge_context", "f_review_fix_context"] as const) {
+      expect(mod.tools[name].description, name).toContain("part");
+    }
+    // 분할 단위는 언제나 "part"다. "batch"는 같은 프롬프트에서 동시 서브에이전트
+    // 수(RUN_BATCH_SIZE)를 가리키는 낱말이라 겹쳐 쓰면 둘 다 뭉개진다.
+    for (const name of PART_TOOLS) {
+      expect(mod.tools[name].description, name).not.toContain("batch");
+    }
+  });
+
+  it("오케스트레이터 커맨드 템플릿이 part를 batch와 구분해 설명한다", () => {
+    // 이 템플릿은 "EXACTLY" 따르라는 하드 룰 목록이고, 그 안의 "파일당
+    // 서브에이전트 하나"는 part 흐름과 정면으로 어긋난다. 여기서 바로잡지
+    // 않으면 오케스트레이터는 part 1에서 멈춘다.
+    const { mod } = moduleFor(gitRepo());
+    const cfg: { agent: Record<string, unknown>; command: Record<string, { template: string }> } = {
+      agent: {},
+      command: {},
+    };
+    mod.config(cfg as never);
+    const template = cfg.command["f-review"]!.template;
+    expect(template).toContain("part");
+    expect(template).toContain("one per PART");
+    expect(template).toContain("never a batch");
+  });
+
+  it("판정관/수정관 프롬프트가 받은 part 번호를 제출에 실어 보내게 한다", () => {
+    // part를 실어 보내지 않으면 제출 범위는 앵커로 추측되고, 하나 삐끗한
+    // 앵커가 다음 part의 재요청을 삼킨다 — 서브에이전트 프롬프트가 그 필드를
+    // 채우는 유일한 상시 지시다.
+    expect(JUDGE_AGENT_PROMPT).toContain("part");
+    expect(FIXER_AGENT_PROMPT).toContain("part");
+  });
+
+  it("f_review_judge_context가 part를 코어까지 넘긴다", async () => {
+    const d = gitRepo();
+    const { mod } = moduleFor(d);
+    const planMsg = (await mod.tools.f_review_plan.execute(
+      { files: ["a.ts"], judge: true } as never,
+      ctx
+    )) as string;
+    const runId = /Run created: (\S+) /.exec(planMsg)![1];
+    const { writeFileReview } = await import("../../../../core/review");
+    await writeFileReview(
+      runId,
+      { file: "a.ts", assessed: [], findings: [], explorationCalls: 1, partial: false },
+      "# a",
+      d
+    );
+    // part를 코어로 넘기지 않으면 이 호출은 part 0을 서빙하고 만다.
+    const out = (await mod.tools.f_review_judge_context.execute(
+      { runId, file: "a.ts", part: 7 } as never,
+      ctx
+    )) as string;
+    expect(out).toContain("does not exist");
+  });
+
+  it("f_review_fix_context가 part를 코어까지 넘긴다", async () => {
+    const d = gitRepo();
+    const { mod } = moduleFor(d);
+    const planMsg = (await mod.tools.f_review_plan.execute(
+      { files: ["a.ts"] } as never,
+      ctx
+    )) as string;
+    const runId = /Run created: (\S+) /.exec(planMsg)![1];
+    const { runDir, loadRun } = await import("../../../../core/review/pipeline/artifact");
+    const { fcqShardPath } = await import("../../../../core/review/evidence/fcq");
+    writeFileSync(
+      join(runDir(runId, d), "run.json"),
+      JSON.stringify({
+        ...loadRun(runId, d),
+        fcq: { status: "ok", command: "fcq", durationMs: 1, reportPath: "r" },
+      })
+    );
+    mkdirSync(join(runDir(runId, d), "fcq", "files"), { recursive: true });
+    writeFileSync(
+      fcqShardPath(runDir(runId, d), "a.ts"),
+      JSON.stringify([
+        {
+          analyzer: "checkstyle",
+          ruleId: "R0",
+          description: "d",
+          category: "code-style",
+          severity: "MINOR",
+          line: 1,
+          message: "m",
+        },
+      ])
+    );
+    const out = (await mod.tools.f_review_fix_context.execute(
+      { runId, file: "a.ts", part: 4 } as never,
+      ctx
+    )) as string;
+    expect(out).toContain("does not exist");
   });
 });

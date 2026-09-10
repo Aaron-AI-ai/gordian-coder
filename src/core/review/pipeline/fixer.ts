@@ -79,6 +79,10 @@ export type Fix = z.infer<typeof FixSchema>;
 export const FixSubmitSchema = z.object({
   runId: z.string(),
   file: z.string(),
+  /** The part this submission answers, as fixContext handed it over. Omitted by
+   * an unsplit fix pass, and by every submission written before parts existed —
+   * those fall back to guessing the scope from the anchors carried. */
+  part: z.number().int().nonnegative().optional(),
   fixes: z.array(FixSchema).transform((a) => a.slice(0, FIX_MAX_ITEMS)),
 });
 export type FixSubmitPayload = z.infer<typeof FixSubmitSchema>;
@@ -230,8 +234,12 @@ export function fixContext(runId: string, file: string, cwd: string, part?: numb
   ];
   const budget = FIX_CONTEXT_MAX_BYTES - byteLen(head.join("\n")) - byteLen(tail.join("\n"));
   const body = [...head, ...fixSource(cwd, file, shown, budget), ...tail].join("\n");
+  // The part number has to travel back with the submission: without it the
+  // scope is guessed from the anchors, and one stray anchor then silences the
+  // next part's send-back.
   return plan.length > 1
-    ? `${body}\n\nThis file is fixed in ${plan.length} parts. After you submit, the orchestrator spawns a NEW f-fixer for the next part.`
+    ? `${body}\n\nThis file is fixed in ${plan.length} parts; submit with part=${requested}. ` +
+        `After you submit, the orchestrator spawns a NEW f-fixer for the next part.`
     : body;
 }
 
@@ -310,29 +318,46 @@ function fixKey(line: number | undefined, rule: string): string {
 export async function submitFix(payload: unknown, cwd: string): Promise<string> {
   const parsed = FixSubmitSchema.safeParse(payload);
   if (!parsed.success) return `Invalid fix submission: ${parsed.error.message}`;
-  const { runId, file, fixes } = parsed.data;
+  const { runId, file, fixes, part: declared } = parsed.data;
   const meta = loadRun(runId, cwd);
   if (!meta) return `Unknown run: ${runId}.`;
   if (!meta.targets.includes(file)) {
     return `❌ ${file} is not a target of run ${runId}.`;
   }
   const violations = readFcqFile(runDir(runId, cwd), file).slice(0, FIX_MAX_ITEMS);
+  const plan = planFixParts(cwd, file, violations);
+  // Refused before the write, like the context's own range check: a part that
+  // is not in the plan names no scope, and guessing one would put this
+  // submission back on the anchor heuristic it was added to replace.
+  if (declared !== undefined && declared >= plan.length) {
+    return (
+      `❌ part ${declared} does not exist for ${file} — this fix pass has ${plan.length} part(s) ` +
+      `(0..${plan.length - 1}). Nothing was recorded; re-submit with the part f_review_fix_context gave you.`
+    );
+  }
+  const keyOf = (index: number): string => fixKey(violations[index]!.line, violations[index]!.ruleId);
+  // A declared part IS the scope. An entry anchored outside it is a violation
+  // this fixer was never shown, so it is dropped rather than stored: kept, it
+  // made the owning part's violation read as already fixed, which both ate that
+  // part's send-back and shipped invented code for a line nobody reviewed.
+  const own = declared === undefined ? null : new Set(plan[declared]!.map(keyOf));
+  const accepted = own ? fixes.filter((f) => own.has(fixKey(f.line, f.ruleId))) : fixes;
+  const ignored = fixes.length - accepted.length;
   // Read before the write: what this part already recorded decides whether its
   // fixer is sent back for its gaps, and it must not be lost by the merge.
   const previous = loadFixes(runId, file, cwd).fixes;
   const merged = new Map(previous.map((f) => [fixKey(f.line, f.ruleId), f]));
-  for (const fix of fixes) merged.set(fixKey(fix.line, fix.ruleId), fix);
+  for (const fix of accepted) merged.set(fixKey(fix.line, fix.ruleId), fix);
   const nextFixes = [...merged.values()];
   const body: FileFixes = { file, fixes: nextFixes };
   await Bun.write(fixesPath(runId, file, cwd), JSON.stringify(body, null, 2));
 
-  const withCode = fixes.filter((f) => f.toBe?.trim()).length;
-  const fp = fixes.filter((f) => f.falsePositive).length;
+  const withCode = accepted.filter((f) => f.toBe?.trim()).length;
+  const fp = accepted.filter((f) => f.falsePositive).length;
   // Matched by anchor, not by count: two entries for one line while another
   // violation has none is exactly the gap a count comparison reports as clean.
-  const entered = new Set(fixes.map((f) => fixKey(f.line, f.ruleId)));
+  const entered = new Set(accepted.map((f) => fixKey(f.line, f.ruleId)));
   const already = new Set(previous.map((f) => fixKey(f.line, f.ruleId)));
-  const keyOf = (index: number): string => fixKey(violations[index]!.line, violations[index]!.ruleId);
   // A gap is a violation with no fix in the MERGED state — this submission's
   // entries plus what was already stored. Measuring against this submission
   // alone was right while submitFix overwrote; now that it merges, it reported
@@ -342,15 +367,20 @@ export async function submitFix(payload: unknown, cwd: string): Promise<string> 
     indices
       .map((index) => violations[index]!)
       .filter((v) => !entered.has(fixKey(v.line, v.ruleId)) && !already.has(fixKey(v.line, v.ruleId)));
-  // Scoped to the part(s) this submission actually answered. A split fixer only
-  // ever saw its own part's violations, so listing another part's back at it is
-  // an instruction to write code for lines it was never shown. A submission
-  // matching no part at all (empty, or all-junk anchors) falls back to the whole
-  // list — that fixer has nothing to go on either way.
-  const touched = planFixParts(cwd, file, violations).filter((part) =>
-    part.some((index) => entered.has(keyOf(index)))
-  );
-  const parts = touched.length ? touched : [violations.map((_, index) => index)];
+  // Scoped to the part(s) this submission answered. A split fixer only ever saw
+  // its own part's violations, so listing another part's back at it is an
+  // instruction to write code for lines it was never shown. With no declared
+  // part the scope is still guessed from the anchors — what every submission did
+  // before the field existed — and a submission matching no part at all (empty,
+  // or all-junk anchors) falls back to the whole list: that fixer has nothing to
+  // go on either way.
+  const guessed = plan.filter((indices) => indices.some((index) => entered.has(keyOf(index))));
+  const parts =
+    declared !== undefined
+      ? [plan[declared]!]
+      : guessed.length
+        ? guessed
+        : [violations.map((_, index) => index)];
   const missing = gaps(parts.flat());
   // A fixer already sent back once is not sent back again — decided per part on
   // that part's OWN prior state. Asking whether ANY touched violation was
@@ -358,7 +388,14 @@ export async function submitFix(payload: unknown, cwd: string): Promise<string> 
   // part 1's recorded fixes as part 2's retry, so part 2's real gaps got a ⚠️
   // and "COMPLETE" instead of the send-back they needed.
   const fresh = gaps(parts.filter((part) => !part.some((index) => already.has(keyOf(index)))).flat());
-  const recorded = `✅ ${file}: ${fixes.length} fix(es) recorded (${withCode} with code, ${fp} false positive(s)).`;
+  const recorded = [
+    `✅ ${file}: ${accepted.length} fix(es) recorded (${withCode} with code, ${fp} false positive(s)).`,
+    ignored
+      ? `ℹ️ ${ignored} entry(ies) were not for part ${declared} and were dropped — another f-fixer owns those violations. Do NOT re-send them.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
   if (!fresh.length) {
     return [
       recorded,

@@ -758,3 +758,32 @@ describe("finalizeRun", () => {
     expect(stale).not.toContain("✅ Run complete");
   });
 });
+
+describe("part 안내 문구", () => {
+  it("판정 게이트 지시문이 part 흐름을 설명한다", async () => {
+    const d = gitRepo();
+    const out = await planReview({ commit: "HEAD", judge: true }, d);
+    expect(out).toContain("part");
+    expect(out).toContain("f_review_judge_context");
+    // 오케스트레이터가 실제로 해야 할 일: part마다 새 f-judge를 띄운다.
+    expect(out).toContain("next part");
+    expect(out).toContain("OWN fresh f-judge");
+    // "batch"는 RUN_BATCH_SIZE(동시 서브에이전트 수) 전용 낱말이다. 분할
+    // 단위를 같은 낱말로 부르면 같은 프롬프트 안에서 둘이 뭉개진다.
+    const judgeBlock = out.slice(out.indexOf("JUDGE GATE"));
+    expect(judgeBlock).not.toContain("batch");
+  });
+
+  it("미제출 part가 남으면 finalize가 그 사실을 밝힌다", async () => {
+    // judge.test.ts의 "part가 남은 채로는 finalize가 미판정으로 처리한다"와
+    // 짝을 이룬다. 여기서는 문구만 확인한다.
+    const d = gitRepo();
+    const meta = await createRun({ ...baseMeta(["a.ts"]), judge: true }, d);
+    await writeFileReview(meta.runId, result("a.ts"), "# a", d);
+    const out = await finalizeRun(meta.runId, d);
+    expect(out).toContain("unjudged");
+    // 일부만 제출된 분할 판정도 여기 걸린다는 사실과, 그 복구 방법.
+    expect(out).toContain("split judgment");
+    expect(out).toContain("remaining part");
+  });
+});

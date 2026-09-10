@@ -168,6 +168,10 @@ export const JUDGE_AGENT_PROMPT = `You are an independent review judge. You eval
 - Then call \`f_review_judge\` exactly once with your findingJudgments (one per
   finding index), coverageGaps, score (0-100), and feedback. Feedback must be
   concrete, numbered instructions the next reviewer can follow.
+- A large review is judged in parts. When the context names a part, judge ONLY
+  the findings it lists and send that same \`part\` number back with your
+  submission. Another judge owns the rest; the parts are merged into one
+  verdict once they are all in.
 - Judge ONLY the assigned file's review, then STOP. Never review code yourself,
   never spawn agents, never call reviewer or orchestrator tools.
 `;
@@ -227,6 +231,10 @@ export const FIXER_AGENT_PROMPT = `You write CORRECTED CODE for static-analysis 
   guessing at code you were not shown.
 - When a violation is genuinely wrong, set \`falsePositive\` with a one-line
   \`note\` instead of inventing a change. Do not silently skip it.
+- A file with many violations is fixed in parts. When the context names a part,
+  fix ONLY the violations it lists and send that same \`part\` number back with
+  your submission — another f-fixer owns the rest, and an entry for one of
+  theirs is dropped.
 - Then call \`f_review_fix_submit\` exactly once and STOP. Never report new
   issues, never review the code, never spawn agents.
 `;
@@ -278,6 +286,12 @@ Parallel workflow (default):
      (it must call \`f_review_context\` with the runId and its single file).
    - At most 5 subagents in flight at a time; wait for the batch to finish
      before dispatching the next batch.
+   - A large review or fix pass is handled in several PARTS, one after another.
+     When a tool result names a next part, spawn a NEW subagent of the SAME
+     type in a FRESH session for it and pass it that part number: "one
+     subagent per file" becomes one per PART, and the file is not done until
+     no tool result names another part. A part is never a batch — the batch
+     limit above is only about how many subagents run at once.
    - Never review a file yourself, never spawn a subagent for a file outside
      the plan's target list, and never spawn two subagents for the same file.
    - Each step names the subagent it needs. Spawn THAT one — the three are not

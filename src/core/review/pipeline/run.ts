@@ -246,6 +246,7 @@ function renderPlanInstructions(meta: RunMeta, cwd: string): string {
           `FIX PASS — spawn ONE subagent of type \`f-fixer\` (NOT f-reviewer, NOT f-judge — only f-fixer can call these tools) for EACH of these ${filesToFix.length} file(s), and ONLY these — the others have no static-analysis violations:`,
           ...filesToFix.map((f) => `     - ${f}`),
           `   Prompt: "Call f_review_fix_context with runId=\"${meta.runId}\" and file=\"<file>\", write the corrected code for every violation, then call f_review_fix_submit."`,
+          `   A file with many violations is fixed in several parts: when the context says so, spawn a NEW f-fixer for each remaining part once the previous one has submitted, calling both tools with the part number that tool result named.`,
           `   It runs independently of the review — same batch limit. WAIT for every fix subagent to return before you finalize: finalize merges whatever is on disk at that moment, and a fix that lands afterwards is not in the report.`,
         ].join("\n"),
       ]
@@ -256,7 +257,7 @@ function renderPlanInstructions(meta: RunMeta, cwd: string): string {
           `JUDGE GATE — after EACH f-reviewer subagent finishes, spawn ONE subagent of type \`f-judge\` with this prompt:`,
           `   "Call f_review_judge_context with runId=\"${meta.runId}\" and file=\"<file>\", evaluate that review, then call f_review_judge."`,
         ].join("\n"),
-        `Follow the message f_review_judge returns EXACTLY: it either accepts the file, or tells you to re-spawn the f-reviewer for that file (judge feedback is injected automatically) and judge again. The rework cap is enforced by the tool — never re-spawn beyond what it instructs.`,
+        `Follow the message f_review_judge returns EXACTLY: it either accepts the file, tells you to spawn a NEW f-judge for the next part of the same review, or tells you to re-spawn the f-reviewer for that file (judge feedback is injected automatically) and judge again. A large review is judged in several parts — each part needs its OWN fresh f-judge subagent, one after another, called with the part number the previous tool result named. The rework cap is enforced by the tool — never re-spawn beyond what it instructs.`,
         `When every file is accepted${filesToFix.length ? " AND every fix subagent has returned" : ""}, call f_review_finalize with runId="${meta.runId}".`,
         `If finalize reports missing files, re-spawn subagents for ONLY those files ONCE (judging each again), then finalize again.`,
       ]
@@ -432,7 +433,15 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
   if (judgeBelowThreshold.length) {
     qualityReasons.push(`${judgeBelowThreshold.length} below judge threshold`);
   }
-  if (judgeUnjudged.length) qualityReasons.push(`${judgeUnjudged.length} unjudged review(s)`);
+  if (judgeUnjudged.length) {
+    // A split judgment with some parts in is still unjudged: no verdict exists
+    // until every part arrives, and the recovery is a fresh f-judge per part —
+    // not a re-review, which is what "unjudged" alone reads as.
+    qualityReasons.push(
+      `${judgeUnjudged.length} unjudged review(s) (a partially submitted split judgment counts here — ` +
+        `spawn a fresh f-judge for each remaining part)`
+    );
+  }
   if (criteriaStale) qualityReasons.push("effective review rules changed after planning");
   if (sourceStale) qualityReasons.push("review source files changed after planning");
   if (meta.fcq && (meta.fcq.status !== "ok" || !fcqSummary)) {
