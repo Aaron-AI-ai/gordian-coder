@@ -61,25 +61,107 @@ const JUDGE_CHANGE_MAX_BYTES = 24_000;
  * rules still beats one judged against none. */
 const JUDGE_RULES_MAX_BYTES = 8_000;
 
-/** The judging rubric injected into every judge context. Kept as data so an
- * offline evaluation script can reuse the exact same criteria. */
-export const JUDGE_CRITERIA = [
-  `Evaluate the REVIEW, not the code. Score 0-100:`,
-  `1. Validity (40%) — try to REFUTE each finding against the actual code shown.`,
-  `   A finding whose line/claim does not match the code is invalid.`,
-  `2. Evidence (15%) — each finding states a concrete failure scenario`,
-  `   (input/state → wrong outcome), not just "this could be a problem".`,
-  `3. Severity calibration (15%) — blockers/majors are truly that severe, and`,
-  `   real defects are not buried as minor/nit.`,
-  `4. Actionability (10%) — every blocker/major carries an applicable fix`,
-  `   (\`asIs\` + \`toBe\`), not just a description of the problem.`,
-  `5. Coverage (20%) — every significant part of the change was actually`,
-  `   examined; list unexamined areas in coverageGaps.`,
-  ``,
-  `Do NOT reward finding count — a clean file with zero findings can score 100.`,
-  `Penalize noise: duplicates, style nits inflated to issues, hallucinated lines.`,
-  `Prefer false negatives over false positives, matching the review's own rules.`,
-].join("\n");
+/** One scoring axis, kept apart from its rendered percentage: a part that
+ * ships only some of them must renormalise the weights it shows. */
+interface JudgeCriterion {
+  title: string;
+  /** Share of the full five-criteria rubric. */
+  weight: number;
+  /** First line follows "N. Title (W%) — "; the rest are indented under it. */
+  body: string[];
+}
+
+const JUDGE_CRITERION_LIST: JudgeCriterion[] = [
+  {
+    title: "Validity",
+    weight: 40,
+    body: [
+      `try to REFUTE each finding against the actual code shown.`,
+      `A finding whose line/claim does not match the code is invalid.`,
+    ],
+  },
+  {
+    title: "Evidence",
+    weight: 15,
+    body: [
+      `each finding states a concrete failure scenario`,
+      `(input/state → wrong outcome), not just "this could be a problem".`,
+    ],
+  },
+  {
+    title: "Severity calibration",
+    weight: 15,
+    body: [
+      `blockers/majors are truly that severe, and`,
+      `real defects are not buried as minor/nit.`,
+    ],
+  },
+  {
+    title: "Actionability",
+    weight: 10,
+    body: [
+      `every blocker/major carries an applicable fix`,
+      `(\`asIs\` + \`toBe\`), not just a description of the problem.`,
+    ],
+  },
+  {
+    title: "Coverage",
+    weight: 20,
+    body: [
+      `every significant part of the change was actually`,
+      `examined; list unexamined areas in coverageGaps.`,
+    ],
+  },
+];
+
+/** Integer percentages that sum to exactly 100, largest remainder first. */
+function renormalisedWeights(weights: number[]): number[] {
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  const exact = weights.map((weight) => (weight * 100) / total);
+  const out = exact.map((value) => Math.floor(value));
+  const slack = 100 - out.reduce((sum, value) => sum + value, 0);
+  const byRemainder = exact
+    .map((value, index) => ({ index, remainder: value - Math.floor(value) }))
+    .sort((a, b) => b.remainder - a.remainder);
+  for (let i = 0; i < slack; i++) {
+    const at = byRemainder[i]!.index;
+    out[at] = out[at]! + 1;
+  }
+  return out;
+}
+
+/**
+ * The rubric as one prompt block, with the weights of the criteria actually
+ * shipped renormalised to 100.
+ *
+ * A part told "criteria 1-4 only" under weights summing to 80 is scoring in a
+ * 0-100 field against an 80-point rubric: the judge renormalises to that total
+ * itself and every finding part comes back a fifth low — on top of which
+ * `synthesiseParts` applies the 0.8 coverage split again. Passing the full list
+ * reproduces the original percentages exactly, so an unsplit judge is unchanged.
+ */
+export function renderCriteria(criteria: JudgeCriterion[] = JUDGE_CRITERION_LIST): string {
+  const weights = renormalisedWeights(criteria.map((criterion) => criterion.weight));
+  return [
+    `Evaluate the REVIEW, not the code. Score 0-100:`,
+    ...criteria.flatMap((criterion, index) => [
+      `${index + 1}. ${criterion.title} (${weights[index]}%) — ${criterion.body[0]}`,
+      ...criterion.body.slice(1).map((line) => `   ${line}`),
+    ]),
+    ``,
+    `Do NOT reward finding count — a clean file with zero findings can score 100.`,
+    `Penalize noise: duplicates, style nits inflated to issues, hallucinated lines.`,
+    `Prefer false negatives over false positives, matching the review's own rules.`,
+  ].join("\n");
+}
+
+/** The judging rubric injected into every UNSPLIT judge context. Kept as data
+ * so an offline evaluation script can reuse the exact same criteria. */
+export const JUDGE_CRITERIA = renderCriteria();
+
+/** Criteria 1-4, renormalised to 100 — what a finding part is scored against.
+ * Criterion 5 belongs to the coverage part alone. */
+const JUDGE_FINDING_CRITERIA = renderCriteria(JUDGE_CRITERION_LIST.slice(0, 4));
 
 const byteLen = (s: string): number => Buffer.byteLength(s, "utf8");
 
@@ -350,7 +432,7 @@ export function buildJudgePrompt(
     `Score threshold: ${threshold} (score < ${threshold} ⇒ the review is sent back for rework).`,
     ``,
     `### Criteria`,
-    JUDGE_CRITERIA,
+    scope ? JUDGE_FINDING_CRITERIA : JUDGE_CRITERIA,
     ``,
     authoritativeRules(result.file, cwd),
     ...(fcq

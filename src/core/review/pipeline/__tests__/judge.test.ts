@@ -911,6 +911,30 @@ describe("criteria constant", () => {
       expect(JUDGE_CRITERIA).toContain(axis);
     }
   });
+
+  /** 프롬프트에 실린 가중치 합. 0-100 칸에 80점짜리 배점표를 주면 심사관이
+   * 스스로 그 총점에 맞춰 정규화하고, synthesiseParts가 그 위에 0.8을 또
+   * 곱한다. */
+  const weightSum = (prompt: string): number =>
+    [...prompt.matchAll(/^\d\. [^(]+\((\d+)%\)/gm)].reduce((n, m) => n + Number(m[1]), 0);
+
+  it("전체 배점표는 100%로 합산된다", () => {
+    expect(weightSum(JUDGE_CRITERIA)).toBe(100);
+  });
+
+  it("지적 part의 배점표는 1-4번만 싣고 100%로 재정규화한다", async () => {
+    const { d, meta } = await bigRun();
+    await writeFileReview(meta.runId, manyFindings(30), "md", d);
+    const runMetaLoaded = loadRun(meta.runId, d)!;
+    const review = readFileReviewResult(meta.runId, "big.ts", d)!;
+    const judgment = loadJudgment(meta.runId, "big.ts", d);
+    const plan = judgePartPlanFor(runMetaLoaded, review, judgment, d);
+    expect(plan.findingParts.length).toBeGreaterThan(1);
+    const prompt = buildPartPrompt(runMetaLoaded, review, judgment, d, 0, plan) as string;
+    expect(weightSum(prompt)).toBe(100);
+    expect(prompt).not.toContain("Coverage (");
+    expect(prompt).toContain("Validity (50%)");
+  });
 });
 
 describe("judge context overflow (fail-closed)", () => {
