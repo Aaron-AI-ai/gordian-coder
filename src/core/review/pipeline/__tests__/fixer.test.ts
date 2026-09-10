@@ -6,6 +6,7 @@ import {
   applyFixes,
   fixContext,
   fixCoverage,
+  fixPartPlan,
   loadFixes,
   submitFix,
   FIX_MAX_ITEMS,
@@ -355,5 +356,120 @@ describe("fixCoverage", () => {
     expect(fixCoverage(runId, ["src/A.java"], cwd)).toEqual([
       { file: "src/A.java", violations: 2, fixed: 1 },
     ]);
+  });
+});
+
+describe("fixer part 분할", () => {
+  /** n건의 위반과 1400줄 소스를 가진 런. */
+  async function bigFixRun(n: number): Promise<{ d: string; runId: string }> {
+    const d = repo();
+    writeFileSync(
+      join(d, "src/Big.java"),
+      Array.from({ length: 1400 }, (_, i) => `  int f${i}() { return ${i}; } // 설명 주석`).join("\n") + "\n"
+    );
+    const meta = await createRun(
+      {
+        targets: ["src/Big.java"],
+        range: null,
+        whole: true,
+        label: "L",
+        language: "ko",
+        fcqFix: true,
+        fcq: { status: "ok", command: "fcq", durationMs: 1, reportPath: "r" },
+      } as never,
+      d
+    );
+    const rows: FcqFileViolation[] = Array.from({ length: n }, (_, i) => ({
+      ...VIOLATION,
+      ruleId: `Rule${i}`,
+      line: 1 + i * 20,
+      description: "설명 ".repeat(40),
+      message: "메시지 ".repeat(40),
+      snippet: ["코드 한 줄 ".repeat(10), "코드 두 줄 ".repeat(10)],
+    }));
+    const { fcqShardPath } = await import("../../evidence/fcq");
+    mkdirSync(join(runDir(meta.runId, d), "fcq", "files"), { recursive: true });
+    writeFileSync(fcqShardPath(runDir(meta.runId, d), "src/Big.java"), JSON.stringify(rows));
+    return { d, runId: meta.runId };
+  }
+
+  it("위반이 60건이어도 소스를 한 줄도 못 보는 일이 없다", async () => {
+    const { d, runId } = await bigFixRun(60);
+    const plan = fixPartPlan(runId, "src/Big.java", d);
+    expect(plan.length).toBeGreaterThan(1);
+    for (let part = 0; part < plan.length; part++) {
+      const ctx = fixContext(runId, "src/Big.java", d, part);
+      // fixSource가 윈도우를 하나도 못 실었을 때 내놓는 문구. 브리프의
+      // "ranges below: none"은 실제 출력("line ranges are below:")과 달라
+      // 항상 통과하는 빈 단정이었다.
+      expect(ctx).not.toContain("are below: none");
+      expect(Buffer.byteLength(ctx, "utf8")).toBeLessThanOrEqual(FIX_CONTEXT_MAX_BYTES);
+      // 이 part의 위반은 전부 보이는 범위 안에 있어야 한다.
+      expect(ctx).toContain("Every listed violation is inside a range above.");
+    }
+  });
+
+  it("모든 위반이 정확히 한 part에 배정된다", async () => {
+    const { d, runId } = await bigFixRun(60);
+    const plan = fixPartPlan(runId, "src/Big.java", d);
+    expect(plan.flat().sort((a, b) => a - b)).toEqual(Array.from({ length: 60 }, (_, i) => i));
+  });
+
+  it("범위 밖 part를 요구하면 거절한다", async () => {
+    const { d, runId } = await bigFixRun(60);
+    const plan = fixPartPlan(runId, "src/Big.java", d);
+    // 판정 경로에서 범위 밖 part가 프롬프트 조립까지 흘러가 리뷰를 영구
+    // 종료시킨 적이 있다. 여기서는 조립 전에 막혀야 한다.
+    expect(fixContext(runId, "src/Big.java", d, plan.length)).toContain("does not exist");
+    expect(fixContext(runId, "src/Big.java", d, -1)).toContain("does not exist");
+  });
+
+  it("위반이 적으면 part 하나로 끝나고 기존 컨텍스트와 같다", async () => {
+    const { d, runId } = await bigFixRun(3);
+    expect(fixPartPlan(runId, "src/Big.java", d)).toHaveLength(1);
+    const whole = fixContext(runId, "src/Big.java", d);
+    expect(whole).toBe(fixContext(runId, "src/Big.java", d, 0));
+    // part가 하나면 part 개념 자체가 드러나지 않는다.
+    expect(whole).not.toContain("part 1/1");
+    expect(whole).not.toContain("fixed in");
+  });
+
+  it("두 번째 part 제출이 첫 part의 fix를 지우지 않는다", async () => {
+    const { d, runId } = await bigFixRun(60);
+    await submitFix(
+      { runId, file: "src/Big.java", fixes: [{ line: 1, ruleId: "Rule0", asIs: "a", toBe: "b" }] },
+      d
+    );
+    await submitFix(
+      { runId, file: "src/Big.java", fixes: [{ line: 21, ruleId: "Rule1", asIs: "c", toBe: "d" }] },
+      d
+    );
+    const fixes = loadFixes(runId, "src/Big.java", d).fixes;
+    expect(fixes.map((f) => f.ruleId).sort()).toEqual(["Rule0", "Rule1"]);
+  });
+
+  it("같은 앵커를 다시 제출하면 덮어쓴다", async () => {
+    const { d, runId } = await bigFixRun(60);
+    await submitFix(
+      { runId, file: "src/Big.java", fixes: [{ line: 1, ruleId: "Rule0", asIs: "a", toBe: "처음" }] },
+      d
+    );
+    await submitFix(
+      { runId, file: "src/Big.java", fixes: [{ line: 1, ruleId: "Rule0", asIs: "a", toBe: "나중" }] },
+      d
+    );
+    const fixes = loadFixes(runId, "src/Big.java", d).fixes;
+    expect(fixes).toHaveLength(1);
+    expect(fixes[0]!.toBe).toBe("나중");
+  });
+
+  it("part 하나를 낸 fixer에게 다른 part의 위반을 채우라고 하지 않는다", async () => {
+    const { d, runId } = await bigFixRun(60);
+    const plan = fixPartPlan(runId, "src/Big.java", d);
+    const first = plan[0]!.map((i) => ({ line: 1 + i * 20, ruleId: `Rule${i}`, toBe: "x" }));
+    const out = await submitFix({ runId, file: "src/Big.java", fixes: first }, d);
+    // 못 본 코드에 fix를 써 넣으라는 지시가 바로 이 pass가 없애려는 실패다.
+    expect(out).not.toContain("NO entry");
+    expect(out).toContain("COMPLETE");
   });
 });

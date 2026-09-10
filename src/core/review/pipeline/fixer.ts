@@ -24,6 +24,7 @@ import { z } from "zod";
 import { capped } from "../contract";
 import { loadRun, reviewSlug, runDir } from "./artifact";
 import { FCQ_SEVERITIES, readFcqFile, type FcqFileViolation } from "../evidence/fcq";
+import { planJudgeParts } from "./judge-parts";
 import { fileLineCount, fileRead } from "../tools/read";
 
 /** Violations shown per request. Beyond this the file is a lint failure, not a
@@ -106,8 +107,67 @@ export function loadFixes(runId: string, file: string, cwd: string): FileFixes {
   return { file, fixes: [] };
 }
 
-/** Everything the fixer subagent needs: the source, and every violation in it. */
-export function fixContext(runId: string, file: string, cwd: string): string {
+/**
+ * Head boilerplate, the source preamble and the submit instructions, held back
+ * from the part budget. The planner measures only what scales with the part —
+ * the violation list and its source windows — so the fixed prose needs its own
+ * reservation. Measured at ~1600 bytes; rounded up because the prose changes.
+ */
+const FIX_PART_OVERHEAD_BYTES = 3_000;
+
+/** One violation as the context lists it. fixContext's head and the part
+ * planner share this, so the planner measures the bytes actually sent. */
+function violationLines(rows: FcqFileViolation[]): string[] {
+  return rows.map(
+    (v) =>
+      `- L${v.line ?? 0} [${v.severity}] ${v.analyzer}/${v.ruleId} — ${v.description}` +
+      (v.message ? ` (${v.message})` : "") +
+      (v.snippet?.length ? `\n  code:\n${v.snippet.map((l) => `    ${l}`).join("\n")}` : "")
+  );
+}
+
+/**
+ * Split the violations into parts that fit the budget, reusing the judge's
+ * greedy fill. What is measured is the violation list PLUS the source windows
+ * those violations need — together, against one budget.
+ *
+ * That pairing is the fix. The old assembly spent the budget on the list first
+ * and gave the source whatever was left: 60 violations at ~700 bytes each ate
+ * 42,000 of 45,000, the source loop broke on its first window, and the fixer
+ * was handed "Only these line ranges are below: none" plus an instruction not
+ * to fix what it cannot see. It submitted nothing, and a re-spawn recomputed
+ * the identical budget and failed the identical way.
+ */
+function planFixParts(cwd: string, file: string, rows: FcqFileViolation[]): number[][] {
+  const total = fileLineCount(cwd, null, file) ?? 0;
+  const measure = (indices: number[]): number => {
+    const picked = indices.map((index) => rows[index]!);
+    const source = fixWindows(
+      picked.map((v) => v.line ?? 0).filter((l) => l > 0),
+      total
+    ).reduce(
+      (sum, [start, end]) => sum + byteLen(fileRead(cwd, null, file, start, end, end - start + 1)),
+      0
+    );
+    return byteLen(violationLines(picked).join("\n")) + source;
+  };
+  const plan = planJudgeParts(rows.length, measure, FIX_CONTEXT_MAX_BYTES - FIX_PART_OVERHEAD_BYTES);
+  // No violations is one empty part, not zero parts: every caller here indexes
+  // by part, and `hasCoveragePart` has no meaning in the fix pass.
+  return plan.findingParts.length ? plan.findingParts : [[]];
+}
+
+/** This file's fix-part plan: violation indices per part, in file order. The
+ * orchestrator instructions and the submission scoping both recompute it, so
+ * the same inputs must always yield the same plan. */
+export function fixPartPlan(runId: string, file: string, cwd: string): number[][] {
+  return planFixParts(cwd, file, readFcqFile(runDir(runId, cwd), file).slice(0, FIX_MAX_ITEMS));
+}
+
+/** Everything the fixer subagent needs: the source, and every violation in it.
+ * A file with more violations than fit the budget is fixed in several parts;
+ * `part` selects one, and omitting it means the first (and, unsplit, the only). */
+export function fixContext(runId: string, file: string, cwd: string, part?: number): string {
   const meta = loadRun(runId, cwd);
   if (!meta) return `Unknown run: ${runId}. Call f_review_plan first (or check the runId).`;
   if (!meta.targets.includes(file)) {
@@ -127,11 +187,24 @@ export function fixContext(runId: string, file: string, cwd: string): string {
     );
   }
 
-  const shown = rows.slice(0, FIX_MAX_ITEMS);
+  const eligible = rows.slice(0, FIX_MAX_ITEMS);
+  const plan = planFixParts(cwd, file, eligible);
+  const requested = part ?? 0;
+  // Validated before assembly: in the judge path an out-of-range part reached
+  // the prompt builder, came back as an overflow, and terminalized the review.
+  if (requested < 0 || requested >= plan.length) {
+    return `❌ part ${requested} does not exist for ${file} — this fix pass has ${plan.length} part(s) (0..${plan.length - 1}).`;
+  }
+  const shown = plan[requested]!.map((index) => eligible[index]!);
   const head = [
     `# Fix pass — ${file} (run ${runId})`,
     "",
-    `${rows.length} static-analysis violation(s)${rows.length > shown.length ? `, first ${shown.length} shown` : ""}.`,
+    `${rows.length} static-analysis violation(s)` +
+      (plan.length > 1
+        ? `, part ${requested + 1}/${plan.length} — the ${shown.length} listed below are yours; other parts own the rest.`
+        : rows.length > shown.length
+          ? `, first ${shown.length} shown.`
+          : "."),
     "Write the corrected code for EVERY one, whatever its severity: a MINOR",
     "style rule ships with only the rule text unless you replace it. Where a",
     "violation is genuinely wrong, mark it `falsePositive` with a one-line note",
@@ -142,12 +215,7 @@ export function fixContext(runId: string, file: string, cwd: string): string {
     "that ships unfixed.",
     "",
     "## Violations",
-    ...shown.map(
-      (v) =>
-        `- L${v.line ?? 0} [${v.severity}] ${v.analyzer}/${v.ruleId} — ${v.description}` +
-        (v.message ? ` (${v.message})` : "") +
-        (v.snippet?.length ? `\n  code:\n${v.snippet.map((l) => `    ${l}`).join("\n")}` : "")
-    ),
+    ...violationLines(shown),
     "",
     "## Source",
   ];
@@ -161,7 +229,10 @@ export function fixContext(runId: string, file: string, cwd: string): string {
     "reviewer's job and duplicates are dropped.",
   ];
   const budget = FIX_CONTEXT_MAX_BYTES - byteLen(head.join("\n")) - byteLen(tail.join("\n"));
-  return [...head, ...fixSource(cwd, file, shown, budget), ...tail].join("\n");
+  const body = [...head, ...fixSource(cwd, file, shown, budget), ...tail].join("\n");
+  return plan.length > 1
+    ? `${body}\n\nThis file is fixed in ${plan.length} parts. After you submit, the orchestrator spawns a NEW f-fixer for the next part.`
+    : body;
 }
 
 /**
@@ -222,7 +293,14 @@ function fixKey(line: number | undefined, rule: string): string {
   return `${line ?? 0}${rule.slice(rule.lastIndexOf("/") + 1).toLowerCase()}`;
 }
 
-/** Persist one file's fixes. Overwrites — a retry is idempotent. */
+/**
+ * Persist one file's fixes, MERGED into what is already recorded.
+ *
+ * Not an overwrite: a file split across parts gets one submission per part, and
+ * overwriting made part 2 erase part 1's work. Anchored on line + rule id, so
+ * the same anchor resubmitted still wins (a retry stays idempotent) while a new
+ * anchor is appended.
+ */
 export async function submitFix(payload: unknown, cwd: string): Promise<string> {
   const parsed = FixSubmitSchema.safeParse(payload);
   if (!parsed.success) return `Invalid fix submission: ${parsed.error.message}`;
@@ -232,11 +310,14 @@ export async function submitFix(payload: unknown, cwd: string): Promise<string> 
   if (!meta.targets.includes(file)) {
     return `❌ ${file} is not a target of run ${runId}.`;
   }
-  const violations = readFcqFile(runDir(runId, cwd), file);
-  // Read before the overwrite: a fixer already sent back once is not sent back
-  // again, whatever it submitted the second time.
-  const resubmission = loadFixes(runId, file, cwd).fixes.length > 0;
-  const body: FileFixes = { file, fixes };
+  const violations = readFcqFile(runDir(runId, cwd), file).slice(0, FIX_MAX_ITEMS);
+  // Read before the write: what this part already recorded decides whether its
+  // fixer is sent back for its gaps, and it must not be lost by the merge.
+  const previous = loadFixes(runId, file, cwd).fixes;
+  const merged = new Map(previous.map((f) => [fixKey(f.line, f.ruleId), f]));
+  for (const fix of fixes) merged.set(fixKey(fix.line, fix.ruleId), fix);
+  const nextFixes = [...merged.values()];
+  const body: FileFixes = { file, fixes: nextFixes };
   await Bun.write(fixesPath(runId, file, cwd), JSON.stringify(body, null, 2));
 
   const withCode = fixes.filter((f) => f.toBe?.trim()).length;
@@ -244,9 +325,21 @@ export async function submitFix(payload: unknown, cwd: string): Promise<string> 
   // Matched by anchor, not by count: two entries for one line while another
   // violation has none is exactly the gap a count comparison reports as clean.
   const entered = new Set(fixes.map((f) => fixKey(f.line, f.ruleId)));
-  const missing = violations
-    .slice(0, FIX_MAX_ITEMS)
-    .filter((v) => !entered.has(fixKey(v.line, v.ruleId)));
+  // Scoped to the part(s) this submission actually answered. A split fixer only
+  // ever saw its own part's violations, so listing another part's back at it is
+  // an instruction to write code for lines it was never shown. A submission
+  // matching no part at all (empty, or all-junk anchors) falls back to the whole
+  // list — that fixer has nothing to go on either way.
+  const touched = planFixParts(cwd, file, violations).filter((part) =>
+    part.some((index) => entered.has(fixKey(violations[index]!.line, violations[index]!.ruleId)))
+  );
+  const owned = touched.length ? touched.flat().map((index) => violations[index]!) : violations;
+  // A fixer already sent back once is not sent back again, whatever it
+  // submitted the second time — judged per part, not per file, or parts 2+
+  // would inherit part 1's "already nagged" state and never hear about a gap.
+  const already = new Set(previous.map((f) => fixKey(f.line, f.ruleId)));
+  const resubmission = owned.some((v) => already.has(fixKey(v.line, v.ruleId)));
+  const missing = owned.filter((v) => !entered.has(fixKey(v.line, v.ruleId)));
   const recorded = `✅ ${file}: ${fixes.length} fix(es) recorded (${withCode} with code, ${fp} false positive(s)).`;
   if (!missing.length || resubmission) {
     return [
