@@ -605,14 +605,16 @@ describe("submitJudge", () => {
     expect(again).toContain(`part 1/${total}`);
     expect(again).not.toContain("part 0 of");
 
-    // 같은 문장이 judgeContext에도 있다. 한쪽만 1-기준으로 바꾸면 오케스트레이터가
-    // 두 결과를 나란히 읽고 엉뚱한 part를 띄운다 — 그래서 둘은 한 헬퍼를 쓴다.
+    // judgeContext의 같은 안내는 다음 part의 인자를 바로 옆에 달고 다닌다.
+    // 산문 서수(1-기준)와 인자(0-기준)가 한 문장에 서면 requested=0, next=1에서
+    // 둘 다 "1"로 찍힌다 — 어느 쪽을 띄우라는 말인지 읽는 쪽이 고를 수 없다.
+    // 그래서 이 문장에는 part 번호가 툴 인자 하나뿐이어야 한다.
     const ctx = judgeContext(meta.runId, "big.ts", d, 0);
-    expect(ctx).toContain(`part 1/${total} of big.ts was already submitted`);
+    const mentions = [...ctx.matchAll(/\bpart[ =](\d+)/g)].map((m) => m[0]);
+    expect(mentions).toEqual(["part=1"]);
+    expect(ctx).toContain("was already submitted");
+    // submitJudge 쪽은 옆에 인자가 없어 1-기준 산문 그대로가 맞다.
     expect(again).toContain(`part 1/${total} of big.ts was already submitted`);
-    expect(ctx).not.toContain("part 0 of");
-    // 툴 인자는 0-기준 그대로다.
-    expect(ctx).toContain("part=1");
   });
 
   it("part가 하나뿐인 coverage 프롬프트는 없는 다른 part를 말하지 않는다", async () => {
@@ -1629,8 +1631,9 @@ describe("judgeContext의 part 처리", () => {
 
     const out = judgeContext(meta.runId, "a.ts", d, 0);
     expect(out).toContain("already submitted");
-    expect(out).toContain("part 1");
-    expect(out).toContain("part=1");
+    // 이 두 줄이 나란히 서 있던 것이 바로 그 충돌이었다: "part 1"은 인덱스 0,
+    // "part=1"은 인덱스 1. 이 문장에 남는 part 번호는 인자 하나뿐이다.
+    expect([...out.matchAll(/\bpart[ =](\d+)/g)].map((m) => m[0])).toEqual(["part=1"]);
     expect(out).not.toContain("Every part");
   });
 });

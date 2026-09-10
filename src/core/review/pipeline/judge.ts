@@ -73,13 +73,15 @@ export function reviewReworkStatus(
 
 /**
  * The "you already sent this one" sentence, in the 1-based numbering every
- * other part message uses.
+ * other part message uses. Bare part numbers in prose are 1-based; a `part=N`
+ * tool argument is 0-based.
  *
- * Shared by judgeContext and submitJudge on purpose: the two describe the SAME
- * submission, and they drifted apart once already — one 0-based, one 1-based,
- * in the same file. An orchestrator reading both back to back spawns the wrong
- * part. Bare part numbers in prose are 1-based; a `part=N` tool argument stays
- * 0-based, which is why the two are never in the same clause.
+ * Used where no tool argument sits beside it. judgeContext's version of this
+ * message does NOT use it, and that is the point: that message hands over the
+ * next part's argument in the same sentence, so at requested=0 / next=1 the
+ * prose "part 1/16" and the argument "part=1" both print as 1 while meaning
+ * different parts. It drops the ordinal entirely rather than reconcile two
+ * conventions in one sentence a model has to pick from.
  */
 function alreadySubmittedLine(file: string, part: number, total: number): string {
   return `ℹ️ part ${part + 1}/${total} of ${file} was already submitted`;
@@ -140,7 +142,7 @@ export function judgeContext(runId: string, file: string, cwd: string, part?: nu
     const next = Array.from({ length: total }, (_, i) => i).find((i) => !submitted.includes(i));
     return next === undefined
       ? `ℹ️ Every part of ${file} was already submitted; the verdict is being assembled. Do NOT judge it again.`
-      : `${alreadySubmittedLine(file, requested, total)}. Spawn a NEW f-judge for the next part: ` +
+      : `ℹ️ That part of ${file} was already submitted. Spawn a NEW f-judge for the next one: ` +
         `call f_review_judge_context with runId="${runId}", file="${file}", part=${next}.`;
   }
 
