@@ -511,6 +511,9 @@ describe("submitJudge", () => {
     const judgment = loadJudgment(meta.runId, "a.ts", d);
     expect(judgment.attempts).toHaveLength(0);
     expect(judgment.terminal?.status).toBe("judge-incomplete");
+    // part를 싣지 않은 제출은 예산에서도 part 없는 하나의 버킷을 쓴다 — 기존
+    // 판정 파일이 그렇듯이. 분할되지 않은 리뷰의 상한은 종전 그대로다.
+    expect(judgment.invalidSubmissions.every((entry) => entry.part === undefined)).toBe(true);
     expect(await submitJudge(judgePayload(meta.runId, 100), d)).toContain("Judge INCOMPLETE");
   });
 
@@ -1546,6 +1549,44 @@ describe("part 제출", () => {
     expect(attempt.score).toBe(DEFAULT_JUDGE_THRESHOLD - 1);
     expect(attempt.feedback).toContain("Score reduced from");
     expect(attempt.feedback).toContain("finding judgment");
+    expect(loadJudgment(runId, "big.ts", d).attempts).toHaveLength(1);
+  });
+
+  /** 그 part의 인덱스는 맞지만 자기 자신과 앞뒤가 안 맞는 제출. */
+  const inconsistentPart = (runId: string, part: number, indices: number[]) => {
+    const payload = partPayload(runId, part, indices, 90);
+    payload.findingJudgments = payload.findingJudgments.map((j) => ({ ...j, valid: false }));
+    return payload;
+  };
+
+  it("같은 part의 무효 제출이 상한에 닿으면 종료한다", async () => {
+    const { d, runId, plan } = await splitRun();
+    const bad = inconsistentPart(runId, 0, plan.findingParts[0]!);
+    for (let i = 1; i < MAX_INVALID_JUDGE_SUBMISSIONS; i++) {
+      expect(await submitJudge(bad, d)).toContain(`Retry ${i}/${MAX_INVALID_JUDGE_SUBMISSIONS}`);
+    }
+    expect(await submitJudge(bad, d)).toContain("Judge INCOMPLETE");
+    expect(loadJudgment(runId, "big.ts", d).terminal?.status).toBe("judge-incomplete");
+  });
+
+  it("서로 다른 part의 무효 제출은 한 예산을 나눠 쓰지 않는다", async () => {
+    // part마다 새 f-judge가 뜬다. 심사관 셋이 각자 한 번씩 틀린 것과, 한 심사관이
+    // 세 번 틀린 것은 다르다 — 전자로 파일이 종료되면 분할된 리뷰만 불리해진다.
+    const { d, runId, plan } = await splitRun();
+    expect(plan.findingParts.length).toBeGreaterThanOrEqual(MAX_INVALID_JUDGE_SUBMISSIONS);
+    for (let p = 0; p < MAX_INVALID_JUDGE_SUBMISSIONS; p++) {
+      const out = await submitJudge(inconsistentPart(runId, p, plan.findingParts[p]!), d);
+      expect(out).toContain(`Retry 1/${MAX_INVALID_JUDGE_SUBMISSIONS}`);
+      expect(out).toContain(`part ${p}`);
+    }
+    expect(loadJudgment(runId, "big.ts", d).terminal).toBeUndefined();
+
+    // 그리고 그 리뷰는 여전히 끝까지 갈 수 있다.
+    for (let p = 0; p < plan.findingParts.length; p++) {
+      await submitJudge(partPayload(runId, p, plan.findingParts[p]!, 90), d);
+    }
+    const out = await submitJudge(partPayload(runId, plan.findingParts.length, [], 90), d);
+    expect(out).toContain("Judge PASS");
     expect(loadJudgment(runId, "big.ts", d).attempts).toHaveLength(1);
   });
 

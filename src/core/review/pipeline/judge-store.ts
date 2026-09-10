@@ -86,6 +86,11 @@ export type JudgeAttempt = z.infer<typeof JudgeAttemptSchema>;
 export const InvalidJudgeSubmissionSchema = z.object({
   reviewRevision: z.number().int().positive(),
   reviewArtifactHash: z.string().optional(),
+  /** 이 제출이 담당한 part. 예산은 이 값으로 나눠 센다 — part마다 새 심사관이
+   * 뜨므로, 서로 다른 심사관이 한 번씩 틀린 것과 한 심사관이 상한만큼 틀린 것을
+   * 같게 볼 수 없다. 생략된 제출(파싱 실패, part 없는 제출)과 기존 판정 파일은
+   * undefined로 남아 지금까지와 똑같이 하나의 버킷을 쓴다. */
+  part: z.number().int().nonnegative().optional(),
   submissionHash: z.string(),
   error: z.string(),
   at: z.string(),

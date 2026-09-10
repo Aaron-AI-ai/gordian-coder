@@ -236,13 +236,23 @@ function nextPartInstruction(runId: string, file: string, next: number): string[
   ];
 }
 
+/** Which slice of the invalid-submission budget one rejected payload spends.
+ * `part` undefined is its own bucket — what an unsplit review and every
+ * pre-existing judgment file use. */
+interface InvalidBudget {
+  part?: number;
+  /** This review's part count, which bounds how many buckets can exist. */
+  totalParts: number;
+}
+
 async function recordInvalidSubmission(
   runId: string,
   file: string,
   review: PersistedFileReviewResult,
   payload: unknown,
   error: string,
-  cwd: string
+  cwd: string,
+  budget: InvalidBudget
 ): Promise<string> {
   const judgment = loadJudgment(runId, file, cwd);
   const existing = judgment.attempts.findLast((attempt) => attemptMatchesReview(attempt, review));
@@ -259,25 +269,38 @@ async function recordInvalidSubmission(
   judgment.invalidSubmissions.push({
     reviewRevision: review.revision,
     reviewArtifactHash: artifactIdentity(review),
+    part: budget.part,
     submissionHash: submissionHash(payload),
     error: error.slice(0, 2000),
     at: new Date().toISOString(),
   });
   // A bounded audit tail is enough; run directories themselves are also pruned.
+  // Sized to hold every bucket that can still be counted: the cap, for each
+  // part of this review, for each artifact revision a rework round can produce.
+  // A fixed tail evicted a 16-part review's history before any one part's
+  // entries had reached the cap.
   judgment.invalidSubmissions = judgment.invalidSubmissions.slice(
-    -MAX_INVALID_JUDGE_SUBMISSIONS * (MAX_JUDGE_ROUNDS + 2)
+    -MAX_INVALID_JUDGE_SUBMISSIONS * (MAX_JUDGE_ROUNDS + 2) * Math.max(1, budget.totalParts)
   );
+  // Counted per part, not per revision: every part gets its OWN f-judge, so
+  // three judges each doubting one of their own findings once is not the same
+  // as one judge doing it three times. Sharing one budget would terminalize a
+  // split review on the first honest round.
   const invalids = judgment.invalidSubmissions.filter(
     (entry) =>
       entry.reviewRevision === review.revision &&
-      entry.reviewArtifactHash === artifactIdentity(review)
+      entry.reviewArtifactHash === artifactIdentity(review) &&
+      entry.part === budget.part
   ).length;
+  const forPart = budget.part === undefined ? "" : ` part ${budget.part}`;
   if (invalids >= MAX_INVALID_JUDGE_SUBMISSIONS) {
     judgment.terminal = {
       status: "judge-incomplete",
       reviewRevision: review.revision,
       reviewArtifactHash: artifactIdentity(review),
-      reason: `${invalids} malformed judge submissions (last error: ${error.slice(0, 500)})`,
+      reason:
+        `${invalids} malformed judge submissions${forPart} ` +
+        `(last error: ${error.slice(0, 500)})`,
       at: new Date().toISOString(),
     };
     await persistJudgment(runId, file, cwd, judgment);
@@ -285,8 +308,9 @@ async function recordInvalidSubmission(
   }
   await persistJudgment(runId, file, cwd, judgment);
   return (
-    `Invalid judge submission for ${file} review revision ${review.revision}: ${error}. ` +
-    `Retry ${invalids}/${MAX_INVALID_JUDGE_SUBMISSIONS}; after the limit this judge terminates as INCOMPLETE.`
+    `Invalid judge submission for ${file} review revision ${review.revision}${forPart}: ${error}. ` +
+    `Retry ${invalids}/${MAX_INVALID_JUDGE_SUBMISSIONS}${forPart === "" ? "" : ` for${forPart}`}; ` +
+    `after the limit this judge terminates as INCOMPLETE.`
   );
 }
 
@@ -347,17 +371,25 @@ async function submitJudgeSerialized(
   // would shift the expected index sets and reject valid submissions.
   const plan = judgePartPlanFor(meta, review, judgment, cwd);
   const totalParts = plan.findingParts.length + (plan.hasCoveragePart ? 1 : 0);
-  const part = parsed.success ? parsed.data.part ?? 0 : 0;
+  const submittedPart = parsed.success ? parsed.data.part : undefined;
+  const part = submittedPart ?? 0;
   if (part < 0 || part >= totalParts) {
+    // Charged to the no-part bucket on purpose: a part number outside the plan
+    // gets no bucket of its own, or a judge walking the numbers upward would
+    // never reach the cap in any of them.
     return recordInvalidSubmission(
       runId,
       file,
       review,
       payload,
       `part ${part} does not exist (this review has ${totalParts} part(s))`,
-      cwd
+      cwd,
+      { totalParts }
     );
   }
+  // Past the range check `submittedPart` is either in the plan or absent, so it
+  // names the budget bucket this submission spends directly.
+  const budget: InvalidBudget = { part: submittedPart, totalParts };
 
   // Re-check the same budget enforced by judgeContext, SCOPED to the part this
   // submission claims. A caller can invoke the state-changing submit tool
@@ -379,7 +411,8 @@ async function submitJudgeSerialized(
       review,
       payload,
       parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; "),
-      cwd
+      cwd,
+      budget
     );
   }
 
@@ -405,7 +438,8 @@ async function submitJudgeSerialized(
         payload,
         `part ${part} must judge exactly indices [${expected.join(", ")}] ` +
           `(received [${received.join(", ")}])`,
-        cwd
+        cwd,
+        budget
       );
     }
 
@@ -427,8 +461,9 @@ async function submitJudgeSerialized(
         file,
         review,
         payload,
-        `part ${part}: ${partInconsistent}`,
-        cwd
+        partInconsistent,
+        cwd,
+        budget
       );
     }
 
@@ -511,11 +546,11 @@ async function submitJudgeSerialized(
 
   const invalidIndices = indexValidationError(review.findings, submission.findingJudgments);
   if (invalidIndices) {
-    return recordInvalidSubmission(runId, file, review, payload, invalidIndices, cwd);
+    return recordInvalidSubmission(runId, file, review, payload, invalidIndices, cwd, budget);
   }
   const inconsistent = consistencyValidationError(submission, review.findings, threshold);
   if (inconsistent) {
-    return recordInvalidSubmission(runId, file, review, payload, inconsistent, cwd);
+    return recordInvalidSubmission(runId, file, review, payload, inconsistent, cwd, budget);
   }
 
   // Synthesised or not, the verdict comes from the score and the threshold.
