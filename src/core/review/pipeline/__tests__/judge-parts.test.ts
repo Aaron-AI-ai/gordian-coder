@@ -116,6 +116,20 @@ describe("synthesiseParts", () => {
     expect(out.score).toBeCloseTo(70.8, 5);
   });
 
+  it("합성 점수는 반올림해 부동소수 꼬리를 남기지 않는다", () => {
+    // 이 숫자는 그대로 오케스트레이터로 나가고, judgeFeedbackFor가 재리뷰
+    // 프롬프트에 "scored 63.60000000000001"로 박아 넣는다.
+    const plan = { findingParts: [[0], [1]], hasCoveragePart: true };
+    const out = synthesiseParts(plan, [
+      submission(0, 50, [0]),
+      submission(1, 50, [1]),
+      submission(2, 82, []),
+    ]);
+    // 50 * 0.8 + 82 * 0.2 = 56.4 — 부동소수로는 56.400000000000006
+    expect(out.score).toBe(56.4);
+    expect(String(out.score)).not.toContain("0000");
+  });
+
   it("모든 part의 findingJudgments를 인덱스 순으로 합친다", () => {
     const plan = { findingParts: [[0, 1], [2, 3]], hasCoveragePart: true };
     const out = synthesiseParts(plan, [

@@ -579,6 +579,62 @@ describe("submitJudge", () => {
     expect(attempt.truncated!.shown).toBeLessThan(3000);
   });
 
+  it("같은 part 재제출 안내는 기록 안내와 같은 번호 체계를 쓴다", async () => {
+    const { d, meta } = await bigRun();
+    await writeFileReview(meta.runId, manyFindings(30), "md", d);
+    const review = readFileReviewResult(meta.runId, "big.ts", d)!;
+    const judgment = loadJudgment(meta.runId, "big.ts", d);
+    const plan = judgePartPlanFor(loadRun(meta.runId, d)!, review, judgment, d);
+    const total = plan.findingParts.length + 1;
+    const payload = {
+      runId: meta.runId,
+      file: "big.ts",
+      part: 0,
+      findingJudgments: plan.findingParts[0]!.map((index) => ({
+        index, valid: true, evidenced: true, severityFit: true, actionable: true, note: "ok",
+      })),
+      coverageGaps: [],
+      score: 80,
+      feedback: "1. ok",
+    };
+    const first = await submitJudge(payload, d);
+    expect(first).toContain(`part 1/${total} recorded`);
+    const again = await submitJudge(payload, d);
+    // 같은 제출을 0-기준으로 "part 0"이라 부르면 방금 본 "part 1/16"과 어긋난다.
+    expect(again).toContain(`part 1/${total}`);
+    expect(again).not.toContain("part 0 of");
+  });
+
+  it("part가 하나뿐인 coverage 프롬프트는 없는 다른 part를 말하지 않는다", async () => {
+    const { d, meta } = await bigRun();
+    await writeFileReview(meta.runId, { ...manyFindings(0), findings: [] }, "md", d);
+    const runMetaLoaded = loadRun(meta.runId, d)!;
+    const review = readFileReviewResult(meta.runId, "big.ts", d)!;
+    const judgment = loadJudgment(meta.runId, "big.ts", d);
+    const plan = judgePartPlanFor(runMetaLoaded, review, judgment, d);
+    const prompt = buildPartPrompt(runMetaLoaded, review, judgment, d, 0, plan) as string;
+    expect(prompt).toContain("COVERAGE ONLY");
+    expect(prompt).not.toContain("Other parts have already scored");
+  });
+
+  it("정수가 아닌 part는 코어에서 막힌다", async () => {
+    // 오늘은 어댑터의 Zod 가드만 이걸 막는다. judgeContext는 export된 코어다.
+    // 범위 안의 소수(분할된 리뷰의 1.5)여야 실제로 이 가드를 지난다.
+    const { d, meta } = await bigRun();
+    await writeFileReview(meta.runId, manyFindings(30), "md", d);
+    const plan = judgePartPlanFor(
+      loadRun(meta.runId, d)!,
+      readFileReviewResult(meta.runId, "big.ts", d)!,
+      loadJudgment(meta.runId, "big.ts", d),
+      d
+    );
+    expect(plan.findingParts.length + 1).toBeGreaterThan(2);
+    expect(judgeContext(meta.runId, "big.ts", d, 1.5)).toContain("does not exist");
+    // 범위 밖 part가 프롬프트 조립까지 흘러가면 overflow로 돌아와 리뷰를
+    // 영구 종료시킨다. 거절은 거절로 끝나야 한다.
+    expect(loadJudgment(meta.runId, "big.ts", d).terminal).toBeUndefined();
+  });
+
   it("전체를 본 판정에는 잘림 기록이 붙지 않는다", async () => {
     const d = gitRepo();
     const meta = await createRun(baseMeta(), d);

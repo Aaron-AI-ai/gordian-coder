@@ -229,7 +229,7 @@ export function fixContext(runId: string, file: string, cwd: string, part?: numb
   const requested = part ?? 0;
   // Validated before assembly: in the judge path an out-of-range part reached
   // the prompt builder, came back as an overflow, and terminalized the review.
-  if (requested < 0 || requested >= plan.length) {
+  if (!Number.isInteger(requested) || requested < 0 || requested >= plan.length) {
     return `❌ part ${requested} does not exist for ${file} — this fix pass has ${plan.length} part(s) (0..${plan.length - 1}).`;
   }
   const shown = plan[requested]!.map((index) => eligible[index]!);

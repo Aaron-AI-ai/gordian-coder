@@ -100,6 +100,9 @@ export function synthesiseParts(
   if (!coverage) score = findingScore;
   else if (!judged) score = coverage.score;
   else score = findingScore * (1 - COVERAGE_WEIGHT) + coverage.score * COVERAGE_WEIGHT;
+  // 가중평균은 부동소수 꼬리를 남긴다(56.400000000000006). 이 숫자는 판정에
+  // 그대로 저장되고 judgeFeedbackFor가 재리뷰 프롬프트에 문자열로 박아 넣는다.
+  score = Math.round(score * 100) / 100;
 
   const feedback = byPart
     .map((s) => `[part ${s.part + 1}] ${s.feedback}`)

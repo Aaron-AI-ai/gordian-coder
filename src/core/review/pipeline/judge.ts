@@ -115,7 +115,9 @@ export function judgeContext(runId: string, file: string, cwd: string, part?: nu
   const plan = judgePartPlanFor(meta, result, judgment, cwd);
   const total = plan.findingParts.length + (plan.hasCoveragePart ? 1 : 0);
   const requested = part ?? 0;
-  if (requested < 0 || requested >= total) {
+  // Integer-checked here too, not only in the adapter's Zod guard: this is
+  // exported core, and a fractional part indexes past every plan array.
+  if (!Number.isInteger(requested) || requested < 0 || requested >= total) {
     return `❌ part ${requested} does not exist for ${file} — this review has ${total} part(s) (0..${total - 1}).`;
   }
 
@@ -473,7 +475,7 @@ async function submitJudgeSerialized(
     if (submitted.has(part)) {
       const next = firstMissing();
       return [
-        `ℹ️ part ${part} of ${file} was already submitted; no new record was made.`,
+        `ℹ️ part ${part + 1}/${totalParts} of ${file} was already submitted; no new record was made.`,
         ...(next === undefined ? [] : nextPartInstruction(runId, file, next)),
       ].join("\n");
     }

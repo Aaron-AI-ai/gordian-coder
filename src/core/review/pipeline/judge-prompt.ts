@@ -694,11 +694,15 @@ function coveragePrompt(
 
   const assemble = (heading: string[], outline: string): string =>
     [
-      `You are judging the review of ${result.file} (run ${meta.runId}) — part ${part + 1}/${total}: COVERAGE ONLY.`,
+      `You are judging the review of ${result.file} (run ${meta.runId})` +
+        (total > 1 ? ` — part ${part + 1}/${total}: COVERAGE ONLY.` : ` — COVERAGE ONLY.`),
       `Score threshold: ${threshold}.`,
       ``,
-      `Other parts have already scored the individual findings. Your ONLY job is`,
-      `criterion 5:`,
+      // There are no other parts in the 1/1 salvage: the review reported no
+      // findings and this is the only judge the file gets.
+      ...(total > 1
+        ? [`Other parts have already scored the individual findings. Your ONLY job is`, `criterion 5:`]
+        : [`This review reported no findings. Your ONLY job is criterion 5:`]),
       `Coverage — was every significant part of this change actually examined?`,
       ``,
       `Score 0-100 for coverage alone, and list every unexamined significant area`,

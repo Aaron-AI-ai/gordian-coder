@@ -426,6 +426,11 @@ describe("fixer part 분할", () => {
     expect(fixContext(runId, "src/Big.java", d, -1)).toContain("does not exist");
   });
 
+  it("정수가 아닌 part는 TypeError가 아니라 거절로 끝난다", async () => {
+    const { d, runId } = await bigFixRun(60);
+    expect(fixContext(runId, "src/Big.java", d, 1.5)).toContain("does not exist");
+  });
+
   it("위반이 적으면 part 하나로 끝나고 기존 컨텍스트와 같다", async () => {
     const { d, runId } = await bigFixRun(3);
     expect(fixPartPlan(runId, "src/Big.java", d)).toHaveLength(1);
