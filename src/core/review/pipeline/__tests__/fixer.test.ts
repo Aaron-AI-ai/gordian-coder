@@ -9,6 +9,7 @@ import {
   fixPartPlan,
   loadFixes,
   submitFix,
+  unfixedFixParts,
   FIX_MAX_ITEMS,
   FIX_FILE_MAX_LINES,
   FIX_CONTEXT_MAX_BYTES,
@@ -662,6 +663,52 @@ describe("fixer part 분할", () => {
       if (part === plan.length - 1) expect(each).not.toContain("NEW f-fixer");
       else expect(each).toContain(`part=${part + 1}`);
     }
+  });
+
+  it("빈틈 있는 첫 part를 지목한다 — 다음 번호를 기계적으로 세지 않는다", async () => {
+    // declared + 1은 사슬을 처음부터 다시 돌린다. 늦게 돌아온 part 0의
+    // 재제출이 part 1을 지목하면, part 1은 다시 떠서 자기 몫이 이미 다
+    // 들어있는 것을 보고 part 2를 지목하고… 5개짜리 파일이 할 일 없는
+    // f-fixer를 네 번 더 띄운다.
+    const { d, runId } = await bigFixRun(60);
+    const plan = fixPartPlan(runId, "src/Big.java", d);
+    expect(plan.length).toBeGreaterThan(2);
+    const entry = (i: number) => ({ line: 1 + i * 20, ruleId: `Rule${i}`, toBe: "x" });
+    const submit = (part: number) =>
+      submitFix({ runId, file: "src/Big.java", part, fixes: plan[part]!.map(entry) }, d);
+
+    // 순서를 건너뛰어 part 1을 먼저 끝낸다.
+    await submit(1);
+    const afterZero = await submit(0);
+    // part 1은 이미 끝났으므로 지목 대상이 아니다.
+    expect(afterZero).toContain("part=2");
+    expect(afterZero).not.toContain("part=1");
+
+    for (let part = 2; part < plan.length; part++) await submit(part);
+
+    // 모든 part가 끝난 뒤 part 0이 한 번 더 제출한다(돌려보내진 fixer의
+    // 마지막 기회). 지목할 것은 아무것도 없다.
+    const late = await submit(0);
+    expect(late).toContain("COMPLETE");
+    expect(late).not.toContain("NEW f-fixer");
+  });
+
+  it("unfixedFixParts는 빈틈이 남은 part만 돌려준다", async () => {
+    // finalize의 회수 안내가 part=0부터 다시 세면, 이미 끝난 part를 다시
+    // 띄우고 진짜 빠진 part에는 도달하지 못한다.
+    const { d, runId } = await bigFixRun(60);
+    const plan = fixPartPlan(runId, "src/Big.java", d);
+    const entry = (i: number) => ({ line: 1 + i * 20, ruleId: `Rule${i}`, toBe: "x" });
+    expect(unfixedFixParts(runId, "src/Big.java", d)).toEqual({
+      parts: plan.map((_, part) => part),
+      total: plan.length,
+    });
+    await submitFix({ runId, file: "src/Big.java", part: 0, fixes: plan[0]!.map(entry) }, d);
+    await submitFix({ runId, file: "src/Big.java", part: 2, fixes: plan[2]!.map(entry) }, d);
+    const gaps = unfixedFixParts(runId, "src/Big.java", d);
+    expect(gaps.parts).not.toContain(0);
+    expect(gaps.parts).not.toContain(2);
+    expect(gaps.parts).toContain(1);
   });
 
   it("버려진 항목 수를 기록해 fixCoverage까지 들고 간다", async () => {

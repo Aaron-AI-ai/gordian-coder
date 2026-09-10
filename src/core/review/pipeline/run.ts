@@ -28,7 +28,7 @@ import { defaultLabel, loadBaseline, manifestTimestamp, renderReviewContext, res
 import { readRunJudgments } from "./judge-store";
 import { DEFAULT_JUDGE_THRESHOLD } from "./judge-store";
 import { fcqFindings, mergeFcqFindings, readFcqFile, readFcqSummary, renderFcqSection, runFcq } from "../evidence/fcq";
-import { applyFixes, fixCoverage, fixPartPlan, loadAllFixes, loadFixes } from "./fixer";
+import { applyFixes, fixCoverage, fixPartPlan, loadAllFixes, loadFixes, unfixedFixParts } from "./fixer";
 import { rubricSources } from "../evidence/rubric";
 
 export interface PlanReviewArgs {
@@ -534,7 +534,13 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
             : "";
           if (!unfixed) return droppedWarn;
           const never = cov.filter((c) => c.fixed === 0).map((c) => c.file);
-          const split = cov.filter((c) => c.violations - c.fixed > 0 && fixPartPlan(runId, c.file, cwd).length > 1);
+          // Named, not counted: "start at part=0" re-serves the parts that are
+          // already done and burns the one allowed retry before reaching the
+          // part that actually has the gap.
+          const split = cov
+            .filter((c) => c.violations - c.fixed > 0)
+            .map((c) => ({ file: c.file, ...unfixedFixParts(runId, c.file, cwd) }))
+            .filter((c) => c.total > 1 && c.parts.length > 0);
           return (
             `\n⚠️ fcqFix is on but ${unfixed} violation(s) have no fix — they ship with the rule text only` +
             (never.length ? `; the fix pass produced nothing for ${never.join(", ")}` : "") +
@@ -544,9 +550,11 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
             // Without a part these files re-serve part 0 and the retry cannot
             // reach the violations that are actually missing.
             (split.length
-              ? `\nThese file(s) are fixed in parts — spawn one f-fixer per part, starting at part=0 and ` +
-                `following the part each submit result names: ` +
-                split.map((c) => `${c.file} (${fixPartPlan(runId, c.file, cwd).length} parts)`).join(", ") + `.`
+              ? `\nThese file(s) are fixed in parts — spawn one f-fixer for each part named here (and ` +
+                `follow any further part a submit result names): ` +
+                split
+                  .map((c) => `${c.file} part=${c.parts.join(", part=")} (of ${c.total})`)
+                  .join("; ") + `.`
               : "") +
             droppedWarn
           );

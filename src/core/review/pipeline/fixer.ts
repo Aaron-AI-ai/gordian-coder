@@ -174,6 +174,33 @@ export function fixPartPlan(runId: string, file: string, cwd: string): number[][
   return planFixParts(cwd, file, readFcqFile(runDir(runId, cwd), file).slice(0, FIX_MAX_ITEMS));
 }
 
+/** Which parts of a file still have a violation nobody recorded a fix for. */
+export interface FixPartGaps {
+  /** Part numbers with at least one unfixed violation, ascending. */
+  parts: number[];
+  /** How many parts the file has at all. */
+  total: number;
+}
+
+/**
+ * The parts a recovery must actually spawn.
+ *
+ * finalize used to say "start at part=0 and follow what each submit names",
+ * which re-serves every part that is already done and reaches the missing one
+ * only after a chain of no-op f-fixers — if at all.
+ */
+export function unfixedFixParts(runId: string, file: string, cwd: string): FixPartGaps {
+  const violations = readFcqFile(runDir(runId, cwd), file).slice(0, FIX_MAX_ITEMS);
+  const plan = planFixParts(cwd, file, violations);
+  const recorded = new Set(loadFixes(runId, file, cwd).fixes.map((f) => fixKey(f.line, f.ruleId)));
+  const uncovered = (index: number): boolean =>
+    !recorded.has(fixKey(violations[index]!.line, violations[index]!.ruleId));
+  return {
+    parts: plan.flatMap((indices, part) => (indices.some(uncovered) ? [part] : [])),
+    total: plan.length,
+  };
+}
+
 /** Everything the fixer subagent needs: the source, and every violation in it.
  * A file with more violations than fit the budget is fixed in several parts;
  * `part` selects one, and omitting it means the first (and, unsplit, the only). */
@@ -413,6 +440,17 @@ export async function submitFix(payload: unknown, cwd: string): Promise<string> 
   // submission can only ever belong to a single-part file.)
   const scope = plan[declared ?? 0]!;
   const missing = gaps(scope);
+  // The next part to spawn: the first one no fixer has recorded anything for.
+  // `declared + 1` walked the numbers instead, so a late resubmission of part 0
+  // — now permitted — named part 1, which re-served, found its own work already
+  // stored, took this same COMPLETE branch and named part 2, and so on: four
+  // wasted f-fixer spawns on a five-part file. Skipping a part that HAS been
+  // worked (rather than every part with a gap) is also what makes this
+  // terminate — a part already sent back once is never re-served here.
+  const worked = (indices: number[]): boolean => indices.some((index) => already.has(keyOf(index)));
+  const nextPart = plan.findIndex(
+    (indices, part) => part !== (declared ?? 0) && indices.length > 0 && !worked(indices)
+  );
   // A fixer already sent back once is not sent back again — decided on this
   // part's OWN prior state, never on another part's recorded fixes.
   const fresh = scope.some((index) => already.has(keyOf(index))) ? [] : missing;
@@ -431,9 +469,7 @@ export async function submitFix(payload: unknown, cwd: string): Promise<string> 
         ? `⚠️ ${missing.length} violation(s) still have no entry — they ship with the rule text only.`
         : "",
       "This subagent's task is COMPLETE.",
-      ...(declared !== undefined && declared + 1 < plan.length
-        ? nextFixPartInstruction(runId, file, declared + 1)
-        : []),
+      ...(nextPart === -1 ? [] : nextFixPartInstruction(runId, file, nextPart)),
     ]
       .filter(Boolean)
       .join("\n");
