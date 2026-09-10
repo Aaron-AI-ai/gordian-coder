@@ -288,7 +288,13 @@ function fixSource(
 
 /** Line + rule id, the anchor the fixer is given and the merge matches on.
  * The analyzer prefix is dropped so `checkstyle/MethodLength` and
- * `MethodLength` are the same violation. */
+ * `MethodLength` are the same violation.
+ *
+ * The byte between the two halves is an invisible U+001F, not a missing
+ * separator: without one L1 + `1Foo` and L11 + `Foo` would both key `11foo`, and
+ * since submitFix started MERGING on this key a collision would make one stored
+ * fix silently overwrite another. U+001F rather than `:` because a rule id can
+ * contain punctuation but never a control character. */
 function fixKey(line: number | undefined, rule: string): string {
   return `${line ?? 0}${rule.slice(rule.lastIndexOf("/") + 1).toLowerCase()}`;
 }
@@ -325,23 +331,35 @@ export async function submitFix(payload: unknown, cwd: string): Promise<string> 
   // Matched by anchor, not by count: two entries for one line while another
   // violation has none is exactly the gap a count comparison reports as clean.
   const entered = new Set(fixes.map((f) => fixKey(f.line, f.ruleId)));
+  const already = new Set(previous.map((f) => fixKey(f.line, f.ruleId)));
+  const keyOf = (index: number): string => fixKey(violations[index]!.line, violations[index]!.ruleId);
+  // A gap is a violation with no fix in the MERGED state — this submission's
+  // entries plus what was already stored. Measuring against this submission
+  // alone was right while submitFix overwrote; now that it merges, it reported
+  // an earlier part's recorded fixes back as missing ("19 recorded, ⚠️ 20 have
+  // no entry" for a file whose fixes were nearly complete).
+  const gaps = (indices: number[]): FcqFileViolation[] =>
+    indices
+      .map((index) => violations[index]!)
+      .filter((v) => !entered.has(fixKey(v.line, v.ruleId)) && !already.has(fixKey(v.line, v.ruleId)));
   // Scoped to the part(s) this submission actually answered. A split fixer only
   // ever saw its own part's violations, so listing another part's back at it is
   // an instruction to write code for lines it was never shown. A submission
   // matching no part at all (empty, or all-junk anchors) falls back to the whole
   // list — that fixer has nothing to go on either way.
   const touched = planFixParts(cwd, file, violations).filter((part) =>
-    part.some((index) => entered.has(fixKey(violations[index]!.line, violations[index]!.ruleId)))
+    part.some((index) => entered.has(keyOf(index)))
   );
-  const owned = touched.length ? touched.flat().map((index) => violations[index]!) : violations;
-  // A fixer already sent back once is not sent back again, whatever it
-  // submitted the second time — judged per part, not per file, or parts 2+
-  // would inherit part 1's "already nagged" state and never hear about a gap.
-  const already = new Set(previous.map((f) => fixKey(f.line, f.ruleId)));
-  const resubmission = owned.some((v) => already.has(fixKey(v.line, v.ruleId)));
-  const missing = owned.filter((v) => !entered.has(fixKey(v.line, v.ruleId)));
+  const parts = touched.length ? touched : [violations.map((_, index) => index)];
+  const missing = gaps(parts.flat());
+  // A fixer already sent back once is not sent back again — decided per part on
+  // that part's OWN prior state. Asking whether ANY touched violation was
+  // already recorded let a single entry straying across the part boundary count
+  // part 1's recorded fixes as part 2's retry, so part 2's real gaps got a ⚠️
+  // and "COMPLETE" instead of the send-back they needed.
+  const fresh = gaps(parts.filter((part) => !part.some((index) => already.has(keyOf(index)))).flat());
   const recorded = `✅ ${file}: ${fixes.length} fix(es) recorded (${withCode} with code, ${fp} false positive(s)).`;
-  if (!missing.length || resubmission) {
+  if (!fresh.length) {
     return [
       recorded,
       missing.length
@@ -357,8 +375,8 @@ export async function submitFix(payload: unknown, cwd: string): Promise<string> 
   // a refactor rather than a snippet swap was simply dropped.
   return [
     recorded,
-    `⚠️ ${missing.length} violation(s) got NO entry and would ship with the rule text only:`,
-    ...missing.map(
+    `⚠️ ${fresh.length} violation(s) got NO entry and would ship with the rule text only:`,
+    ...fresh.map(
       (v) => `- L${v.line ?? 0} [${v.severity}] ${v.analyzer}/${v.ruleId} — ${v.description}`
     ),
     `Call f_review_fix_submit again with the SAME entries PLUS one for each of these.`,

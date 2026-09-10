@@ -463,6 +463,50 @@ describe("fixer part 분할", () => {
     expect(fixes[0]!.toBe).toBe("나중");
   });
 
+  it("앞 part로 삐져나간 항목 하나가 뒤 part의 재요청을 삼키지 않는다", async () => {
+    const { d, runId } = await bigFixRun(60);
+    const plan = fixPartPlan(runId, "src/Big.java", d);
+    const entry = (i: number) => ({ line: 1 + i * 20, ruleId: `Rule${i}`, toBe: "x" });
+    // part 0은 자기 몫을 다 채워 기록을 남긴다.
+    await submitFix({ runId, file: "src/Big.java", fixes: plan[0]!.map(entry) }, d);
+    // part 1은 자기 항목 하나를 빠뜨린 채, part 0의 앵커 하나를 함께 낸다.
+    const skipped = plan[1]![0]!;
+    const out = await submitFix(
+      {
+        runId,
+        file: "src/Big.java",
+        fixes: [entry(plan[0]![0]!), ...plan[1]!.slice(1).map(entry)],
+      },
+      d
+    );
+    // part 0이 이미 기록됐다는 이유로 part 1의 진짜 누락이 COMPLETE 처리되면
+    // 그 위반은 아무 fixer도 다시 보지 않는다.
+    expect(out).toContain("NO entry");
+    expect(out).toContain(`L${1 + skipped * 20} `);
+    expect(out).not.toContain("COMPLETE");
+    // 이미 기록된 part 0의 fix가 미기입으로 다시 세어지면 안 된다.
+    expect(out).toContain("1 violation(s) got NO entry");
+  });
+
+  it("줄 번호와 규칙 사이 경계가 두 앵커를 뭉개지 않는다", async () => {
+    // L1 + "1Foo" 와 L11 + "Foo". 구분자가 없으면 둘 다 "11foo"가 되고,
+    // 병합이 앵커 단위인 지금은 한쪽이 다른 쪽을 조용히 덮어쓴다 — 그 위반은
+    // fix 없이 나가는데 fixCoverage는 항목 수만 세므로 fixWarn도 안 뜬다.
+    const cwd = repo();
+    const runId = await run(cwd, [
+      { ...VIOLATION, line: 1, ruleId: "1Foo" },
+      { ...VIOLATION, line: 11, ruleId: "Foo" },
+    ]);
+    await submitFix({ runId, file: "src/A.java", fixes: [{ line: 1, ruleId: "1Foo", toBe: "가" }] }, cwd);
+    await submitFix({ runId, file: "src/A.java", fixes: [{ line: 11, ruleId: "Foo", toBe: "나" }] }, cwd);
+    const fixes = loadFixes(runId, "src/A.java", cwd).fixes;
+    expect(fixes).toHaveLength(2);
+    expect(fixes.map((f) => f.toBe)).toEqual(["가", "나"]);
+    expect(fixCoverage(runId, ["src/A.java"], cwd)).toEqual([
+      { file: "src/A.java", violations: 2, fixed: 2 },
+    ]);
+  });
+
   it("part 하나를 낸 fixer에게 다른 part의 위반을 채우라고 하지 않는다", async () => {
     const { d, runId } = await bigFixRun(60);
     const plan = fixPartPlan(runId, "src/Big.java", d);
