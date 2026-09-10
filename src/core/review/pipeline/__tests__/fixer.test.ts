@@ -435,7 +435,9 @@ describe("fixer part 분할", () => {
     expect(whole).not.toContain("fixed in");
   });
 
-  it("두 번째 part 제출이 첫 part의 fix를 지우지 않는다", async () => {
+  it("같은 part의 두 번째 제출이 첫 제출의 fix를 지우지 않는다", async () => {
+    // part를 선언하게 된 뒤 이 테스트는 같은-part 경로만 지난다. 교차 part
+    // 보장은 바로 아래 테스트가 따로 지킨다.
     const { d, runId } = await bigFixRun(60);
     await submitFix(
       { runId, file: "src/Big.java", part: 0, fixes: [{ line: 1, ruleId: "Rule0", asIs: "a", toBe: "b" }] },
@@ -447,6 +449,29 @@ describe("fixer part 분할", () => {
     );
     const fixes = loadFixes(runId, "src/Big.java", d).fixes;
     expect(fixes.map((f) => f.ruleId).sort()).toEqual(["Rule0", "Rule1"]);
+  });
+
+  it("따로 제출된 part 0과 part 1의 fix가 둘 다 남는다", async () => {
+    // 분할 fix pass 전체가 이 보장 위에 서 있다 — Task 7 전에는 part 2가 part 1의
+    // 작업을 지웠다. part 선언이 들어오면서 이 성질을 짚던 테스트가 같은-part
+    // 경로로 옮겨갔고, 병합 코드는 part로 분기하지 않으므로 아무도 이 경우를
+    // 밟지 않게 됐다.
+    const { d, runId } = await bigFixRun(60);
+    const plan = fixPartPlan(runId, "src/Big.java", d);
+    const entry = (i: number) => ({ line: 1 + i * 20, ruleId: `Rule${i}`, toBe: `fix${i}` });
+    await submitFix({ runId, file: "src/Big.java", part: 0, fixes: plan[0]!.map(entry) }, d);
+    await submitFix({ runId, file: "src/Big.java", part: 1, fixes: plan[1]!.map(entry) }, d);
+
+    const fixes = loadFixes(runId, "src/Big.java", d).fixes;
+    // 개수가 아니라 앵커로 본다: 엉뚱한 항목을 남긴 병합도 수는 맞을 수 있다.
+    const anchors = new Set(fixes.map((f) => `${f.line}/${f.ruleId}`));
+    for (const i of [...plan[0]!, ...plan[1]!]) {
+      expect(anchors.has(`${1 + i * 20}/Rule${i}`), `Rule${i} must survive the merge`).toBe(true);
+    }
+    expect(fixes).toHaveLength(plan[0]!.length + plan[1]!.length);
+    // 내용까지 그대로여야 한다 — 앵커만 남고 코드가 바뀌면 리포트가 거짓말을 한다.
+    const first = plan[0]![0]!;
+    expect(fixes.find((f) => f.ruleId === `Rule${first}`)!.toBe).toBe(`fix${first}`);
   });
 
   it("같은 앵커를 다시 제출하면 덮어쓴다", async () => {

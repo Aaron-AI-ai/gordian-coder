@@ -604,6 +604,18 @@ describe("part 파라미터", () => {
     expect(flat).toContain("ONE f-fixer subagent per file AND part");
     // 인자 설명 절에도 같은 절대 표현이 하나 더 있었다.
     expect(flat).not.toContain("one f-fixer subagent per file for it");
+    // 판정관도 part로 쪼개진다 — fixer 쪽과 똑같은 모순이 여기 남아 있었다.
+    expect(flat).not.toContain("ONE f-judge subagent for that file and obey");
+    expect(flat).toContain("ONE f-judge subagent for that file AND part");
+    expect(flat).not.toContain("an independent f-judge subagent scores each file's review");
+    // finalize 복구 절도 "파일당 하나"로 못박고 있었다. 분할된 파일의 복구는
+    // part마다 하나가 필요하고, finalize 자신이 그렇게 지시한다.
+    expect(flat).toContain("one per PART for a file finalize lists with parts");
+    // 리뷰어에는 part 개념이 없다 — 세그먼트는 한 세션 안의 일이다. 손대지 않는다.
+    expect(flat).toContain("ONE f-reviewer subagent per file;");
+    // "파일을 다 띄웠으면 finalize"는 part 0만 띄우고 마무리하라는 말로도 읽힌다.
+    expect(flat).not.toContain("When every file has been dispatched, call");
+    expect(flat).toContain("every part of it included");
   });
 
   it("f_review_judge_context가 part를 코어까지 넘긴다", async () => {

@@ -262,9 +262,10 @@ Parse the arguments into \`f_review_plan\` parameters (all optional):
   project config \`deepPasses\`)
 - \`fcqFix: true\` in config → the plan adds a FIX PASS step; spawn one f-fixer
   subagent per file, and per part for a file the plan lists with parts.
-- \`--judge\` → \`judge: true\` (judge gate: an independent f-judge subagent scores
-  each file's review; failing reviews are re-reviewed with feedback. Default
-  comes from project config \`judge\`)
+- \`--judge\` → \`judge: true\` (judge gate: independent f-judge subagents score
+  each file's review — a large one is scored in parts, one subagent per part;
+  failing reviews are re-reviewed with feedback. Default comes from project
+  config \`judge\`)
 - \`--fcq\` → \`fcq: true\` (static analysis: the fcq CLI runs once at plan time;
   its violations become reviewer evidence and merge into the report. Default
   comes from project config \`fcq\`; CLI options live in \`fcqOptions\`)
@@ -309,12 +310,16 @@ Parallel workflow (default):
      static-analysis violations; without it they reach the report with only
      the rule's own text as their fix.
    - If the plan enables the judge gate, follow its judge steps exactly: after
-     each reviewer finishes, spawn ONE f-judge subagent for that file and obey
-     the accept/rework message \`f_review_judge\` returns (the rework cap is
-     enforced by the tool).
-3. When every file has been dispatched, call \`f_review_finalize\` with the runId.
+     each reviewer finishes, spawn ONE f-judge subagent for that file AND part
+     — a large review is judged in parts, and each \`f_review_judge\` result
+     names the next part to spawn a fresh f-judge for — and obey the
+     accept/rework message it returns (the rework cap is enforced by the tool).
+3. When every file has been dispatched — every part of it included — call
+   \`f_review_finalize\` with the runId.
 4. If finalize reports missing files, re-spawn ONE subagent per missing file
-   (same runId, same prompt shape), then call \`f_review_finalize\` again.
+   (same runId, same prompt shape) — and one per PART for a file finalize lists
+   with parts, which its own message spells out. Then call
+   \`f_review_finalize\` again.
    Do this retry AT MOST ONCE — if files are still missing afterwards, stop and
    report the INCOMPLETE result as-is.
 5. Relay the finalize summary (coverage, verdict, report path) to the user.
