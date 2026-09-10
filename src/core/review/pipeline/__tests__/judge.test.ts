@@ -111,6 +111,30 @@ const manyFindings = (n: number): FileReviewResult => ({
   partial: false,
 });
 
+/** 3000줄짜리 파일 중 몇 줄만 바꾼 diff 모드 런. */
+async function bigDiffRun() {
+  const d = dir();
+  const sh = (c: string[]) => Bun.spawnSync(c, { cwd: d });
+  sh(["git", "init", "-q"]);
+  sh(["git", "config", "user.email", "t@t"]);
+  sh(["git", "config", "user.name", "t"]);
+  const lines = (mark: string) =>
+    Array.from({ length: 3000 }, (_, i) =>
+      i === 1500 ? `const v${i} = ${mark}; // 설명 주석` : `const v${i} = ${i}; // 설명 주석`
+    ).join("\n") + "\n";
+  writeFileSync(join(d, "big.ts"), lines("0"));
+  sh(["git", "add", "-A"]);
+  sh(["git", "commit", "-qm", "init"]);
+  writeFileSync(join(d, "big.ts"), lines("999"));
+  sh(["git", "add", "-A"]);
+  sh(["git", "commit", "-qm", "change"]);
+  const meta = await createRun(
+    baseMeta({ targets: ["big.ts"], whole: false, range: "HEAD~1..HEAD" }),
+    d
+  );
+  return { d, meta };
+}
+
 /** 3000줄짜리 파일을 가진 whole-file 런. */
 async function bigRun() {
   const d = gitRepo();
@@ -1256,6 +1280,32 @@ describe("judge part 프롬프트", () => {
     // 헤더가 밝힌 범위가 본문과 정확히 일치한다
     expect(prompt).toContain(`\n${shown}|const v${shown - 1} =`);
     expect(prompt).not.toContain(`\n${shown + 1}|const v${shown} =`);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_BYTES);
+  });
+
+  it("diff 모드에서는 coverage part도 diff만 보여준다", async () => {
+    // changeExcerpt는 meta.range && !meta.whole에서 diff로 갈라지는데
+    // coveragePrompt는 무조건 파일 전체를 읽었다. 그러면 "이 변경의 중요한
+    // 부분을 다 살펴봤나"를 애초에 리뷰 범위가 아니었던 코드를 놓고 묻게 되고,
+    // 심사관은 없는 간극을 지어낸다 — 합성 점수가 threshold-1로 눌리고
+    // 파일은 rework 상한을 타고 terminal INCOMPLETE로 간다.
+    const { d, meta } = await bigDiffRun();
+    await writeFileReview(meta.runId, manyFindings(30), "md", d);
+    const runMetaLoaded = loadRun(meta.runId, d)!;
+    const review = readFileReviewResult(meta.runId, "big.ts", d)!;
+    const judgment = loadJudgment(meta.runId, "big.ts", d);
+    const plan = judgePartPlanFor(runMetaLoaded, review, judgment, d);
+    expect(plan.hasCoveragePart).toBe(true);
+    const prompt = buildPartPrompt(
+      runMetaLoaded, review, judgment, d, plan.findingParts.length, plan
+    ) as string;
+    expect(typeof prompt).toBe("string");
+    expect(prompt).toContain("COVERAGE ONLY");
+    // 바뀐 줄은 보여준다.
+    expect(prompt).toContain("const v1500 = 999;");
+    // 손대지 않은 줄은 보여주지 않는다 — 리뷰 범위가 아니다.
+    expect(prompt).not.toContain("const v10 = 10;");
+    expect(prompt).not.toContain("of 3000");
     expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_BYTES);
   });
 

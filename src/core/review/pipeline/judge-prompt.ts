@@ -634,32 +634,67 @@ function coveragePrompt(
       `coverage score, and feedback naming what a next reviewer must examine.`,
     ].join("\n");
 
-  const wholeHeading = [`### The file under review (${totalLines} lines)`];
+  // The same branch changeExcerpt takes. Without it the coverage judge was
+  // handed the whole file in diff mode and asked whether every significant part
+  // of THIS CHANGE was examined — over code that was never in scope. It duly
+  // reported the untouched remainder as gaps, the merged payload clamped to
+  // threshold - 1, and the file rode the rework cap to terminal INCOMPLETE.
+  const diff =
+    meta.range && !meta.whole ? (buildDiffMap(meta.range, [result.file], cwd)[result.file] ?? "") : "";
+
+  const wholeHeading = diff
+    ? [`### The change under review (diff)`]
+    : [`### The file under review (${totalLines} lines)`];
   // Coverage is the one criterion that can be answered wrongly by omission, so
   // a partial outline must say so — otherwise the judge reports every unshown
   // line as an unexamined area the reviewer skipped.
-  const partialHeading = (shownTo: number): string[] => [
-    `### The file under review — lines 1-${shownTo} of ${totalLines}`,
-    `Lines ${shownTo + 1}-${totalLines} were NOT shown to you and are outside what`,
-    `you can judge. Do not score them as examined, and do not report them as`,
-    `coverage gaps — judge coverage only over the lines below.`,
-  ];
+  const partialHeading = (shownTo: number, of: number): string[] =>
+    diff
+      ? [
+          `### The change under review (diff) — the first ${shownTo} of ${of} diff lines`,
+          `The rest of the diff was NOT shown to you and is outside what you can`,
+          `judge. Do not score it as examined, and do not report it as a coverage`,
+          `gap — judge coverage only over the diff below.`,
+        ]
+      : [
+          `### The file under review — lines 1-${shownTo} of ${of}`,
+          `Lines ${shownTo + 1}-${of} were NOT shown to you and are outside what`,
+          `you can judge. Do not score them as examined, and do not report them as`,
+          `coverage gaps — judge coverage only over the lines below.`,
+        ];
 
+  const of = diff ? diff.replace(/\n$/, "").split("\n").length : totalLines;
   // Everything except the outline, measured with the longest heading variant,
   // so what is left over is a budget the assembled prompt cannot exceed.
   const budget = Math.min(
     JUDGE_CHANGE_MAX_BYTES,
-    JUDGE_CONTEXT_MAX_BYTES - byteLen(assemble(partialHeading(totalLines), ""))
+    JUDGE_CONTEXT_MAX_BYTES - byteLen(assemble(partialHeading(of, of), ""))
   );
   if (budget <= 0) {
     return contextOverflow(
-      `the rules and finding summary for ${result.file} leave no room for the file itself`
+      `the rules and finding summary for ${result.file} leave no room for the change itself`
     );
   }
 
-  const { text, shownTo } = coverageOutline(result.file, content, totalLines, budget);
-  const prompt = assemble(shownTo >= totalLines ? wholeHeading : partialHeading(shownTo), text);
+  const { text, shownTo } = diff
+    ? diffOutline(diff, of, budget)
+    : coverageOutline(result.file, content, totalLines, budget);
+  const prompt = assemble(shownTo >= of ? wholeHeading : partialHeading(shownTo, of), text);
   return byteLen(prompt) <= JUDGE_CONTEXT_MAX_BYTES
     ? prompt
     : contextOverflow(`the assembled coverage prompt is ${byteLen(prompt)} bytes`);
+}
+
+/** The diff as the coverage judge sees it: whole when it fits the byte budget,
+ * else its leading lines. The half line a byte cut leaves is dropped, so the
+ * reported count matches what is actually there. */
+function diffOutline(
+  diff: string,
+  totalDiffLines: number,
+  budget: number
+): { text: string; shownTo: number } {
+  if (byteLen(diff) <= budget) return { text: diff, shownTo: totalDiffLines };
+  const kept = sliceBytes(diff, budget).split("\n");
+  const text = kept.length > 1 ? kept.slice(0, -1).join("\n") : kept.join("\n");
+  return { text, shownTo: text.split("\n").length };
 }
