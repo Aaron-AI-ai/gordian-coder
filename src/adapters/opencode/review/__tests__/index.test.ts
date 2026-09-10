@@ -618,6 +618,24 @@ describe("part 파라미터", () => {
     expect(flat).toContain("every part of it included");
   });
 
+  it("수정관 프롬프트가 재제출 한 번을 허용하되 그 이상은 막는다", () => {
+    // 툴은 미기입 위반을 열거하며 "SAME entries PLUS one for each of these"로
+    // 다시 부르라고 한다. 프롬프트가 "exactly once and STOP"이면 수정관은 그
+    // 지시를 어기거나 무시한다 — 그 part는 구멍을 남긴 채 끝나고, 다음 part를
+    // 지목하는 줄은 COMPLETE 분기에만 붙으므로 part 사슬까지 멈춘다.
+    // 줄바꿈 위치에 걸리지 않도록 공백을 눌러 비교한다.
+    const fixer = FIXER_AGENT_PROMPT.replace(/\s+/g, " ");
+    expect(fixer).not.toContain("exactly once and STOP");
+    expect(fixer).toContain("submit ONCE more");
+    expect(fixer).toContain("two submissions at most");
+    // 열린 면허가 되면 안 된다. 나머지 금지는 그대로 남아야 한다.
+    expect(fixer).toContain("never a third");
+    expect(fixer).toContain("Never report new issues, never review the code, never spawn agents");
+    // 판정관 쪽 "exactly once"는 의도적으로 그대로다: part마다 새 판정관이
+    // 뜨므로 서브에이전트당 한 번 제출이 맞다.
+    expect(JUDGE_AGENT_PROMPT).toContain("exactly once");
+  });
+
   it("f_review_judge_context가 part를 코어까지 넘긴다", async () => {
     const d = gitRepo();
     const { mod } = moduleFor(d);

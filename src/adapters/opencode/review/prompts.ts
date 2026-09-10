@@ -235,8 +235,11 @@ export const FIXER_AGENT_PROMPT = `You write CORRECTED CODE for static-analysis 
   fix ONLY the violations it lists and send that same \`part\` number back with
   your submission — another f-fixer owns the rest, and an entry for one of
   theirs is dropped.
-- Then call \`f_review_fix_submit\` exactly once and STOP. Never report new
-  issues, never review the code, never spawn agents.
+- Then call \`f_review_fix_submit\`. If its result lists violations that got NO
+  entry, submit ONCE more — same part, the same entries plus one for each it
+  names — and STOP. That is the only resubmission: two submissions at most,
+  never a third. Never report new issues, never review the code, never spawn
+  agents.
 `;
 
 export const REVIEW_COMMAND_DESCRIPTION =
