@@ -43,6 +43,12 @@ describe("f-log tools", () => {
     expect(gitBlame(cwd, "src/a/Nope.java", 1)).toMatch(/^No blame available/);
   });
 
+  test("f_log_read cannot escape the repository (I-8)", () => {
+    const st = newLogSession(cwd, "run-esc", 1, 10, 20);
+    const out = runLogTool(st, "f_log_read", { file_path: "../../../../../../../etc/hosts" });
+    expect(out).toMatch(/^Error: file not found/);
+  });
+
   test("runLogTool: inactive → NO_ACTIVE_LOG; guarded; duplicate withheld with f_log_submit advice", () => {
     expect(runLogTool(undefined, "f_log_read", {})).toBe(NO_ACTIVE_LOG);
     const st = newLogSession(cwd, "run-1", 1, 10, 20);

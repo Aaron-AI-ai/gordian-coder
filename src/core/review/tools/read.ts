@@ -11,7 +11,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, basename } from "node:path";
+import { join, relative, basename, resolve, sep } from "node:path";
 import type { Finding } from "../contract";
 
 export const FILE_READ_MAX_LINES = 500;
@@ -94,7 +94,12 @@ export function readFileAt(cwd: string, ref: string | null, path: string): strin
     const r = sh(["git", "show", `${ref}:./${path}`], cwd);
     return r.code === 0 ? r.stdout : null;
   }
-  const abs = join(cwd, path);
+  const abs = resolve(cwd, path);
+  // Never resolve outside the repository — a ".."-laden path (or an evidence
+  // entry echoing one back at finalize time) must not read or quote arbitrary
+  // filesystem content (I-8).
+  const root = resolve(cwd);
+  if (abs !== root && !abs.startsWith(root + sep)) return null;
   if (!existsSync(abs) || !statSync(abs).isFile()) return null;
   return readFileSync(abs, "utf8");
 }
