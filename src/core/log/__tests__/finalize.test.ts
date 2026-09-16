@@ -42,11 +42,11 @@ const judged: LogJudgments = { attempts: [{ round: 1, scores: { observation: 30,
 
 describe("computeGaps", () => {
   test("three set differences", () => {
-    const g = computeGaps(plan, sub, judged, { r1: { f_log_read: 1 } }, ["src/a/Svc.java"]);
+    const g = computeGaps(plan, sub, judged, { r1: { f_log_read: 1 } }, ["src/a/Svc.java"], []);
     expect(g.unexplainedExceptions).toEqual([]);            // both exception observations explained
     expect(g.unreadSuspects).toEqual(["src/a/Ctl.java"]);   // never read
     expect(g.unresolvedObservations).toEqual(["핸들러 errorCode=1001"]);
-    const g2 = computeGaps(plan, { ...sub, observations: sub.observations.slice(0, 1) }, judged, {}, []);
+    const g2 = computeGaps(plan, { ...sub, observations: sub.observations.slice(0, 1) }, judged, {}, [], []);
     expect(g2.unexplainedExceptions).toEqual(["java.lang.NullPointerException"]);
   });
 });
@@ -67,7 +67,7 @@ describe("renderLogReport", () => {
   mkdirSync(join(cwd, "src/a"), { recursive: true });
   writeFileSync(join(cwd, "src/a/Svc.java"), "class Svc {\n  void run() { map.get(k).size(); }\n}\n");
   const input: FinalizeInput = { plan, input: "java.lang.NullPointerException: x\n\tat a.Svc.run(Svc.java:2)\n", submission: sub, judgments: judged, attempt: judged.attempts[0], session: { toolCalls: 4, maxToolCalls: 10, rounds: 1 }, cwd };
-  const gaps = computeGaps(plan, sub, judged, {}, ["src/a/Svc.java"]);
+  const gaps = computeGaps(plan, sub, judged, {}, ["src/a/Svc.java"], []);
 
   test("nine sections, ko labels, evidence quoted from the actual file, gaps listed", () => {
     const md = renderLogReport(input, gaps, "PASS", "ko", new Date("2026-09-16T01:00:00Z"));
@@ -171,5 +171,22 @@ describe("finalizeRun end-to-end", () => {
     const cwd = mkdtempSync(join(tmpdir(), "f-log-fin2-"));
     const runId = /runId[:=]\s*(\S+)/.exec(planLog({ log: "java.lang.IllegalStateException: y\n\tat a.B.c(B.java:1)\n" }, cwd))![1];
     expect(finalizeRun(runId, cwd)).toContain("f-log-analyst");
+  });
+
+  test("a suspect injected into context but never re-read is not reported as an unread gap (I-6)", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "f-log-fin-inject-"));
+    mkdirSync(join(cwd, "src/a"), { recursive: true });
+    writeFileSync(join(cwd, "src/a/Svc.java"), "class Svc {\n  void run() { map.get(k).size(); }\n}\n");
+    const git = (args: string[]) => Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd });
+    git(["init", "-q"]); git(["add", "."]); git(["commit", "-qm", "init"]);
+    const runId = /runId[:=]\s*(\S+)/.exec(planLog({ log: "java.lang.NullPointerException: x\n\tat a.Svc.run(Svc.java:2)\n" }, cwd))![1];
+    logContext(runId, "fin-inj", cwd);
+    const st = getLogState("fin-inj")!;
+    // No f_log_read/f_log_blame call — the primary suspect was only ever seen
+    // via the code snippet injected straight into the context.
+    submitLog({ runId, submitToken: st.submitToken, cause: { file: "src/a/Svc.java", line: 2, summary: "null", mechanism: "m" }, evidence: [{ file: "src/a/Svc.java", lines: [1, 3], why: "w" }], observations: [{ observation: "예외 1/1: java.lang.NullPointerException: x", explained: true }], alternatives: [{ hypothesis: "h", rejectedBecause: "r" }], resolution: { summary: "s", changes: [], kind: "root-cause" }, confidence: 70 }, "fin-inj");
+    const tok = /JUDGE_TOKEN=(\S+)/.exec(logJudgeContext(runId, cwd))![1];
+    submitLogJudge({ runId, judgeToken: tok, scores: { observation: 30, alternatives: 20, rootCause: 25 }, unexplained: [], feedback: "ok" }, cwd);
+    expect(finalizeRun(runId, cwd)).toContain("Gaps: none");
   });
 });

@@ -10,7 +10,7 @@ import { parseStackTrace, type ParsedLog } from "./parse";
 import type { LogPlan, Suspect } from "./plan";
 import { analystInstructions } from "./prompt";
 import { loadLogRules, matchLogRules, renderLogRules, type MatchedRule } from "./rules";
-import { loadJudgments, readRunJson, readRunText, writeRunText, type LogJudgments, type RunMeta } from "./run-store";
+import { loadJudgments, readRunJson, readRunText, writeRunJson, writeRunText, type LogJudgments, type RunMeta } from "./run-store";
 import { getLogState, newLogSession, setLogState } from "./state";
 
 export const RAW_MAX_CHARS = 6_000;
@@ -88,6 +88,13 @@ function kbSection(i: ContextInput): string {
   return ["## 프레임워크 KB (이미 주입됨 — 다시 읽지 마라)", ...docs.map((d) => `### ${d.specifier} (${d.path})\n${cut(d.content, KB_DOC_MAX_CHARS, "(KB 문서 일부)")}`)].join("\n\n");
 }
 
+/** Which suspects actually survived into the rendered text (budget cuts can
+ * drop the "나머지 용의 파일" section, in whole or in part) — these count as
+ * "seen" for the gap check even though the analyst never re-`f_log_read` them. */
+export function injectedSuspects(text: string, suspects: Suspect[]): string[] {
+  return suspects.filter((s) => text.includes(`### ${s.path}`)).map((s) => s.path);
+}
+
 export function renderContext(i: ContextInput): string {
   const rework = i.round > 1;
   const entry = i.plan.entry ? `진입점: ${i.plan.entry.cls}.${i.plan.entry.method}${i.plan.entry.line ? `:${i.plan.entry.line}` : ""}` : "진입점: (없음 — 스택 없는 입력)";
@@ -149,5 +156,10 @@ export function logContext(runId: string, sessionId: string, cwd: string): strin
     submitToken: st.submitToken, language: meta.language, cwd, maxChars: cfg.contextMaxChars,
   });
   writeRunText(runId, cwd, `context-${round}.md`, text);
+  // Finalize needs which suspects were actually shown, union'd across rounds
+  // (a rework round's "이전 라운드와 동일" rules/KB replacement still injects suspects).
+  const prevInjected = readRunJson<string[]>(runId, cwd, "injected.json") ?? [];
+  const injected = [...new Set([...prevInjected, ...injectedSuspects(text, plan.suspects)])];
+  writeRunJson(runId, cwd, "injected.json", injected);
   return text;
 }

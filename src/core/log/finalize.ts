@@ -35,14 +35,16 @@ const RAW_MAX = 6_000;
 
 /** callLog is part of the interface contract (spec §11.1) but the read/unread
  * split only needs readFiles.json — kept as a parameter for callers that
- * already have both on hand. */
-export function computeGaps(plan: LogPlan, submission: StoredSubmission, judgments: LogJudgments, callLog: Record<string, Record<string, number>>, readFiles: string[]): Gaps {
+ * already have both on hand. `injected` (injected.json) are suspects whose
+ * snippet was actually shown in some round's context — the submit-gate
+ * treats them as seen (submit.ts Gate 2), so the gap check must too (I-6). */
+export function computeGaps(plan: LogPlan, submission: StoredSubmission, judgments: LogJudgments, callLog: Record<string, Record<string, number>>, readFiles: string[], injected: string[]): Gaps {
   void callLog;
   const explained = new Set(submission.observations.filter((o) => o.explained).map((o) => o.observation));
   const unexplainedExceptions = plan.observations
     .filter((o) => /^예외 \d+\/\d+: /.test(o) && !explained.has(o))
     .map((o) => o.replace(/^예외 \d+\/\d+: /, "").split(":")[0]);
-  const seen = new Set(readFiles);
+  const seen = new Set([...readFiles, ...injected]);
   const unreadSuspects = plan.suspects.map((s) => s.path).filter((p) => !seen.has(p));
   const last = [...judgments.attempts].sort((a, b) => b.round - a.round)[0];
   const unresolvedObservations = last?.unexplained ?? [];
@@ -188,7 +190,8 @@ export function finalizeRun(runId: string, cwd: string): string {
   const judgments = loadJudgments(runId, cwd);
   const callLog = readRunJson<Record<string, Record<string, number>>>(runId, cwd, "callLog.json") ?? {};
   const readFiles = readRunJson<string[]>(runId, cwd, "readFiles.json") ?? [];
-  const gaps = computeGaps(plan, best.submission, judgments, callLog, readFiles);
+  const injected = readRunJson<string[]>(runId, cwd, "injected.json") ?? [];
+  const gaps = computeGaps(plan, best.submission, judgments, callLog, readFiles, injected);
   const badge = badgeFor(best.submission, judgments, best.attempt);
   const cfg = loadLogConfig(cwd);
   const toolCalls = Object.values(callLog[runId] ?? {}).reduce((a, b) => a + b, 0);
