@@ -16,6 +16,7 @@ export interface LogSession extends GuardState {
   lastValid?: unknown; // last schema-valid LogSubmission (narrowed in submit.ts)
   resumes: number;
   submitted: boolean;
+  readFiles?: Record<string, true>; // repo-relative paths seen via f_log_read/f_log_blame
 }
 
 const MAX_SESSIONS = 50;

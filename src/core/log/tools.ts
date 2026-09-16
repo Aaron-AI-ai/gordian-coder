@@ -123,5 +123,10 @@ export function runLogTool(st: LogSession | undefined, name: string, args: Recor
   if (!st?.active) return NO_ACTIVE_LOG;
   const spec = BY_NAME.get(name);
   if (!spec) return `Unknown f-log tool: ${name}`;
-  return logGuard(st, name, spec.run(st, args), args);
+  const out = spec.run(st, args);
+  if ((name === "f_log_read" || name === "f_log_blame") && !out.startsWith("Error:") && !out.startsWith("No blame available")) {
+    const normalizedPath = String(args.file_path).replace(/\\/g, "/").replace(/^\.\//, "");
+    (st.readFiles ??= {})[normalizedPath] = true;
+  }
+  return logGuard(st, name, out, args);
 }
