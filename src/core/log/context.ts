@@ -143,7 +143,7 @@ export function logContext(runId: string, sessionId: string, cwd: string): strin
 
   const parsed = parseStackTrace(raw);
   const types = [...parsed.chain, ...parsed.suppressed].map((b) => b.type);
-  const rules = matchLogRules(loadLogRules(cwd), types, plan.suspects.map((s) => s.path));
+  const rules = matchLogRules(loadLogRules(cwd), types, plan.suspects.map((s) => s.path), parsed.handler);
   const text = renderContext({
     plan, parsed, raw, rules, rejected: judgments.rejected, round,
     submitToken: st.submitToken, language: meta.language, cwd, maxChars: cfg.contextMaxChars,

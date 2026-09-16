@@ -3,11 +3,12 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bundledLogRules, matchLogRules } from "../rules";
+import type { HandlerInfo } from "../parse";
 
 const cwd = mkdtempSync(join(tmpdir(), "f-log-bundled-"));
 const rules = bundledLogRules(cwd);
-const files = (types: string[], paths: string[] = []) =>
-  matchLogRules(rules, types, paths).map((r) => r.file).filter((f) => f.startsWith("fico_") || f === "npe.md");
+const files = (types: string[], paths: string[] = [], handler?: HandlerInfo) =>
+  matchLogRules(rules, types, paths, handler).map((r) => r.file).filter((f) => f.startsWith("fico_") || f === "npe.md");
 
 describe("bundled fico rules", () => {
   test("13 fico/npe rules load, each 15–25 body lines, each names an f_log tool", () => {
@@ -35,6 +36,10 @@ describe("bundled fico rules", () => {
     expect(files(["org.springframework.beans.factory.BeanCreationException"])).toContain("fico_wiring.md");
     expect(files(["java.lang.NullPointerException"])).toContain("npe.md");
     expect(files(["java.lang.NullPointerException"])).toContain("fico_error_code.md"); // always-on
+  });
+  test("handler gate: fico_exception_flow fires on a handler errorCode even without a matching exception type (I-4)", () => {
+    expect(files(["java.lang.NullPointerException"], [], { errorCode: "1001" })).toContain("fico_exception_flow.md");
+    expect(files(["java.lang.NullPointerException"])).not.toContain("fico_exception_flow.md");
   });
   test("a plain NPE does not drag in datasource/redis/batch rules", () => {
     const f = files(["java.lang.NullPointerException"]);

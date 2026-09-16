@@ -1,5 +1,6 @@
 ---
 exceptions: "*CommonException", "*PBBaseException", "*PBOnlineException", "*PBModuleException", "*PBBatchException", "*PBDaemonException"
+handler: uri, errorCode, svcId
 ---
 #### 어느 핸들러가 잡았는가 = 어느 층에서 났는가
 관측 목록의 핸들러 로그 줄로 발생 층을 먼저 확정한다.

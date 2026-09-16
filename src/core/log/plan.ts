@@ -183,7 +183,7 @@ export function planLog(opts: PlanOptions, cwd: string): string {
   const rootFqcns = (parsed.chain.at(-1)?.frames ?? []).map((f) => f.cls).filter((c) => kinds[c] === "framework");
   const kbDocs = frameworkKbDocs(cwd, [...new Set(rootFqcns)]);
   const types = [...parsed.chain, ...parsed.suppressed].map((b) => b.type);
-  const ruleFiles = matchLogRules(loadLogRules(cwd), types, suspects.map((s) => s.path)).map((r) => r.file);
+  const ruleFiles = matchLogRules(loadLogRules(cwd), types, suspects.map((s) => s.path), parsed.handler).map((r) => r.file);
 
   const plan: LogPlan = { runId, suspects, entry, observations, kbDocs, ruleFiles, kinds };
   const meta: RunMeta = {

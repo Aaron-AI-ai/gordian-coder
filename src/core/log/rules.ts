@@ -12,12 +12,15 @@ import { join } from "node:path";
 import { basename } from "node:path/posix";
 import { BUNDLED_RULES, frameworkKbRule, type ExtraRule } from "../review/evidence/rubric";
 import { loadLogConfig } from "./config";
+import type { HandlerInfo } from "./parse";
 import { BUNDLED } from "./rules/bundled";
 
 export interface LogRule {
   file: string;
   exceptions: string[];
   globs: string[];
+  /** HandlerInfo field names (uri, errorCode, svcId, even) that gate this rule. */
+  handler: string[];
   reference: boolean;
   content: string;
 }
@@ -41,18 +44,19 @@ function listField(fm: string, key: string): string[] {
 export function parseLogRule(file: string, raw: string): LogRule {
   raw = raw.replace(/^﻿/, "");
   const m = FRONTMATTER.exec(raw);
-  if (!m) return { file, exceptions: [], globs: [], reference: false, content: raw.trim() };
+  if (!m) return { file, exceptions: [], globs: [], handler: [], reference: false, content: raw.trim() };
   return {
     file,
     exceptions: listField(m[1], "exceptions"),
     globs: listField(m[1], "globs"),
+    handler: listField(m[1], "handler"),
     reference: /^mode:\s*reference\s*$/m.test(m[1]),
     content: raw.slice(m[0].length).trim(),
   };
 }
 
 const fromReview = (r: ExtraRule): LogRule => ({
-  file: r.file, exceptions: [], globs: r.globs, reference: r.reference ?? false, content: r.content,
+  file: r.file, exceptions: [], globs: r.globs, handler: [], reference: r.reference ?? false, content: r.content,
 });
 
 /** review's framework_kb (config table substituted) and mapper rules, then the fico set. */
@@ -81,15 +85,18 @@ function globMatch(pattern: string, value: string): boolean {
   return new Bun.Glob(pattern).match(value);
 }
 
-/** Rules whose gates hold for this log, most specific first (always-on last). */
-export function matchLogRules(rules: LogRule[], exceptionTypes: string[], suspectPaths: string[]): MatchedRule[] {
+/** Rules whose gates hold for this log, most specific first (always-on last).
+ * `exceptions` and `handler` form one OR'd gate (either fires the rule);
+ * `globs` is a separate AND gate. A rule with none of the three always fires. */
+export function matchLogRules(rules: LogRule[], exceptionTypes: string[], suspectPaths: string[], handler?: HandlerInfo): MatchedRule[] {
   const out: MatchedRule[] = [];
   for (const r of rules) {
     let specificity = 0;
-    if (r.exceptions.length) {
-      const hit = r.exceptions.filter((p) => exceptionTypes.some((t) => globMatch(p, t)));
-      if (!hit.length) continue;
-      specificity = Math.max(...hit.map((p) => p.length));
+    if (r.exceptions.length || r.handler.length) {
+      const exHit = r.exceptions.filter((p) => exceptionTypes.some((t) => globMatch(p, t)));
+      const handlerHit = r.handler.filter((f) => Boolean(handler?.[f as keyof HandlerInfo]));
+      if (!exHit.length && !handlerHit.length) continue;
+      specificity = Math.max(0, ...exHit.map((p) => p.length), ...handlerHit.map((f) => f.length));
     }
     if (r.globs.length) {
       const hit = r.globs.filter((p) => suspectPaths.some((f) => globMatch(p, p.includes("/") ? f : basename(f))));

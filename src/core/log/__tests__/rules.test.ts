@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { parseLogRule, loadLogRules, matchLogRules, renderLogRules, type LogRule } from "../rules";
 
 const rule = (file: string, over: Partial<LogRule> = {}): LogRule => ({
-  file, exceptions: [], globs: [], reference: false, content: `body of ${file}`, ...over,
+  file, exceptions: [], globs: [], handler: [], reference: false, content: `body of ${file}`, ...over,
 });
 
 describe("parseLogRule", () => {
@@ -35,6 +35,7 @@ describe("matchLogRules", () => {
     rule("dao.md", { exceptions: ["org.springframework.dao.*"] }),
     rule("mapper.md", { exceptions: ["org.apache.ibatis.*"], globs: ["**/mapper/**/*.xml"] }),
     rule("xmlonly.md", { globs: ["*.xml"] }),
+    rule("handled.md", { handler: ["uri"] }),
   ];
   test("exception glob matches any exception in the chain", () => {
     const m = matchLogRules(rules, ["org.springframework.dao.DuplicateKeyException", "java.sql.SQLException"], []);
@@ -51,6 +52,11 @@ describe("matchLogRules", () => {
     const m = matchLogRules(rules, ["java.lang.NullPointerException", "org.springframework.dao.X"], []);
     expect(m[0].file).toBe("npe.md"); // 31 chars beats 24
     expect(m[0].specificity).toBe("java.lang.NullPointerException".length);
+  });
+  test("handler gate: a rule with `handler` fires on a present field, not an absent one (I-4)", () => {
+    expect(matchLogRules(rules, ["java.lang.NullPointerException"], [], { uri: "/ON/X" }).map((r) => r.file)).toContain("handled.md");
+    expect(matchLogRules(rules, ["java.lang.NullPointerException"], [], {}).map((r) => r.file)).not.toContain("handled.md");
+    expect(matchLogRules(rules, ["java.lang.NullPointerException"], []).map((r) => r.file)).not.toContain("handled.md");
   });
 });
 

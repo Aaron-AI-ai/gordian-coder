@@ -51,7 +51,7 @@ describe("renderContext", () => {
   });
 
   test("observations are never cut; lower sections are dropped first under a tight budget", () => {
-    const rules = [{ file: "r.md", exceptions: [], globs: [], reference: false, content: "R".repeat(2000), specificity: 1 }];
+    const rules = [{ file: "r.md", exceptions: [], globs: [], handler: [], reference: false, content: "R".repeat(2000), specificity: 1 }];
     const out = renderContext(input(cwd, { rules, maxChars: 4_000 }));
     expect(out).toContain("예외 1/1");
     expect(out).not.toContain("ctl 20");         // other snippets dropped
@@ -67,7 +67,7 @@ describe("renderContext", () => {
   });
 
   test("rework round: rejected hypotheses injected, rules and KB replaced by one line", () => {
-    const rules = [{ file: "r.md", exceptions: [], globs: [], reference: false, content: "RULEBODY", specificity: 1 }];
+    const rules = [{ file: "r.md", exceptions: [], globs: [], handler: [], reference: false, content: "RULEBODY", specificity: 1 }];
     const out = renderContext(input(cwd, { rules, round: 2, rejected: [{ round: 1, cause: "null map", feedback: "map is never null here" }] }));
     expect(out).toContain("기각된 가설");
     expect(out).toContain("null map");
