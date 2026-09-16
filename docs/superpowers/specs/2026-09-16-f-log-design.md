@@ -234,7 +234,69 @@ rework 라운드: 1·2·3만 다시 주고, 룰·KB는 "이전 라운드와 동�
 | 안 읽은 용의 파일 | `suspects.path − callLog[file_read ∪ git_blame].path` |
 | 미해결 관측 | 최종 judge attempt의 `unexplained` |
 
-리포트 `.fico/report/f-log/log-<stamp>.md` 순서: 요약(원인 한 줄·신뢰도·envCause) → 스택 원문 → 진입점→원인 경로 → 원인 상세와 근거(파일:줄 인용) → 해결 방안 → 검토한 대안(기각 가설·이유) → **못 본 것**(누락 검증) → 심사 이력(라운드별 점수) → 실행 정보(runId·툴 호출 수·강제/부분 여부). **v1은 markdown만** — review `html.ts`는 findings 전용(심각도 탭·필터)이라 재사용 불가하고, f-log 전용 HTML은 요청이 있을 때 만든다.
+### 11.1 입력과 함수
+
+```ts
+// finalize.ts
+interface FinalizeInput {
+  plan: LogPlan;                    // runs/<id>/plan.json
+  input: string;                    // runs/<id>/input.log
+  submission: LogSubmission;        // 채택된 제출물 (pass / terminal 최고점 / 강제 수락 / 부분)
+  judgments: LogJudgments;          // attempts[], rejected[], skipped?: string
+  session: { toolCalls: number; maxToolCalls: number; rounds: number; forcedNote?: string; partial?: boolean };
+}
+interface FinalizeResult { gaps: Gaps; reportPath: string }
+interface Gaps { unexplainedExceptions: string[]; unreadSuspects: string[]; unresolvedObservations: string[] }
+
+export function computeGaps(plan, submission, judgments, callLog): Gaps          // 순수, §11 표
+export function renderLogReport(i: FinalizeInput, gaps: Gaps, lang: "ko"|"en", now: Date): string   // 순수 → md 문자열
+export function reportPath(cwd: string, cfg: LogConfig, runId: string): string   // <output>/log-<runId>.md
+export async function finalizeRun(runId: string, cwd: string): Promise<string>   // 위 셋 조합 + 디스크 쓰기 + finalize.json → 오케스트레이터 응답
+```
+
+- 파일명은 `log-<runId>.md`. runId(`<stamp>-<rand>`)가 이미 유일하므로 f-review의 같은 초 충돌 처리(`backupReportDir`)가 필요 없다. 기존 파일은 절대 덮어쓰지 않는다.
+- `output`이 `/`로 끝나거나 디렉터리면 그 안에, 아니면 그 경로 그대로(f-review `resolveOutputPath`와 같은 규칙, 이름만 다름).
+- 언어: `lang`은 `log.language ?? review.language ?? "ko"`. 섹션 제목·고정 문구는 `LABELS[lang]` 표 하나로 두고, 모델이 쓴 본문(원인·해결안)은 그대로 싣는다. analyst 프롬프트가 `languageInstructionFor(lang)`(review 재사용)으로 같은 언어를 요구한다.
+- `renderLogReport`는 **순수 함수**라 테스트는 문자열 스냅샷 + 섹션 존재 검사로 한다.
+
+### 11.2 리포트 섹션 → 데이터
+
+| # | 섹션 | 데이터 | 비고 |
+|---|---|---|---|
+| 0 | 헤더 | runId, 생성 시각, 대상 저장소(`cwd` basename), 상태 배지 | 배지: `PASS` / `REWORK n/m` / `TERMINAL` / `FORCED` / `PARTIAL` / `JUDGE SKIPPED` |
+| 1 | 요약 | `submission.cause.summary`, `confidence`, `envCause`, `resolution.kind` | `envCause`면 "환경 원인 가능 — 코드 수정 전 설정·인프라 확인" 한 줄 |
+| 2 | 스택 원문 | `input` | 코드 블록. 6,000자 넘으면 root-cause 블록 + 첫 40줄 + "… (N줄 생략, runs/<id>/input.log)" |
+| 3 | 진입점 → 원인 경로 | `plan.entry`, root-cause 블록의 in-app 프레임 순서, `submission.cause.file/line` | `Controller.method(File:L)` → … → **원인 프레임** 굵게. 스택 없으면 `svcId`/`uri`에서 찾은 파일 목록 |
+| 4 | 원인 상세와 근거 | `cause.mechanism`, `evidence[]` | 근거마다 `path:s-e` 링크 + `fileRead(cwd, null, path, s, e)`로 실제 코드 인용(각 ≤ 30줄) — 모델이 적은 줄 번호가 실제 코드와 대조되도록 |
+| 5 | 해결 방안 | `resolution.summary`, `resolution.changes[]` | `kind: mitigation`이면 "원인 제거가 아닌 증상 완화" 경고 |
+| 6 | 검토한 대안 | `submission.alternatives[]` + `judgments.rejected[]` | 기각 가설은 라운드·심사 feedback과 함께 |
+| 7 | 못 본 것 | `gaps` 세 목록 | 비어 있으면 "누락 없음". 있으면 "다시 돌릴지는 읽는 사람이 정한다"(상위 문서 1.4) |
+| 8 | 심사 이력 | `judgments.attempts[]` | 라운드별 3축 점수·합·verdict·unexplained. `skipped`면 사유 |
+| 9 | 실행 정보 | `session` | 툴 호출 `n/max`, 라운드 수, `forcedNote`, `partial`, 적용된 룰 파일명, 주입된 KB 경로, runs 디렉터리 경로 |
+
+### 11.3 상태 처리
+
+| 상황 | `submission` 선택 | 배지 | 표시 |
+|---|---|---|---|
+| 심사 pass | 그 제출물 | PASS | — |
+| rework 상한 초과 | `attempts` 중 최고 합 점수의 제출물 | TERMINAL | 8절에 "임계값 미달, 최고점 채택" |
+| `MAX_FAILED_SUBMITS` 초과 강제 수락 | 마지막 유효 파싱 제출물(없으면 빈 제출물) | FORCED | `forcedNote` 사유. 빈 제출물이면 1·4·5절은 "제출 없음" |
+| idle 감시 초과(부분) | 저장된 부분 제출물 또는 없음 | PARTIAL | 9절에 "분석 미완 — 모델이 중단" |
+| 심사 malformed 상한 초과 | 현재 제출물 | JUDGE SKIPPED | 8절에 사유 |
+| `--judge` 꺼짐 | 첫 제출물 | (배지 없음) | 8절 "심사 안 함" |
+
+### 11.4 `f_log_finalize` 응답
+
+오케스트레이터가 사용자에게 그대로 보여줄 수 있는 짧은 텍스트:
+```
+✅ f-log finished — <배지>
+Report: .fico/report/f-log/log-<runId>.md
+Cause: <cause.summary 한 줄> (confidence <n>)
+Gaps: <unexplained k> / <unread k> / <unresolved k>   ← 0/0/0이면 "none"
+```
+두 번째 호출은 저장된 `finalize.json`을 읽어 같은 응답을 돌려준다(no-op 패턴 → 가드 #8 대상).
+
+**v1은 markdown만** — review `html.ts`는 findings 전용(심각도 탭·필터)이라 재사용 불가하고, f-log 전용 HTML은 요청이 있을 때 만든다.
 
 ## 12. 산출물 · 설정
 
@@ -327,7 +389,7 @@ export function registerGuardModule(m: {
 | `rules.test.ts` | frontmatter 3키, AND 게이트, 특이도 정렬, reference 강등, 번들 14개 로드 |
 | `context.test.ts` | 예산 절단 순서, 2번 불가침, rework 라운드 축약 |
 | `submit.test.ts` / `judge.test.ts` | 스키마 거부, observations 누락 거부, evidence↔callLog, 토큰 회전, 강제 수락, threshold, rework 상한, rejected 누적, invalid 심사 상한 |
-| `finalize.test.ts` | 세 집합 차집합, 리포트 섹션 존재 |
+| `finalize.test.ts` | `computeGaps` 세 집합 차집합; `renderLogReport` 스냅샷 + 9개 섹션 존재 + ko/en 라벨; §11.3 여섯 상태별 배지·문구; `reportPath` 디렉터리/파일 규칙; `finalizeRun` 두 번 호출 시 같은 응답·파일 미덮어쓰기 |
 | `tools.test.ts` | `find_callers` 상한, `git_blame` 출력 |
 | `guard` | 기존 `repeat-guard` 테스트 무수정 통과 + f-log 등록 후 동일 시나리오 |
 | 어댑터 | 모듈 등록·에이전트/커맨드 주입 스모크 |
