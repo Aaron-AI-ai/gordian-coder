@@ -50,7 +50,12 @@ const SUFFIX = /\s*~?\[[^\]]*\]\s*$/;
 const MORE = /^\s*\.\.\.\s*(\d+)\s+more\s*$/;
 const HEADER = /^(Caused by:\s*|Suppressed:\s*)?(?:Exception in thread "[^"]*"\s+)?([\w$.]+(?:Exception|Error|Throwable)[\w$]*)(?::\s?(.*))?$/;
 const NESTED = /;\s*nested exception is\s+([\w$.]+(?:Exception|Error|Throwable)[\w$]*)(?::\s?(.*))?$/s;
-const PROXY = /\$\$(?:EnhancerBySpringCGLIB|FastClassBySpringCGLIB|EnhancerByCGLIB|SpringCGLIB|Lambda)\$\$[\w$]*$/;
+const PROXY = /\$\$(?:EnhancerBySpringCGLIB|FastClassBySpringCGLIB|EnhancerByCGLIB|SpringCGLIB|Lambda)(?:\$\$[\w$]*|\$\d+)$/;
+// JDK8+ hidden-class lambda naming glued onto the frame's module-prefix slot:
+// "Cls$$Lambda$14/0x0000000800c0a208.accept(...)" — strip it before FRAME
+// matches, or the optional module-prefix group swallows the class name.
+const LAMBDA_ADDR = /\/0x[0-9a-f]+/g;
+const LAMBDA_TAIL = /\$\$Lambda(?:\$\d+)?\/\S*/g;
 
 // The exception PBGlobalExceptionAdvice maps each stack-less "PB <code>" line to.
 const PB_CODE_TYPE: Record<string, string> = {
@@ -82,7 +87,8 @@ export function normalizeMethod(m: string): string {
 }
 
 function parseFrame(line: string): StackFrame | null {
-  const m = FRAME.exec(line.replace(SUFFIX, ""));
+  const cleaned = line.replace(LAMBDA_ADDR, "").replace(LAMBDA_TAIL, "");
+  const m = FRAME.exec(cleaned.replace(SUFFIX, ""));
   if (!m) return null;
   return {
     cls: normalizeClass(m[1]),

@@ -113,6 +113,18 @@ describe("parseStackTrace", () => {
     expect(p.chain[0].message).toBe("bad payload");
   });
 
+  test("JDK lambda frame keeps its class (I-2)", () => {
+    const p = parseStackTrace(
+      "java.lang.NullPointerException: x\n" +
+        "\tat kr.co.koscom.pb.on.stk.ord.online.qry.service.SONAQ001Service$$Lambda$14/0x0000000800c0a208.accept(Unknown Source)\n"
+    );
+    expect(p.chain[0].frames[0]).toMatchObject({
+      cls: "kr.co.koscom.pb.on.stk.ord.online.qry.service.SONAQ001Service",
+      method: "accept",
+      file: null,
+    });
+  });
+
   test("helpers", () => {
     expect(stripLinePrefix("[INFO ::][h:2026-01-01 00:00:00.000][main][a.b.C:m:1] hello").text).toBe("hello");
     expect(stripLinePrefix("2026-01-01 00:00:00.000  INFO 1 --- [main] a.b.C : hello").text).toBe("hello");
