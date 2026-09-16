@@ -69,12 +69,12 @@ export function isExceptionType(s: string): boolean {
   return /^[\w$.]+(?:Exception|Error|Throwable)[\w$]*$/.test(s);
 }
 
-export function stripLinePrefix(line: string): { text: string; logger?: string } {
+export function stripLinePrefix(line: string): { text: string; logger?: string; found: boolean } {
   const f = FICO_PREFIX.exec(line);
-  if (f) return { text: line.slice(f[0].length), logger: f[1] };
+  if (f) return { text: line.slice(f[0].length), logger: f[1], found: true };
   const g = GENERIC_PREFIX.exec(line);
-  if (g) return { text: line.slice(g[0].length) };
-  return { text: line };
+  if (g) return { text: line.slice(g[0].length), found: true };
+  return { text: line, found: false };
 }
 
 export function normalizeClass(cls: string): string {
@@ -144,8 +144,7 @@ export function parseStackTrace(raw: string): ParsedLog {
       if (enclosing) current.frames.push(...enclosing.frames.slice(-current.omitted));
       continue;
     }
-    const { text, logger } = stripLinePrefix(rawLine);
-    if (logger && !handler.logger) handler.logger = logger;
+    const { text, logger, found } = stripLinePrefix(rawLine);
     const h = HEADER.exec(text.trim());
     if (h) {
       const block: ExceptionBlock = { type: h[2], message: (h[3] ?? "").trim(), frames: [], omitted: 0 };
@@ -156,8 +155,15 @@ export function parseStackTrace(raw: string): ParsedLog {
       continue;
     }
     if (!current) {
+      // Only before the first block: the handler line that precedes the trace.
+      if (logger && !handler.logger) handler.logger = logger;
       extractHandler(text, handler);
       lastHandlerText = text;
+    } else if (found) {
+      // A line carrying its own log prefix (and not a header/frame/"... N more")
+      // is the next log entry, not a continuation of this message — stop here
+      // rather than absorb it (I-3).
+      break;
     } else {
       current.message = current.message ? `${current.message}\n${text}` : text;
     }

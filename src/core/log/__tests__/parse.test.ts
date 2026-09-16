@@ -94,6 +94,16 @@ describe("parseStackTrace", () => {
     expect(p.chain[1].message).toContain("ORA-00001");
   });
 
+  test("a following prefixed log line ends the trace instead of polluting the message (I-3)", () => {
+    const p = parseStackTrace(
+      'java.lang.NullPointerException: Cannot invoke "x" because "y" is null\n' +
+        "\tat a.B.c(B.java:1)\n" +
+        "[INFO :t:u][h:2026-07-01 10:00:00.000][exec-1][k.c.Other:go:1] request completed in 12ms\n"
+    );
+    expect(p.chain[0].message).toBe('Cannot invoke "x" because "y" is null');
+    expect(p.handler.logger).toBeUndefined();
+  });
+
   test("multi-line message and Suppressed", () => {
     const p = parseStackTrace(
       "java.lang.IllegalStateException: pool stats\n, borrowedCount=0, returnedCount=0\n\tat a.b.C.d(C.java:1)\nSuppressed: java.io.IOException: closed\n\tat a.b.C.close(C.java:9)\n"
