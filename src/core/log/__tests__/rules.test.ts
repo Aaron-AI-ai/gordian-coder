@@ -42,7 +42,7 @@ describe("matchLogRules", () => {
   });
   test("exceptions AND globs when both present", () => {
     expect(matchLogRules(rules, ["org.apache.ibatis.exceptions.PersistenceException"], []).map((r) => r.file)).toEqual(["always.md"]);
-    expect(matchLogRules(rules, ["org.apache.ibatis.exceptions.PersistenceException"], ["src/main/resources/mapper/oracle/A.xml"]).map((r) => r.file)).toEqual(["mapper.md", "always.md"]);
+    expect(matchLogRules(rules, ["org.apache.ibatis.exceptions.PersistenceException"], ["src/main/resources/mapper/oracle/A.xml"]).map((r) => r.file)).toEqual(["mapper.md", "xmlonly.md", "always.md"]);
   });
   test("glob without slash matches basename", () => {
     expect(matchLogRules(rules, [], ["a/b/c.xml"]).map((r) => r.file)).toEqual(["xmlonly.md", "always.md"]);

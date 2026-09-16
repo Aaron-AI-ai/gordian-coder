@@ -81,10 +81,7 @@ function globMatch(pattern: string, value: string): boolean {
   return new Bun.Glob(pattern).match(value);
 }
 
-/** Rules whose gates hold for this log, most specific first (always-on last).
- * A globs-only rule (no `exceptions` declared) is a fallback for when no
- * exception type was recognized at all — once `exceptionTypes` is non-empty,
- * prefer exception-driven rules and skip the broad file-glob heuristic. */
+/** Rules whose gates hold for this log, most specific first (always-on last). */
 export function matchLogRules(rules: LogRule[], exceptionTypes: string[], suspectPaths: string[]): MatchedRule[] {
   const out: MatchedRule[] = [];
   for (const r of rules) {
@@ -93,8 +90,6 @@ export function matchLogRules(rules: LogRule[], exceptionTypes: string[], suspec
       const hit = r.exceptions.filter((p) => exceptionTypes.some((t) => globMatch(p, t)));
       if (!hit.length) continue;
       specificity = Math.max(...hit.map((p) => p.length));
-    } else if (r.globs.length && exceptionTypes.length) {
-      continue;
     }
     if (r.globs.length) {
       const hit = r.globs.filter((p) => suspectPaths.some((f) => globMatch(p, p.includes("/") ? f : basename(f))));
