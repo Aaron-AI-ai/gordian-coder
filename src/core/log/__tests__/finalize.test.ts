@@ -132,6 +132,41 @@ describe("finalizeRun end-to-end", () => {
     expect(readFileSync(path, "utf8")).toBe(before);
     expect(finalizeRun("nope", cwd)).toContain("Unknown run");
   });
+  test("--output=<file> reused across runs redirects the second run instead of hiding its report (I-5)", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "f-log-fin-collide-"));
+    mkdirSync(join(cwd, "src/a"), { recursive: true });
+    writeFileSync(join(cwd, "src/a/Svc.java"), "class Svc {\n  void run() { map.get(k).size(); }\n}\n");
+    const git = (args: string[]) => Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd });
+    git(["init", "-q"]); git(["add", "."]); git(["commit", "-qm", "init"]);
+
+    // Different frame lines (still 1 and 2 in the 2-line Svc.java) keep the
+    // observation string identical (built from type+message, not the line)
+    // while giving each call a distinct hash so planLog's idempotency window
+    // doesn't collapse them into the same run.
+    const runOnce = (line: number) => {
+      const runId = /runId[:=]\s*(\S+)/.exec(planLog({ log: `java.lang.NullPointerException: x\n\tat a.Svc.run(Svc.java:${line})\n`, output: "out/same.md" }, cwd))![1];
+      const sessionId = `s-${runId}`;
+      logContext(runId, sessionId, cwd);
+      const st = getLogState(sessionId)!;
+      runLogTool(st, "f_log_read", { file_path: "src/a/Svc.java" });
+      submitLog({ runId, submitToken: st.submitToken, cause: { file: "src/a/Svc.java", line: 2, summary: "null", mechanism: "m" }, evidence: [{ file: "src/a/Svc.java", lines: [1, 3], why: "w" }], observations: [{ observation: "예외 1/1: java.lang.NullPointerException: x", explained: true }], alternatives: [{ hypothesis: "h", rejectedBecause: "r" }], resolution: { summary: "s", changes: [], kind: "root-cause" }, confidence: 70 }, sessionId);
+      const tok = /JUDGE_TOKEN=(\S+)/.exec(logJudgeContext(runId, cwd))![1];
+      submitLogJudge({ runId, judgeToken: tok, scores: { observation: 30, alternatives: 20, rootCause: 25 }, unexplained: [], feedback: "ok" }, cwd);
+      return { runId, out: finalizeRun(runId, cwd) };
+    };
+
+    const first = runOnce(2);
+    expect(first.out).toContain("Report: out/same.md");
+    const second = runOnce(1);
+    expect(second.out).toContain(`Report: out/log-${second.runId}.md`);
+    expect(second.out).toContain("already existed");
+    const path = join(cwd, "out", `log-${second.runId}.md`);
+    expect(existsSync(path)).toBe(true);
+    expect(readFileSync(path, "utf8")).toContain(second.runId);
+    // first run's report is untouched
+    expect(readFileSync(join(cwd, "out/same.md"), "utf8")).toContain(first.runId);
+  });
+
   test("no submission yet → refusal naming the analyst", () => {
     const cwd = mkdtempSync(join(tmpdir(), "f-log-fin2-"));
     const runId = /runId[:=]\s*(\S+)/.exec(planLog({ log: "java.lang.IllegalStateException: y\n\tat a.B.c(B.java:1)\n" }, cwd))![1];

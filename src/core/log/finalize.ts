@@ -196,16 +196,28 @@ export function finalizeRun(runId: string, cwd: string): string {
     { plan, input, submission: best.submission, judgments, attempt: best.attempt, session: { toolCalls, maxToolCalls: cfg.maxToolCalls, rounds: Math.max(1, judgments.attempts.length, best.submission.round) }, cwd },
     gaps, badge, meta.language === "en" ? "en" : "ko", new Date()
   );
-  const path = reportPath(cwd, cfg, runId, meta.output);
-  mkdirSync(dirname(path), { recursive: true });
-  if (!existsSync(path)) writeFileSync(path, md);
-  const rel = path.startsWith(cwd) ? path.slice(cwd.length + 1) : path;
+  const requested = reportPath(cwd, cfg, runId, meta.output);
+  mkdirSync(dirname(requested), { recursive: true });
+  // This run has never finalized before (the `prior` check above returned
+  // early otherwise) — an existing file at `requested` belongs to a different
+  // run (typically a fixed --output path reused across runs). Redirect
+  // rather than silently keep pointing at someone else's report (I-5).
+  const relOf = (p: string) => (p.startsWith(cwd) ? p.slice(cwd.length + 1) : p);
+  let path = requested;
+  let collisionNote: string | undefined;
+  if (existsSync(requested)) {
+    path = join(dirname(requested), `log-${runId}.md`);
+    collisionNote = `Note: ${relOf(requested)} already existed; wrote ${relOf(path)}`;
+  }
+  writeFileSync(path, md);
+  const rel = relOf(path);
   const g = `${gaps.unexplainedExceptions.length} / ${gaps.unreadSuspects.length} / ${gaps.unresolvedObservations.length}`;
   const response = [
     `✅ f-log finished — ${badge}`,
     `Report: ${rel}`,
     `Cause: ${best.submission.cause.summary || "(no submission)"} (confidence ${best.submission.confidence})`,
     `Gaps: ${g === "0 / 0 / 0" ? "none" : `${g} (unexplained exceptions / unread suspects / unresolved observations)`}`,
+    ...(collisionNote ? [collisionNote] : []),
   ].join("\n");
   writeRunJson(runId, cwd, "finalize.json", { response, reportPath: rel, badge, gaps } satisfies FinalizeRecord);
   return response;
