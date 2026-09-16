@@ -1,0 +1,43 @@
+import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { bundledLogRules, matchLogRules } from "../rules";
+
+const cwd = mkdtempSync(join(tmpdir(), "f-log-bundled-"));
+const rules = bundledLogRules(cwd);
+const files = (types: string[], paths: string[] = []) =>
+  matchLogRules(rules, types, paths).map((r) => r.file).filter((f) => f.startsWith("fico_") || f === "npe.md");
+
+describe("bundled fico rules", () => {
+  test("13 fico/npe rules load, each 15–25 body lines, each names an f_log tool", () => {
+    const fico = rules.filter((r) => r.file.startsWith("fico_") || r.file === "npe.md");
+    expect(fico).toHaveLength(13);
+    for (const r of fico) {
+      const lines = r.content.split("\n").length;
+      expect(lines, r.file).toBeGreaterThanOrEqual(12);
+      expect(lines, r.file).toBeLessThanOrEqual(30);
+      expect(r.content, r.file).toMatch(/f_log_(read|search|callers|blame|related|history|find)/);
+      expect(r.content, r.file).not.toMatch(/\b(file_read|code_search|related_code|git_history)\b/);
+    }
+  });
+  test("gates: representative exception → expected rule", () => {
+    expect(files(["kr.co.koscom.pb.framework.site.ext.exception.PBOnlineException"])).toContain("fico_exception_flow.md");
+    expect(files(["org.springframework.transaction.UnexpectedRollbackException"])).toContain("fico_transaction.md");
+    expect(files(["org.springframework.jdbc.BadSqlGrammarException"])).toContain("fico_datasource.md");
+    expect(files(["org.apache.ibatis.exceptions.PersistenceException"])).toContain("fico_mybatis.md");
+    expect(files(["org.springframework.http.converter.HttpMessageNotReadableException"])).toContain("fico_fixed_message.md");
+    expect(files(["java.lang.IllegalStateException"])).toContain("fico_request_scope.md");
+    expect(files(["io.github.resilience4j.circuitbreaker.CallNotPermittedException"])).toContain("fico_outbound.md");
+    expect(files(["org.springframework.data.redis.RedisConnectionFailureException"])).toContain("fico_redis.md");
+    expect(files(["org.springframework.batch.core.JobExecutionException"])).toContain("fico_batch.md");
+    expect(files(["org.apache.kafka.common.errors.SerializationException"])).toContain("fico_daemon.md");
+    expect(files(["org.springframework.beans.factory.BeanCreationException"])).toContain("fico_wiring.md");
+    expect(files(["java.lang.NullPointerException"])).toContain("npe.md");
+    expect(files(["java.lang.NullPointerException"])).toContain("fico_error_code.md"); // always-on
+  });
+  test("a plain NPE does not drag in datasource/redis/batch rules", () => {
+    const f = files(["java.lang.NullPointerException"]);
+    for (const x of ["fico_datasource.md", "fico_redis.md", "fico_batch.md", "fico_daemon.md"]) expect(f).not.toContain(x);
+  });
+});
