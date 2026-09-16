@@ -38,25 +38,15 @@ OpenCode 내장 도구는 전부 차단되어 있어 **리뷰 중 코드가 수�
 
 ## 2. 기본 사용법
 
-OpenCode TUI에서:
+OpenCode TUI에서 **리뷰할 파일을 지정**합니다.
 
 ```
-/f-review HEAD
+/f-review --files=src/A.java,src/B.java
 ```
 
-인자는 자유 형식이고, 오케스트레이터가 파싱해 `f_review_plan`에 넘깁니다.
-
-### 대상 지정
-
-| 입력 | 의미 |
-|---|---|
-| `/f-review HEAD` | 마지막 커밋의 변경분 |
-| `/f-review abc1234` | 특정 커밋 |
-| `/f-review main..feature` | 두 지점 사이의 변경분 |
-| `/f-review --from=main --to=HEAD` | 위와 동일 (명시형) |
-| `/f-review --files=src/A.java,src/B.java` | 파일 지정 — 커밋이 없으면 **자동으로 파일 전체** 리뷰 |
-| `/f-review HEAD --whole` | 변경된 파일을 diff가 아닌 **전체 내용**으로 리뷰 |
-| `/f-review HEAD --files=src/A.java` | 커밋 변경분 + 지정 파일, **diff 기준** |
+- 여러 개는 쉼표로 구분합니다 (공백 없이)
+- 경로는 **프로젝트 루트 기준 상대 경로**입니다
+- 커밋 범위를 주지 않았으므로 **파일 전체**가 리뷰 대상이 됩니다 (diff가 아님)
 
 ### 자주 쓰는 옵션
 
@@ -70,15 +60,13 @@ OpenCode TUI에서:
 **예시**
 
 ```
-/f-review HEAD --output=reports/charge.md          리포트를 지정한 파일로
-/f-review HEAD --output=reports/                   리포트를 지정한 디렉터리에
-/f-review HEAD --deep=2                            파일당 2라운드 리뷰
-/f-review HEAD --judge                             판정 게이트 켜기
-/f-review HEAD --fcq                               정적 분석 결과를 증거로 주입
+/f-review --files=src/payment/Charge.java --output=reports/charge.md
+/f-review --files=src/payment/Charge.java --output=reports/
+/f-review --files=src/payment/Charge.java --deep=2
+/f-review --files=src/payment/Charge.java --judge
+/f-review --files=src/payment/Charge.java --fcq
 
-/f-review main..feature --fcq --judge              브랜치 변경분 · 정적 분석 · 판정
-/f-review --files=src/payment/Charge.java --deep=2 파일 전체를 2라운드로
-/f-review HEAD --fcq --judge --deep=2 --output=reports/charge.md
+/f-review --files=src/A.java,src/B.java --fcq --judge --deep=2 --output=reports/charge.md
 ```
 
 > 이 옵션들은 **설정 파일에 미리 넣어두면 매번 입력하지 않아도 됩니다.**
@@ -114,7 +102,7 @@ f-review 설정은 **`review` 키 아래**에 넣습니다. `review` 섹션의 �
 {
   "wikiKb": {
     "fico_framework": {
-      "url": "https://gitlab.사내/group/framework.wiki.git",
+      "url": "https://gitlab-ce.koscom.co.kr/fico_ai/fico-wiki.wiki.git",
       "tokenEnv": "FICO_WIKI_TOKEN"
     }
   },
@@ -129,28 +117,27 @@ f-review 설정은 **`review` 키 아래**에 넣습니다. `review` 섹션의 �
 
 ```json
 {
+  "review": {
+    "rulesDir": "fcq/rules",
+    "language": "ko",
+    "frameworkKb": {
+      "kr.co.openlabs.fico.framework.extension.*": ".fico/kb/fico_framework/fico-fwk-extension/",
+      "kr.co.openlabs.fico.framework.*": ".fico/kb/fico_framework/fico-fwk-core/",
+      "kr.co.koscom.pb.framework.site.ext.*": ".fico/kb/fico_framework/framework-site-ext/",
+      "kr.co.openlabs.fico.common.*": ".fico/kb/fico_framework/fico-common-model/"
+    },
+    "deepPasses": 2,
+    "maxToolCalls": 20,
+    "judgeRounds": 2,
+    "judge": true,
+    "fcq": true,
+    "fcqFix": true
+  },
   "wikiKb": {
     "fico_framework": {
-      "url": "https://gitlab.사내/group/framework.wiki.git",
+      "url": "https://gitlab-ce.koscom.co.kr/fico_ai/fico-wiki.wiki.git",
       "tokenEnv": "FICO_WIKI_TOKEN"
     }
-  },
-  "review": {
-    "language": "ko",
-    "failOn": "major",
-    "output": "fcq/report/f-review/",
-    "exclude": [
-      "**/*.yml", "**/*.yaml",
-      "**/*.gradle", "**/*.gradle.kts", "**/gradle/**",
-      "**/target/**", "**/build/**", "**/generated/**"
-    ],
-    "deepPasses": 2,
-    "maxToolCalls": 12,
-    "judge": true,
-    "judgeRounds": 2,
-    "fcq": true,
-    "fcqFix": true,
-    "rulesDir": "review/rules"
   }
 }
 ```
@@ -173,6 +160,7 @@ f-review 설정은 **`review` 키 아래**에 넣습니다. `review` 섹션의 �
 | `fcq` | boolean | `false` | 정적 분석 실행 |
 | `fcqFix` | boolean | `false` | f-fixer 패스 추가 (MINOR 포함 전 위반에 TO-BE 작성) |
 | `rulesDir` | string | `review/rules` | 프로젝트 규칙 디렉터리 |
+| `frameworkKb` | object | 없음 | import 접두사 → KB 디렉터리 맵. `framework_kb` 규칙의 기본 표를 대체 |
 | `wikiKb` | object | 없음 | git wiki → KB 미러링 (`gdc kb-sync`) |
 
 ---
@@ -210,31 +198,3 @@ fcq/f-review/runs/<runId>/
 
 보관 정책: 완료된 실행 디렉터리 10개 유지, 24시간 이상 방치된 미완 실행은 정리,
 한 번에 최대 100개 파일, 동시 서브에이전트 5개.
-
----
-
-## 부록: 도구 목록
-
-**리뷰 흐름** (오케스트레이터/서브에이전트가 호출, 사용자가 직접 부르지 않음)
-
-| 도구 | 호출 주체 | 역할 |
-|---|---|---|
-| `f_review_plan` | 오케스트레이터 | 대상 수집, 실행 생성, fcq 1회, 지시 반환 |
-| `f_review_context` | f-reviewer | 리뷰 시작 — 대상·규칙·diff 스냅샷 수령 |
-| `f_review_submit` | f-reviewer | 리뷰 제출 (토큰 검사, 커버리지 게이트) |
-| `f_review_judge_context` | f-judge | 채점 대상 리뷰와 기준 수령 |
-| `f_review_judge` | f-judge | 점수·피드백 제출 |
-| `f_review_fix_context` | f-fixer | 소스 + 해당 파일 위반 목록 수령 |
-| `f_review_fix_submit` | f-fixer | 수정 코드 제출 |
-| `f_review_finalize` | 오케스트레이터 | 집계·리포트·판정 |
-
-**탐색 도구** (f-reviewer 전용, `maxToolCalls` 예산 소모)
-
-| 도구 | 역할 |
-|---|---|
-| `file_read` | 리뷰 대상 파일 읽기 (줄 번호, 500줄 단위) |
-| `file_read_diff` | 다른 변경 파일의 diff |
-| `file_find` | 파일명 조각으로 파일 찾기 |
-| `code_search` | git grep (최대 100건) |
-| `related_code` | 의존성·사용처·테스트·동시 변경 파일 추천 |
-| `git_history` | 최근 커밋 이력과 의도 |

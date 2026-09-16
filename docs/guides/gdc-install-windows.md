@@ -3,7 +3,7 @@
 ## 1. 설치
 
 ```powershell
-tar -xzf gordian-coder-offline-0.2.1-<타임스탬프>.tar.gz
+tar -xzf gordian-coder-offline-0.2.2-<타임스탬프>.tar.gz
 cd offline-package
 
 powershell -ExecutionPolicy Bypass -File .\install.ps1
@@ -16,16 +16,16 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 1/3 Bun 설치        → %USERPROFILE%\.bun\bin\bun.exe   (약 108MB 압축 해제)
 2/3 빌드 산출물 배치 → %USERPROFILE%\gordian-coder\dist\
-3/3 글로벌 링크      → bun link (gdc, gordian-coder-cli, gordian-coder-mcp)
+3/3 글로벌 링크      → bun link (gdc, gordian-coder-cli)
 ```
 
 **설치 후 새 터미널을 열어야** PATH가 적용됩니다.
 
 버전을 확인해 **의도한 버전이 제대로 설치되었는지** 반드시 검증하세요.
-번들 파일명의 버전(`gordian-coder-offline-0.2.1-...`)과 아래 출력이 일치해야 합니다.
+번들 파일명의 버전(`gordian-coder-offline-0.2.2-...`)과 아래 출력이 일치해야 합니다.
 
 ```powershell
-gdc --version        # 예: gdc v0.2.1
+gdc --version        # 예: gdc v0.2.2
 ```
 
 값이 다르거나 명령을 찾지 못하면 이전 설치본의 링크가 남아 있는 경우입니다.
@@ -63,8 +63,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
     ├── bin\
     │   ├── bun.exe
     │   ├── gdc                    ← Cline 훅 어댑터 / opencode 연동 CLI
-    │   ├── gordian-coder-cli
-    │   └── gordian-coder-mcp      ← MCP 서버
+    │   └── gordian-coder-cli
     └── install\global\node_modules\gordian-coder → ①로 연결
 ```
 
@@ -132,7 +131,7 @@ gdc --deinit-opencode --global            # 등록 해제
 **삭제 불필요.** 새 번들로 설치 스크립트를 다시 실행하면 됩니다.
 
 ```powershell
-tar -xzf gordian-coder-offline-0.2.1-<새 타임스탬프>.tar.gz
+tar -xzf gordian-coder-offline-0.2.2-<새 타임스탬프>.tar.gz
 cd offline-package
 
 $env:SKIP_BUN="1"      # Bun 이미 있음 → 108MB 압축 해제 생략
@@ -201,6 +200,101 @@ reg query HKCU\Environment | findstr /i bun
 
 ---
 
+## 6. KB 동기화 (`gdc kb-sync`)
+
+git wiki(`<저장소>.wiki.git`)의 `.md` 문서를 프로젝트 안의 KB 디렉터리로 내려받습니다.
+f-review의 `framework_kb` 규칙이 이 디렉터리를 참조하므로, **리뷰 전에 한 번 받아두면 됩니다.**
+
+- 저장 위치: `.fico\kb\<이름>\` (기본값)
+- 방식: **미러** — 받을 때마다 대상 디렉터리를 지우고 다시 채웁니다. 그 안에 직접 만든 파일은 사라집니다
+- 실행 위치: **프로젝트 루트** (설정 파일을 현재 디렉터리 기준으로 찾습니다)
+
+### 6.1 사전 설정 ① — wiki 주소 등록
+
+`.fico\config\fico_ai.json` 의 `wikiKb`에 등록합니다. (`review` 섹션 밖, 최상위)
+
+```json
+{
+  "wikiKb": {
+    "fico_framework": {
+      "url": "https://gitlab-ce.koscom.co.kr/fico_ai/fico-wiki.wiki.git",
+      "tokenEnv": "FICO_WIKI_TOKEN"
+    }
+  }
+}
+```
+
+| 키 | 필수 | 설명 |
+|---|---|---|
+| `url` | ✔ | wiki의 **git 주소**. 웹 주소 뒤에 `.wiki.git`이 붙습니다 (브라우저 주소 `.../fico-wiki/-/wikis/home` → `.../fico-wiki.wiki.git`) |
+| `tokenEnv` | | 토큰을 담은 **환경변수 이름**. 토큰 값 자체를 적지 마세요 |
+
+### 6.2 사전 설정 ② — git 토큰
+
+폐쇄망 GitLab이 로그인 없이 읽기를 허용하지 않으면 **PAT(Personal Access Token)** 가 필요합니다.
+
+1. GitLab → 우측 상단 프로필 → **Edit profile** → **Access Tokens**
+2. 권한(scope)은 **`read_repository` 하나면 충분**합니다. 만료일을 지정하세요
+3. 생성된 토큰 문자열을 **환경변수에 저장** — 이름은 `tokenEnv`에 적은 값과 같아야 합니다
+
+```powershell
+# 현재 터미널에서만 (테스트용)
+$env:FICO_WIKI_TOKEN = "glpat-xxxxxxxxxxxxxxxxxxxx"
+
+# 사용자 계정에 영구 저장 → 새 터미널부터 적용
+setx FICO_WIKI_TOKEN "glpat-xxxxxxxxxxxxxxxxxxxx"
+```
+
+> `setx`는 **현재 창에는 적용되지 않습니다.** 저장 후 새 PowerShell을 여세요.
+> 토큰은 설정 파일·리포트·로그 어디에도 기록되지 않습니다(원격 주소는 `***`로 가려서 출력).
+
+**토큰을 안 쓰는 경우**: `tokenEnv`를 비워두거나 변수를 설정하지 않으면, git이 이미 가진
+자격증명(Windows 자격 증명 관리자, SSH 키, `~/.netrc`)을 그대로 사용합니다. 사내에서 이미
+`git clone`이 되는 환경이면 토큰 설정 없이도 동작합니다.
+
+### 6.3 사용
+
+```powershell
+cd C:\workspace\내프로젝트
+
+gdc kb-sync --check          # 최신 여부만 확인 (다운로드 없음, 몇 초)
+gdc kb-sync                  # 동기화
+```
+
+| 옵션 | 설명 |
+|---|---|
+| `--check` | 원격 커밋과 로컬 기록만 비교. 오래됐거나 미동기화면 **종료 코드 1** |
+| `--name <이름>` | `wikiKb`의 특정 항목만 대상 |
+| `--dry-run` | 받아서 개수만 보고, 파일은 쓰지 않음 |
+| `--force` | 최신이어도 다시 내려받기 |
+
+옵션 없이 실행하면 **원격 커밋이 그대로일 때 다운로드를 건너뜁니다.** 매일 돌려도 부담 없습니다.
+
+### 6.4 정상 동작 확인
+
+**① 명령 출력**
+
+```
+gdc kb-sync
+
+  ✔ fico_framework → .fico/kb/fico_framework (128 md @a1b2c3d4)
+  + .ignore에 `!.fico` 추가 — 이게 없으면 ripgrep 기반 검색(opencode glob 등)이 .fico를 건너뜁니다
+```
+
+두 번째 실행부터는 이렇게 나오면 정상입니다.
+
+```
+  = fico_framework 이미 최신 @a1b2c3d4 — 건너뜀
+```
+
+**② 받은 문서 확인** — `.md` 파일이 실제로 있어야 합니다.
+
+```powershell
+Get-ChildItem -Recurse -Filter *.md .fico\kb\fico_framework | Measure-Object
+```
+
+---
+
 ## 부록: 명령 요약
 
 ```powershell
@@ -216,5 +310,5 @@ gdc kb-sync                       git wiki → KB 동기화
 | 대상 | 경로 |
 |---|---|
 | 본체 | `%USERPROFILE%\gordian-coder\dist\` |
-| 실행 명령 | `%USERPROFILE%\.bun\bin\{gdc, gordian-coder-cli, gordian-coder-mcp}` |
+| 실행 명령 | `%USERPROFILE%\.bun\bin\{gdc, gordian-coder-cli}` |
 | 글로벌 링크 | `%USERPROFILE%\.bun\install\global\node_modules\gordian-coder` |
