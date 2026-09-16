@@ -54,6 +54,24 @@ describe("parseStackTrace", () => {
     expect(p.chain[0].frames).toHaveLength(0);
   });
 
+  test("stack-less PB 9604/404 handler lines synthesize a typed 0-frame block (I-1)", () => {
+    const p9604 = parseStackTrace(
+      "[WARN :t:u][h:2026-07-01 10:00:00.000][exec-2][ext.aspect.PBGlobalExceptionAdvice:handleMessageNotReadable:175] PB 9604: URI=/ON/SONAQ001, error=bad length\n"
+    );
+    expect(p9604.handler.errorCode).toBe("9604");
+    expect(p9604.handler.uri).toBe("/ON/SONAQ001");
+    expect(p9604.chain).toHaveLength(1);
+    expect(p9604.chain[0].type).toBe("org.springframework.http.converter.HttpMessageNotReadableException");
+    expect(p9604.chain[0].frames).toHaveLength(0);
+
+    const p404 = parseStackTrace(
+      "[WARN :t:u][h:2026-07-01 10:00:00.000][exec-2][ext.aspect.PBGlobalExceptionAdvice:handleNoHandlerFound:180] PB 404: URI=/x\n"
+    );
+    expect(p404.chain).toHaveLength(1);
+    expect(p404.chain[0].type).toBe("org.springframework.web.servlet.NoHandlerFoundException");
+    expect(p404.chain[0].frames).toHaveLength(0);
+  });
+
   test("CommonControllerAdvice Exception:[FQCN: msg] one-liner followed by the trace", () => {
     const p = parseStackTrace(
       "[ERROR::][2026-03-26 15:47:19.160] [http-nio-8090-exec-1] [fico.framework.extension.aspect.CommonControllerAdvice:handleException:67] Exception:[org.springframework.web.servlet.resource.NoResourceFoundException: No static resource swagger-ui.]\n" +

@@ -52,6 +52,14 @@ const HEADER = /^(Caused by:\s*|Suppressed:\s*)?(?:Exception in thread "[^"]*"\s
 const NESTED = /;\s*nested exception is\s+([\w$.]+(?:Exception|Error|Throwable)[\w$]*)(?::\s?(.*))?$/s;
 const PROXY = /\$\$(?:EnhancerBySpringCGLIB|FastClassBySpringCGLIB|EnhancerByCGLIB|SpringCGLIB|Lambda)\$\$[\w$]*$/;
 
+// The exception PBGlobalExceptionAdvice maps each stack-less "PB <code>" line to.
+const PB_CODE_TYPE: Record<string, string> = {
+  "9604": "org.springframework.http.converter.HttpMessageNotReadableException",
+  "404": "org.springframework.web.servlet.NoHandlerFoundException",
+  "405": "org.springframework.web.HttpRequestMethodNotSupportedException",
+  "415": "org.springframework.web.HttpMediaTypeNotSupportedException",
+};
+
 export function isExceptionType(s: string): boolean {
   return /^[\w$.]+(?:Exception|Error|Throwable)[\w$]*$/.test(s);
 }
@@ -89,7 +97,7 @@ function parseFrame(line: string): StackFrame | null {
 function extractHandler(text: string, into: HandlerInfo): void {
   const code = /(?:errorCode|\bcode)=([^\s,\]]+)/.exec(text);
   if (code) into.errorCode = code[1];
-  const pb = /\bPB (9604)\b/.exec(text);
+  const pb = /\bPB (404|405|415|9604)\b/.exec(text);
   if (pb) into.errorCode = pb[1];
   const uri = /\bURI=([^\s,\]]+)/.exec(text);
   if (uri) into.uri = uri[1];
@@ -114,6 +122,7 @@ export function parseStackTrace(raw: string): ParsedLog {
   const handler: HandlerInfo = {};
   let current: ExceptionBlock | null = null;
   let currentIsSuppressed = false;
+  let lastHandlerText: string | undefined;
 
   for (const rawLine of raw.split(/\r?\n/)) {
     if (!rawLine.trim()) continue;
@@ -142,6 +151,7 @@ export function parseStackTrace(raw: string): ParsedLog {
     }
     if (!current) {
       extractHandler(text, handler);
+      lastHandlerText = text;
     } else {
       current.message = current.message ? `${current.message}\n${text}` : text;
     }
@@ -155,10 +165,13 @@ export function parseStackTrace(raw: string): ParsedLog {
     chain.splice(i + 1, 0, { type: m[1], message: (m[2] ?? "").trim(), frames: [], omitted: 0 });
   }
 
-  // No trace at all but the handler line named the exception → one empty block,
-  // so a stack-less PB warn line is still a first-class input (spec §6).
-  if (!chain.length && handler.exceptionType) {
-    chain.push({ type: handler.exceptionType, message: handler.exceptionMessage ?? "", frames: [], omitted: 0 });
+  // No trace at all but the handler line named an exception, error code or URI →
+  // one empty block, so a stack-less PB warn line is still a first-class input
+  // (spec §6, §5.8). The type comes from the handler text itself when present,
+  // else from what PBGlobalExceptionAdvice maps that error code to.
+  if (!chain.length && (handler.exceptionType || handler.errorCode || handler.uri)) {
+    const type = handler.exceptionType ?? PB_CODE_TYPE[handler.errorCode ?? ""] ?? "kr.co.openlabs.fico.framework.exception.CommonException";
+    chain.push({ type, message: handler.exceptionMessage ?? lastHandlerText ?? "", frames: [], omitted: 0 });
   }
 
   return { chain, suppressed, handler, raw };

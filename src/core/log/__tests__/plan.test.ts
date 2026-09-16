@@ -99,6 +99,12 @@ describe("plan", () => {
     expect(planLog({ log: "just some text" }, cwd)).toContain("No exception found");
   });
 
+  test("planLog: stack-less PB 9604 handler line is no longer refused (I-1)", () => {
+    const out = planLog({ log: "[WARN :t:u][h:2026-07-01 10:00:00.000][exec-2][ext.aspect.PBGlobalExceptionAdvice:handleMessageNotReadable:175] PB 9604: URI=/ON/SONAQ001, error=bad length\n" }, cwd);
+    expect(out).not.toContain("No exception found");
+    expect(out).toContain("runId");
+  });
+
   test("planLog: stack-less PB warn line still plans via URI/errorCode", () => {
     const out = planLog({ log: "[WARN :t:u][h:2026-07-01 10:00:00.000][exec-2][ext.aspect.PBGlobalExceptionAdvice:handleCommonException:201] PB CommonException: URI=/ON/SONAQ001, code=1001, msg=null\n" }, cwd);
     const id = /runId[:=]\s*(\S+)/.exec(out)![1];
