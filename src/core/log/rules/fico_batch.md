@@ -12,4 +12,4 @@ exceptions: "org.springframework.batch.*", "*PBBatchException", "*JobExecutionEx
 2. `f_log_search`로 `SkipPolicy`/`skipLimit`/`retryLimit` 설정을 찾는다.
 3. `f_log_history`로 최근 Job 변경을 본다.
 4. `DefaultStepListener`/`DefaultJobExecutionListener`의 `afterStep`/`afterJob`을 `f_log_read`로 읽어 `ExitStatus`가 어떻게 결정되는지 본다.
-5. `JobParameters`가 어디서 만들어지는지 `f_log_search`로 찾아 재실행 시 유니크 키(시각 등)가 포함되는지 확인한다.
+5. `JobParameters`가 어디서 만들어지는지 `f_log_search`로 찾아 재실행 파라미터가 이전 실행과 같은지 확인한다.
