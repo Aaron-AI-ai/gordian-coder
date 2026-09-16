@@ -52,8 +52,14 @@ export interface GuardModule {
   submitTool: string;
   explorers: ReadonlySet<string>;
   idempotentPatterns: Record<string, RegExp>;
+  /** Called only with the state this module's own `lookup` returned
+   * (activeModule pairs them), so a module may narrow `st` to its own state
+   * type. */
   guard: (st: GuardState, tool: string, out: string, args?: unknown) => string;
   submitAdvice: string;
+  /** Which arg holds a lookup tool's search term — enables same-intent
+   * alternating-loop detection for this module's tools. */
+  lookupArgFields?: Record<string, string>;
 }
 
 const modules: GuardModule[] = [];
@@ -112,17 +118,16 @@ function canonical(value: unknown): unknown {
   return value;
 }
 
-// Which arg field holds a lookup tool's search term. Add a tool here to make
-// it eligible for same-intent alternating-loop detection.
+// Which arg field holds a lookup tool's search term, for the BUILT-IN tools
+// only. A feature module's own lookup tools register via its
+// `lookupArgFields` instead — see normalizedLookupIntent.
 const LOOKUP_ARG_FIELD: Record<string, string> = {
-  code_search: "search_text",
   codesearch: "search_text",
-  file_find: "query_name",
   grep: "pattern",
 };
 
 function normalizedLookupIntent(tool: string, args: unknown): string | undefined {
-  const field = LOOKUP_ARG_FIELD[tool];
+  const field = LOOKUP_ARG_FIELD[tool] ?? modules.find((m) => m.lookupArgFields?.[tool])?.lookupArgFields?.[tool];
   if (!field || !args || typeof args !== "object") return undefined;
   const raw = (args as Record<string, unknown>)[field];
   if (typeof raw !== "string") return undefined;
@@ -152,6 +157,10 @@ export function recordCall(sessionID: string, tool: string, args: unknown): void
   }
 }
 
+// isSuppressibleTool and shouldSuppressIdempotentReplay both consult EVERY
+// registered module regardless of which one is active for this session —
+// safe only while modules' tool names are disjoint (review: unprefixed,
+// f-log: `f_log_*`). Prefix disjointness is load-bearing.
 function isSuppressibleTool(tool: string): boolean {
   return SUPPRESSIBLE_BUILTINS.has(tool) || moduleExplorers().has(tool);
 }
@@ -372,4 +381,8 @@ registerGuardModule({
   submitAdvice:
     " A review is active in this session: STOP exploring — call f_review_submit " +
     "NOW with the findings you already have.",
+  lookupArgFields: {
+    code_search: "search_text",
+    file_find: "query_name",
+  },
 });

@@ -9,6 +9,7 @@ import {
   shouldSuppressRepeatOutput,
   shouldSuppressIdempotentReplay,
   isRepeatOutputSuppressible,
+  isAlternatingLoop,
   HARD_LIMIT,
   RESERVED_SUBMIT_CALLS,
   type GuardModule,
@@ -35,10 +36,11 @@ const fake: GuardModule = {
   name: "fake",
   lookup: (id) => store.get(id),
   submitTool: "fake_submit",
-  explorers: new Set(["fake_read", "fake_search"]),
+  explorers: new Set(["fake_read", "fake_search", "fake_find"]),
   idempotentPatterns: { fake_submit: /already recorded/ },
   guard: (st, tool, out, args) => guardExploration(st, "fake-run", tool, out, args, "fake_submit"),
   submitAdvice: " A fake run is active: call fake_submit NOW.",
+  lookupArgFields: { fake_search: "q", fake_find: "name" },
 };
 registerGuardModule(fake);
 
@@ -109,6 +111,15 @@ describe("repeat-guard module registry", () => {
   test("a session with no active module is not gated", () => {
     expect(beforeReviewToolCall("reg-none", "anything").allow).toBe(true);
     expect(escalateLoop("reg-none")).toBe("");
+  });
+
+  test("a module's own lookupArgFields drive same-intent alternating-loop detection", () => {
+    const s = "reg-9";
+    recordCall(s, "fake_search", { q: "Foo" });
+    recordCall(s, "fake_find", { name: " foo " });
+    recordCall(s, "fake_search", { q: "Foo" });
+    recordCall(s, "fake_find", { name: "foo" });
+    expect(isAlternatingLoop(s)).toBe(true);
   });
 
   test("todoread output stays repeat-suppressible after the registry refactor", () => {

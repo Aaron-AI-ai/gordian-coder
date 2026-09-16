@@ -63,7 +63,7 @@ export function guardExploration(
 ): string {
   if (st.explorationSealed) {
     return (
-      `⚠️ Exploration is sealed for this reviewer session (${st.toolCalls}/${st.maxToolCalls} ` +
+      `⚠️ Exploration is sealed for this session (${st.toolCalls}/${st.maxToolCalls} ` +
       `tool calls used). Output withheld. Call ${submitTool} now.`
     );
   }
@@ -74,7 +74,7 @@ export function guardExploration(
   st.iterations++;
   const budget = st.maxIter ?? MAX_ITER;
   if (st.iterations > budget) {
-    return `⚠️ Exploration limit reached (${budget} calls this round) — output withheld. Review with what you have and call ${submitTool} now. Do not fetch more context through any other tool.`;
+    return `⚠️ Exploration limit reached (${budget} calls this round) — output withheld. Finish with what you have and call ${submitTool} now. Do not fetch more context through any other tool.`;
   }
   if (args !== undefined) {
     const key = JSON.stringify([scope ?? "", tool, Bun.hash(JSON.stringify(args)).toString()]);
@@ -93,7 +93,7 @@ export function guardExploration(
       `⚠️ ${st.missStreak} consecutive lookups found NOTHING — output withheld. What you are ` +
       `hunting was not resolved by the allowed targeted lookups; it may be external, generated, ` +
       `or a local alias the resolver cannot map. STOP retrying path/name variations with any tool. ` +
-      `Review with the evidence you already have and call ${submitTool}.`
+      `Conclude with the evidence you already have and call ${submitTool}.`
     );
   }
   return out;
