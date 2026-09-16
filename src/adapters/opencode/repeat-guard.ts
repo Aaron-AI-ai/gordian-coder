@@ -16,7 +16,8 @@
 
 import { getState } from "../../core/review/pipeline/state";
 import { MAX_ITER } from "../../core/review/tools/read";
-import { guardExploration } from "../../core/review/pipeline/loop";
+import { guardExploration as reviewGuard } from "../../core/review/pipeline/loop";
+import type { GuardState } from "../../core/guard";
 
 // ponytail: streak of IDENTICAL calls only — legit polling (same bash command
 // 3× while waiting on a build) trips it too; raise REPEAT_LIMIT if that bites.
@@ -41,6 +42,42 @@ interface RecentCall {
   sig: string;
   tool: string;
   intent?: string;
+}
+
+/** A feature module that wants the loop defenses. One is active per session
+ * at most — a session is either a review or a log analysis. */
+export interface GuardModule {
+  name: string;
+  lookup: (sessionID: string) => GuardState | undefined;
+  submitTool: string;
+  explorers: ReadonlySet<string>;
+  idempotentPatterns: Record<string, RegExp>;
+  guard: (st: GuardState, tool: string, out: string, args?: unknown) => string;
+  submitAdvice: string;
+}
+
+const modules: GuardModule[] = [];
+
+/** Register (or replace by name) a module. Idempotent so a plugin factory
+ * may run more than once in tests. */
+export function registerGuardModule(m: GuardModule): void {
+  const i = modules.findIndex((x) => x.name === m.name);
+  if (i >= 0) modules[i] = m;
+  else modules.push(m);
+}
+
+/** The module whose state is active for this session, with that state. */
+function activeModule(sessionID: string): { m: GuardModule; st: GuardState } | undefined {
+  for (const m of modules) {
+    const st = m.lookup(sessionID);
+    if (st?.active) return { m, st };
+  }
+  return undefined;
+}
+
+/** Every module's exploration tools — the after-hook may suppress any of them. */
+function moduleExplorers(): Set<string> {
+  return new Set(modules.flatMap((m) => [...m.explorers]));
 }
 
 export interface ReviewToolBudgetDecision {
@@ -93,34 +130,6 @@ function normalizedLookupIntent(tool: string, args: unknown): string | undefined
   return normalized ? `lookup:${normalized}` : undefined;
 }
 
-/**
- * Tools whose post-execution output is safe to suppress. Keep this an explicit
- * allowlist: unknown plugin/MCP tools and composite tools such as `batch` may
- * mutate state even when their names sound exploratory.
- *
- * Review context/plan/submit/judge/finalize tools are intentionally absent.
- * Their successful response may contain the next target or terminal report.
- */
-const REPEAT_OUTPUT_ALLOWLIST = new Set([
-  // OpenCode read-only/exploration tools
-  "read",
-  "glob",
-  "grep",
-  "list",
-  "lsp",
-  "webfetch",
-  "websearch",
-  "codesearch",
-  "todoread",
-  // Ref-scoped f-review exploration tools
-  "file_read",
-  "file_read_diff",
-  "file_find",
-  "code_search",
-  "related_code",
-  "git_history",
-]);
-
 /** Record a tool call (call from tool.execute.before). */
 export function recordCall(sessionID: string, tool: string, args: unknown): void {
   // Hash the args so a huge payload (e.g. a write's file content) stores a few
@@ -143,22 +152,21 @@ export function recordCall(sessionID: string, tool: string, args: unknown): void
   }
 }
 
+function isSuppressibleTool(tool: string): boolean {
+  return NATIVE_EXPLORERS.has(tool) || moduleExplorers().has(tool);
+}
+
 /** Detect an A-B-A-B cycle, including two lookup tools chasing the same
  * normalized symbol. Call after recordCall(). */
 export function isAlternatingLoop(sessionID: string): boolean {
   const recentCalls = streaks.get(sessionID)?.recentCalls ?? [];
   if (recentCalls.length < RECENT_CALLS) return false;
   const [a, b, c, d] = recentCalls;
-  if (!recentCalls.every((call) => REPEAT_OUTPUT_ALLOWLIST.has(call.tool))) return false;
+  if (!recentCalls.every((call) => isSuppressibleTool(call.tool))) return false;
   const exact = a.sig === c.sig && b.sig === d.sig && a.sig !== b.sig;
   const sameIntent =
-    !!a.intent &&
-    a.intent === b.intent &&
-    b.intent === c.intent &&
-    c.intent === d.intent &&
-    a.tool === c.tool &&
-    b.tool === d.tool &&
-    a.tool !== b.tool;
+    !!a.intent && a.intent === b.intent && b.intent === c.intent && c.intent === d.intent &&
+    a.tool === c.tool && b.tool === d.tool && a.tool !== b.tool;
   return exact || sameIntent;
 }
 
@@ -170,7 +178,7 @@ export function isLooping(sessionID: string): boolean {
 
 /** Whether an already-executed tool's output may be replaced by loop notice. */
 export function isRepeatOutputSuppressible(tool: string): boolean {
-  return REPEAT_OUTPUT_ALLOWLIST.has(tool);
+  return isSuppressibleTool(tool);
 }
 
 /** Whether the current call is both repeating and safe to suppress. */
@@ -178,47 +186,30 @@ export function shouldSuppressRepeatOutput(sessionID: string, tool: string): boo
   return isRepeatOutputSuppressible(tool) && isLooping(sessionID);
 }
 
-// Which output pattern marks a control tool's response as a no-op/idempotent
-// replay (the core already said "ignored, nothing changed"). Add a tool here
-// to make its replies eligible for suppression.
-const IDEMPOTENT_REPLAY_PATTERN: Record<string, RegExp> = {
-  f_review_submit: /Stale\/duplicate f_review_submit ignored|No active review/,
-  f_review_judge: /already recorded|Judge INCOMPLETE|already hit the judge rework cap/,
-  f_review_plan: /Refusing to create another run|still being created by another process/,
-  f_review_context:
-    /Duplicate f_review_context ignored|already has (?:a submitted|a terminal) review artifact/,
-};
-
 /** A control tool's result may be shortened only when the core explicitly says
  * this invocation was a no-op/idempotent replay. Fresh transition output is
  * never eligible, preserving next-target/report instructions. */
-export function shouldSuppressIdempotentReplay(
-  sessionID: string,
-  tool: string,
-  output: string
-): boolean {
+export function shouldSuppressIdempotentReplay(sessionID: string, tool: string, output: string): boolean {
   if (!isLooping(sessionID)) return false;
-  return IDEMPOTENT_REPLAY_PATTERN[tool]?.test(output) ?? false;
+  return modules.some((m) => m.idempotentPatterns[tool]?.test(output));
 }
 
 /**
  * Hard-loop escalation (call after loopNotice): past HARD_LIMIT, if this
- * session has an active f-review, exhaust its exploration budget so EVERY
- * f-review exploration tool now force-converges ("submit now") — including
- * calls different enough to reset the streak here. f_review_submit becomes the
- * only productive move. The session-total budget remains sealed across rounds.
- * Returns the sentence to append to the notice, or "" when not escalating.
+ * session has an active feature module, exhaust its exploration budget so
+ * EVERY exploration tool now force-converges ("submit now") — including
+ * calls different enough to reset the streak here. The module's submit tool
+ * becomes the only productive move. The session-total budget remains sealed
+ * across rounds. Returns the sentence to append to the notice, or "" when not
+ * escalating.
  */
 export function escalateLoop(sessionID: string): string {
   if ((streaks.get(sessionID)?.count ?? 0) < HARD_LIMIT) return "";
-  const st = getState(sessionID);
-  if (!st?.active) return "";
-  st.iterations = Math.max(st.iterations, st.maxIter ?? MAX_ITER);
-  st.explorationSealed = true;
-  return (
-    " A review is active in this session: STOP exploring — call f_review_submit " +
-    "NOW with the findings you already have."
-  );
+  const active = activeModule(sessionID);
+  if (!active) return "";
+  active.st.iterations = Math.max(active.st.iterations, active.st.maxIter ?? MAX_ITER);
+  active.st.explorationSealed = true;
+  return active.m.submitAdvice;
 }
 
 /** Native read-only explorers that bypass the f-review tool wrappers (and so
@@ -236,23 +227,6 @@ const NATIVE_EXPLORERS = new Set([
   "codesearch",
 ]);
 
-const REVIEW_EXPLORERS = new Set([
-  ...NATIVE_EXPLORERS,
-  "file_read",
-  "file_read_diff",
-  "file_find",
-  "code_search",
-  "related_code",
-  "git_history",
-]);
-
-/** Tools exempt from every budget/exhaustion guard below (exact-limit,
- * reserved-slot, post-exhaustion grace window). Today this is only the tool
- * that turns spent exploration into a review; add a tool here only once it
- * needs the same full exemption — a tool needing a *partial* exemption
- * belongs in its own check, not this set. */
-const ALWAYS_ALLOWED_TOOLS = new Set(["f_review_submit"]);
-
 function budgetDecision(
   allow: boolean,
   abort: boolean,
@@ -269,24 +243,15 @@ const abort = (message: string) => budgetDecision(false, true, message);
 
 /** Session-total preflight for OpenCode tool calls. The context call seeds
  * toolCalls=1; every later call is consumed here before the operation runs. */
-export function beforeReviewToolCall(
-  sessionID: string,
-  tool: string
-): ReviewToolBudgetDecision {
-  // No active review, or no budget configured — nothing to gate.
-  const st = getState(sessionID);
-  if (!st?.active) return allow();
-
+export function beforeReviewToolCall(sessionID: string, tool: string): ReviewToolBudgetDecision {
+  const active = activeModule(sessionID);
+  if (!active) return allow();
+  const { m, st } = active;
   const max = st.maxToolCalls;
   if (!Number.isFinite(max)) return allow();
 
-  // Budget already exhausted: only f_review_submit may still run, and only
-  // GRACE_CALLS more non-submit attempts are tolerated before hard-abort.
   if (st.toolBudgetExhausted) {
-    // The review only exists once f_review_submit runs, so submit stays
-    // callable after exhaustion — killing the session before it can submit
-    // throws away everything the exploration budget just paid for.
-    if (ALWAYS_ALLOWED_TOOLS.has(tool)) return allow();
+    if (tool === m.submitTool) return allow();
     st.graceCalls = (st.graceCalls ?? 0) + 1;
     if (st.graceCalls > GRACE_CALLS) {
       return abort(
@@ -295,66 +260,46 @@ export function beforeReviewToolCall(
       );
     }
     return deny(
-      `Review tool-call budget exhausted (maxToolCalls=${max}). Only f_review_submit ` +
-        `may be called now — submit the review with what you have already seen.`
+      `Review tool-call budget exhausted (maxToolCalls=${max}). Only ${m.submitTool} ` +
+        `may be called now — submit with what you have already seen.`
     );
   }
 
-  // Spend this call against the session-total and (if applicable) the
-  // exploration-only counters before any of the checks below run.
   st.toolCalls++;
-  const isSubmit = ALWAYS_ALLOWED_TOOLS.has(tool);
-  const isExplorer = REVIEW_EXPLORERS.has(tool);
+  const isSubmit = tool === m.submitTool;
+  const isExplorer = m.explorers.has(tool) || NATIVE_EXPLORERS.has(tool);
   if (isExplorer) st.explorationCalls++;
 
-  // Last slot check: the exact limit may run only when it is the submit that can finish the
-  // review. Later attempts remain pinned to max instead of growing forever.
-  // Exhaustion opens the submit-only grace window instead of aborting:
-  // the next GRACE_CALLS non-submit calls are refused with a "submit now"
-  // notice, and only past that is the session hard-aborted.
   if (st.toolCalls > max || (st.toolCalls === max && !isSubmit)) {
     st.toolCalls = max;
     st.explorationSealed = true;
     st.toolBudgetExhausted = true;
     return deny(
       `Review stopped exploring: maxToolCalls=${max} reached and call ${max} was ${tool}, ` +
-        `not f_review_submit. Only f_review_submit may be called now — submit the review ` +
-        `with what you have already seen.`
+        `not ${m.submitTool}. Only ${m.submitTool} may be called now — submit with what you have already seen.`
     );
   }
 
-  // Seal exploration (flag only, no return yet) if this call trips an
-  // alternating-loop or the tally-based exploration allowance.
   const alternatingLoop = isExplorer && isAlternatingLoop(sessionID);
   if (alternatingLoop) st.explorationSealed = true;
 
   const explorationLimit = Math.max(0, max - RESERVED_SUBMIT_CALLS - 1);
   if (isExplorer && st.explorationCalls > explorationLimit) st.explorationSealed = true;
 
-  // Reserved slots: the last RESERVED_SUBMIT_CALLS calls are off-limits to
-  // anything but submit, regardless of the exploration seal above.
   if (!isSubmit && st.toolCalls > max - RESERVED_SUBMIT_CALLS) {
     st.explorationSealed = true;
     return deny(
       `Tool call ${st.toolCalls}/${max} blocked before execution because this slot was reserved ` +
-        `for f_review_submit/recovery. ${max - st.toolCalls} call(s) remain; call ` +
-        `f_review_submit now.`
+        `for ${m.submitTool}/recovery. ${max - st.toolCalls} call(s) remain; call ${m.submitTool} now.`
     );
   }
 
-  // Final gate: deny any exploration call while sealed, whether the seal was
-  // just set above or persisted from an earlier call in this session.
   if (isExplorer && st.explorationSealed) {
     const reason = alternatingLoop
       ? "an alternating lookup loop was detected"
       : `the ${explorationLimit}-call exploration allowance was consumed`;
-    return deny(
-      `Exploration blocked before execution because ${reason}. ` +
-        `Tool budget: ${st.toolCalls}/${max}; call f_review_submit now.`
-    );
+    return deny(`Exploration blocked before execution because ${reason}. Tool budget: ${st.toolCalls}/${max}; call ${m.submitTool} now.`);
   }
-
-  // Nothing blocked this call.
   return allow();
 }
 
@@ -363,17 +308,14 @@ export function beforeReviewToolCall(
  * here: submit must stay reachable through the grace window so the session
  * can still turn its exploration into a review; the idle watchdog finalizes
  * a partial report if it never does. */
-export function afterReviewToolCall(
-  sessionID: string,
-  tool: string
-): ReviewToolBudgetDecision {
-  const st = getState(sessionID);
-  if (!st?.active || st.toolCalls < st.maxToolCalls) return allow();
-  st.explorationSealed = true;
-  st.toolBudgetExhausted = true;
+export function afterReviewToolCall(sessionID: string, tool: string): ReviewToolBudgetDecision {
+  const active = activeModule(sessionID);
+  if (!active || active.st.toolCalls < active.st.maxToolCalls) return allow();
+  active.st.explorationSealed = true;
+  active.st.toolBudgetExhausted = true;
   return deny(
-    `Review tool-call budget exhausted after ${tool} (${st.toolCalls}/${st.maxToolCalls}). ` +
-      `Only f_review_submit may be called now — submit the review with what you have.`
+    `Review tool-call budget exhausted after ${tool} (${active.st.toolCalls}/${active.st.maxToolCalls}). ` +
+      `Only ${active.m.submitTool} may be called now — submit with what you have.`
   );
 }
 
@@ -388,12 +330,12 @@ export function afterReviewToolCall(
  */
 export function guardNativeCall(sessionID: string, tool: string): string {
   if (!NATIVE_EXPLORERS.has(tool)) return "";
-  const st = getState(sessionID);
-  if (!st?.active) return "";
+  const active = activeModule(sessionID);
+  if (!active) return "";
   const sig = streaks.get(sessionID)?.sig ?? "";
-  const missStreak = st.missStreak;
-  const notice = guardExploration(st, tool, "", sig);
-  st.missStreak = missStreak; // "" is never a miss — undo the reset
+  const missStreak = active.st.missStreak;
+  const notice = active.m.guard(active.st, tool, "", sig);
+  active.st.missStreak = missStreak; // "" is never a miss — undo the reset
   return notice;
 }
 
@@ -406,3 +348,23 @@ export function loopNotice(sessionID: string): string {
     `different arguments), or finish the task with what you already have.`
   );
 }
+
+// f-review registers itself here — not from review/index.ts — so the guards
+// are armed even in tests that never build the plugin. f-log registers from
+// its adapter (createLogModule).
+registerGuardModule({
+  name: "review",
+  lookup: getState,
+  submitTool: "f_review_submit",
+  explorers: new Set(["file_read", "file_read_diff", "file_find", "code_search", "related_code", "git_history"]),
+  idempotentPatterns: {
+    f_review_submit: /Stale\/duplicate f_review_submit ignored|No active review/,
+    f_review_judge: /already recorded|Judge INCOMPLETE|already hit the judge rework cap/,
+    f_review_plan: /Refusing to create another run|still being created by another process/,
+    f_review_context: /Duplicate f_review_context ignored|already has (?:a submitted|a terminal) review artifact/,
+  },
+  guard: (st, tool, out, args) => reviewGuard(st as Parameters<typeof reviewGuard>[0], tool, out, args),
+  submitAdvice:
+    " A review is active in this session: STOP exploring — call f_review_submit " +
+    "NOW with the findings you already have.",
+});
