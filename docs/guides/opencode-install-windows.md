@@ -33,8 +33,8 @@ powershell -ExecutionPolicy Bypass -File .\install-opencode.ps1
   npm         [@ai-sdk/openai-compatible]:                ⏎
   baseURL     [http://ollama.ai.koscom.co.kr/v1]:         ⏎
   apiKey      (필수): sk-AX추진실로부터받은KEY       ← 이것만 입력
-  model id    [Qwen-Coder]:                               ⏎
-  model name  [Qwen-Coder]:                               ⏎
+  model id    [Qwen-Inference]:                               ⏎
+  model name  [Qwen-Inference]:                               ⏎
   context     [131072]:                                   ⏎
   output      [40960]:                                    ⏎
 ```
@@ -89,14 +89,14 @@ opencode --version        # 예: 1.18.27
         "apiKey": "{env:OPENCODE_INTERNAL_API_KEY}"
       },
       "models": {
-        "Qwen-Coder": {
-          "name": "Qwen-Coder",
+        "Qwen-Inference": {
+          "name": "Qwen-Inference",
           "limit": { "context": 131072, "output": 40960 }
         }
       }
     }
   },
-  "model": "internal/Qwen-Coder",
+  "model": "internal/Qwen-Inference",
   "autoupdate": false,
   "plugin": []
 }
