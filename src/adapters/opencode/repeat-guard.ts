@@ -153,7 +153,7 @@ export function recordCall(sessionID: string, tool: string, args: unknown): void
 }
 
 function isSuppressibleTool(tool: string): boolean {
-  return NATIVE_EXPLORERS.has(tool) || moduleExplorers().has(tool);
+  return SUPPRESSIBLE_BUILTINS.has(tool) || moduleExplorers().has(tool);
 }
 
 /** Detect an A-B-A-B cycle, including two lookup tools chasing the same
@@ -226,6 +226,11 @@ const NATIVE_EXPLORERS = new Set([
   "websearch",
   "codesearch",
 ]);
+
+/** Built-ins whose repeated output may be replaced by the loop notice but that
+ * never count against a module's exploration budget (todoread is read-only
+ * bookkeeping, not code exploration). */
+const SUPPRESSIBLE_BUILTINS = new Set([...NATIVE_EXPLORERS, "todoread"]);
 
 function budgetDecision(
   allow: boolean,

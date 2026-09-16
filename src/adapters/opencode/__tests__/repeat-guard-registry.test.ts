@@ -8,6 +8,7 @@ import {
   guardNativeCall,
   shouldSuppressRepeatOutput,
   shouldSuppressIdempotentReplay,
+  isRepeatOutputSuppressible,
   HARD_LIMIT,
   RESERVED_SUBMIT_CALLS,
   type GuardModule,
@@ -108,5 +109,12 @@ describe("repeat-guard module registry", () => {
   test("a session with no active module is not gated", () => {
     expect(beforeReviewToolCall("reg-none", "anything").allow).toBe(true);
     expect(escalateLoop("reg-none")).toBe("");
+  });
+
+  test("todoread output stays repeat-suppressible after the registry refactor", () => {
+    const s = "reg-8";
+    for (let i = 0; i < 3; i++) recordCall(s, "todoread", {});
+    expect(isRepeatOutputSuppressible("todoread")).toBe(true);
+    expect(shouldSuppressRepeatOutput(s, "todoread")).toBe(true);
   });
 });
