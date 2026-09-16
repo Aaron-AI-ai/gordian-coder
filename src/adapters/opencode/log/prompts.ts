@@ -6,7 +6,7 @@
  * before OpenCode's own cap does.
  */
 import { LOG_EXPLORERS } from "../../../core/log/tools";
-import { JUDGE_AGENT_STEPS, reviewerAgentSteps } from "../review/prompts";
+import { BUILTINS_OFF, JUDGE_AGENT_STEPS, reviewerAgentSteps } from "../review/prompts";
 
 type PermissionAction = "allow" | "deny";
 
@@ -16,11 +16,6 @@ export const LOG_COMMAND_NAME = "f-log";
 
 export const ANALYST_AGENT_DESCRIPTION = "Root-cause analyst for one Java/Spring (fico) stack trace — f-log";
 export const LOG_JUDGE_AGENT_DESCRIPTION = "Independent judge of an f-log root-cause submission";
-
-const BUILTINS_OFF: Record<string, boolean> = {
-  "*": false, bash: false, read: false, write: false, edit: false, patch: false, apply_patch: false,
-  grep: false, glob: false, list: false, lsp: false, webfetch: false, websearch: false, codesearch: false, batch: false,
-};
 
 export const ANALYST_AGENT_PERMISSION: Record<string, PermissionAction> = {
   "*": "deny",

@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   ANALYST_AGENT_NAME, ANALYST_AGENT_PERMISSION, ANALYST_AGENT_TOOLS, ANALYST_AGENT_PROMPT, analystAgentSteps,
-  JUDGE_AGENT_NAME, LOG_JUDGE_AGENT_PERMISSION, LOG_JUDGE_AGENT_STEPS, LOG_COMMAND_NAME, LOG_COMMAND_TEMPLATE,
+  JUDGE_AGENT_NAME, LOG_JUDGE_AGENT_PERMISSION, LOG_JUDGE_AGENT_TOOLS, LOG_JUDGE_AGENT_STEPS, LOG_COMMAND_NAME, LOG_COMMAND_TEMPLATE,
 } from "../log/prompts";
 import { LOG_EXPLORERS } from "../../../core/log/tools";
-import { JUDGE_AGENT_STEPS, reviewerAgentSteps } from "../review/prompts";
+import { BUILTINS_OFF, JUDGE_AGENT_STEPS, reviewerAgentSteps } from "../review/prompts";
 
 describe("f-log agent definitions", () => {
   test("analyst allows exactly context + 7 explorers + submit, denies everything else", () => {
@@ -30,5 +30,15 @@ describe("f-log agent definitions", () => {
     for (const s of ["--file=", "--output=", "--judge", "f_log_plan", "f_log_finalize", "f-log-analyst", "f-log-judge", "NEVER"]) expect(LOG_COMMAND_TEMPLATE).toContain(s);
     expect(ANALYST_AGENT_PROMPT).toContain("f_log_context");
     expect(ANALYST_AGENT_PROMPT).toContain("f_log_submit");
+  });
+  test("both agent tools share review's complete BUILTINS_OFF (including task, skill, todowrite, todoread, question)", () => {
+    for (const k of Object.keys(BUILTINS_OFF)) {
+      expect(ANALYST_AGENT_TOOLS[k]).toBe(false);
+      expect(LOG_JUDGE_AGENT_TOOLS[k]).toBe(false);
+    }
+    for (const k of ["task", "skill", "todowrite", "todoread", "question"]) {
+      expect(ANALYST_AGENT_TOOLS[k]).toBe(false);
+      expect(LOG_JUDGE_AGENT_TOOLS[k]).toBe(false);
+    }
   });
 });
