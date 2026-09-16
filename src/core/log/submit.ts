@@ -8,6 +8,7 @@
  */
 import { z } from "zod";
 import { capped } from "../review/contract";
+import { normalizeRepoPath } from "../review/imports";
 import { MAX_FAILED_SUBMITS, MAX_RESUMES } from "../review/pipeline/loop";
 import type { LogPlan } from "./plan";
 import { mergeCallLog, readRunJson, submissionCount, writeRunJson, type RunMeta } from "./run-store";
@@ -120,10 +121,13 @@ export function submitLog(payload: unknown, sessionId: string): string {
     return store(st, sub, sessionId, { forced: " — after repeated incomplete observation coverage" });
   }
 
-  // Gate 2: evidence only from files actually seen (read/blamed) or injected as a suspect snippet.
-  const seen = new Set<string>(plan.suspects.map((s) => s.path));
-  for (const f of Object.keys(st.readFiles ?? {})) seen.add(f);
-  const unseen = sub.evidence.map((e) => e.file).filter((f) => !seen.has(f));
+  // Gate 2: evidence only from files actually seen (read/blamed) or injected as a suspect
+  // snippet. Normalize both sides — the model's evidence path and a suspect/readFiles path
+  // rarely disagree on separators or a leading "./", but they must not be treated as unseen
+  // for it (I-7).
+  const seen = new Set<string>(plan.suspects.map((s) => normalizeRepoPath(s.path)));
+  for (const f of Object.keys(st.readFiles ?? {})) seen.add(normalizeRepoPath(f));
+  const unseen = sub.evidence.filter((e) => !seen.has(normalizeRepoPath(e.file))).map((e) => e.file);
   if (unseen.length) {
     const bounce = reject(`evidence[] may only cite files you read with f_log_read/f_log_blame or that were injected as suspects. Not seen: ${unseen.join(", ")}`);
     if (bounce) return bounce;

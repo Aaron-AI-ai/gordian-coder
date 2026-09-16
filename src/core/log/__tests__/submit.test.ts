@@ -79,6 +79,14 @@ describe("submitLog", () => {
     expect(submitLog(p, "s-ev")).toContain("src/a/Other.java");
   });
 
+  test("evidence path normalization: './src/a/Svc.java' matches the suspect 'src/a/Svc.java' (I-7)", () => {
+    const cwd = repo();
+    const { runId, st } = start(cwd, "s-norm");
+    const p = valid(runId, st.submitToken);
+    p.evidence = [{ file: "./src/a/Svc.java", lines: [1, 2], why: "the dereference" }];
+    expect(submitLog(p, "s-norm")).toContain("✅");
+  });
+
   test("evidence on a non-suspect file is accepted once the analyst read it", () => {
     const cwd = repo();
     writeFileSync(join(cwd, "src/a/Extra.java"), "class Extra {}\n");

@@ -5,6 +5,7 @@
  * style suspect commit). Every call passes the shared guard under the run id.
  */
 import { guardExploration } from "../guard";
+import { normalizeRepoPath } from "../review/imports";
 import type { ToolArg } from "../review/tools/index";
 import { codeSearch, fileFind, fileRead, GREP_MAX_COUNT, isGitRepo, sh } from "../review/tools/read";
 import { gitHistory, renderRelatedCode } from "../review/tools/related";
@@ -125,8 +126,7 @@ export function runLogTool(st: LogSession | undefined, name: string, args: Recor
   if (!spec) return `Unknown f-log tool: ${name}`;
   const out = spec.run(st, args);
   if ((name === "f_log_read" || name === "f_log_blame") && !out.startsWith("Error:") && !out.startsWith("No blame available")) {
-    const normalizedPath = String(args.file_path).replace(/\\/g, "/").replace(/^\.\//, "");
-    (st.readFiles ??= {})[normalizedPath] = true;
+    (st.readFiles ??= {})[normalizeRepoPath(String(args.file_path))] = true;
   }
   return logGuard(st, name, out, args);
 }
