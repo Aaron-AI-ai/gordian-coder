@@ -27,5 +27,8 @@ export {
 // f-review
 export * from "./review";
 
+// f-log (namespaced: "runDir"/"RunMeta" collide with f-review's own)
+export * as log from "./log";
+
 // wiki -> KB sync
 export * from "./kb-sync";

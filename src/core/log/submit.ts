@@ -68,6 +68,8 @@ function store(st: LogSession, sub: LogSubmission, sessionId: string, extra: { f
   const stored: StoredSubmission = { ...sub, submitToken: "", round, submittedAt: new Date().toISOString(), ...extra };
   writeRunJson(st.runId, st.cwd, `submission-${round}.json`, stored);
   mergeCallLog(st.runId, st.cwd, st.callLog);
+  // Finalize (another session) needs which suspects were actually read.
+  writeRunJson(st.runId, st.cwd, "readFiles.json", [...new Set([...(readRunJson<string[]>(st.runId, st.cwd, "readFiles.json") ?? []), ...Object.keys(st.readFiles ?? {})])]);
   st.active = false;
   st.submitted = true;
   clearLogState(sessionId);
