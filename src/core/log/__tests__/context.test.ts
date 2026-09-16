@@ -52,10 +52,11 @@ describe("renderContext", () => {
 
   test("observations are never cut; lower sections are dropped first under a tight budget", () => {
     const rules = [{ file: "r.md", exceptions: [], globs: [], reference: false, content: "R".repeat(2000), specificity: 1 }];
-    const out = renderContext(input(cwd, { rules, maxChars: 9_000 }));
+    const out = renderContext(input(cwd, { rules, maxChars: 4_000 }));
     expect(out).toContain("예외 1/1");
     expect(out).not.toContain("ctl 20");         // other snippets dropped
-    expect(out.length).toBeLessThanOrEqual(9_000 + 200);
+    expect(out).toContain("R".repeat(50));       // rules survive — bottom-up order, not "drop everything"
+    expect(out.length).toBeLessThanOrEqual(4_000 + 200);
   });
 
   test("raw log is trimmed to RAW_MAX_CHARS with a pointer to input.log", () => {

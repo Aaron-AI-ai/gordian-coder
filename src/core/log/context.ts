@@ -100,29 +100,24 @@ export function renderContext(i: ContextInput): string {
     ? `## 나머지 용의 파일\n${cut(others.map((s) => snippet(i.cwd, s, OTHER_RADIUS, OTHER_SNIPPETS_MAX_CHARS)).join("\n\n"), OTHER_SNIPPETS_MAX_CHARS, "(나머지는 f_log_read)")}`
     : "";
 
-  // Priority order; each entry knows whether it may be dropped and, for a
-  // droppable section, the budget to charge it in the overflow decision.
-  // Rules/KB/other-suspects vary with the repo, so their *declared* cap is
-  // charged rather than their actual size — a run whose files happen to be
-  // small must not get a different section mix from one whose files are
-  // large; the placeholder text a rework round swaps in is fixed-size, so it
-  // is charged at cost.
-  const sections: Array<{ text: string; droppable: boolean; weight: number }> = [
-    { text: header, droppable: false, weight: header.length },
-    { text: rawSection(i), droppable: false, weight: 0 },
-    { text: observationsSection(i), droppable: false, weight: 0 },
-    { text: primary ? `## 1순위 용의 코드\n${snippet(i.cwd, primary, PRIMARY_RADIUS, PRIMARY_SNIPPET_MAX_CHARS)}` : "## 1순위 용의 코드\n(저장소에서 해석된 프레임 없음)", droppable: false, weight: 0 },
-    { text: rulesText, droppable: true, weight: rework ? rulesText.length : RULES_MAX_CHARS },
-    { text: kbText, droppable: true, weight: rework ? 0 : KB_MAX_DOCS * KB_DOC_MAX_CHARS },
-    { text: othersText, droppable: true, weight: OTHER_SNIPPETS_MAX_CHARS },
-    { text: analystInstructions(i.submitToken, i.language, true), droppable: false, weight: 0 },
+  // Priority order; each entry knows whether it may be dropped.
+  const sections: Array<{ text: string; droppable: boolean }> = [
+    { text: header, droppable: false },
+    { text: rawSection(i), droppable: false },
+    { text: observationsSection(i), droppable: false },
+    { text: primary ? `## 1순위 용의 코드\n${snippet(i.cwd, primary, PRIMARY_RADIUS, PRIMARY_SNIPPET_MAX_CHARS)}` : "## 1순위 용의 코드\n(저장소에서 해석된 프레임 없음)", droppable: false },
+    { text: rulesText, droppable: true },
+    { text: kbText, droppable: true },
+    { text: othersText, droppable: true },
+    { text: analystInstructions(i.submitToken, i.language, true), droppable: false },
   ].filter((s) => s.text);
 
-  // Fill from the top; once over budget, drop droppable sections from the bottom up.
-  let total = sections.reduce((n, s) => n + (s.droppable ? s.weight : s.text.length) + 2, 0);
+  // Fill from the top; once over budget (by actual assembled size), drop
+  // droppable sections from the bottom up (others → KB → rules).
+  let total = sections.reduce((n, s) => n + s.text.length + 2, 0);
   for (let k = sections.length - 1; k >= 0 && total > i.maxChars; k--) {
     if (!sections[k].droppable) continue;
-    total -= sections[k].weight + 2;
+    total -= sections[k].text.length + 2;
     sections[k].text = "";
   }
   return sections.map((s) => s.text).filter(Boolean).join("\n\n");
