@@ -6,6 +6,7 @@ import { submitLog, onLogSessionIdle, type StoredSubmission } from "../submit";
 import { planLog } from "../plan";
 import { logContext } from "../context";
 import { getLogState } from "../state";
+import { runLogTool } from "../tools";
 import { readRunJson } from "../run-store";
 import { MAX_FAILED_SUBMITS, MAX_RESUMES } from "../../review/pipeline/loop";
 
@@ -76,6 +77,19 @@ describe("submitLog", () => {
     const p = valid(runId, st.submitToken);
     p.evidence = [{ file: "src/a/Other.java", lines: [1, 2], why: "?" }];
     expect(submitLog(p, "s-ev")).toContain("src/a/Other.java");
+  });
+
+  test("evidence on a non-suspect file is accepted once the analyst read it", () => {
+    const cwd = repo();
+    writeFileSync(join(cwd, "src/a/Extra.java"), "class Extra {}\n");
+    const git = (args: string[]) => Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd });
+    git(["add", "."]); git(["commit", "-qm", "add extra"]);
+    const { runId, st } = start(cwd, "s-read");
+    const p = valid(runId, st.submitToken);
+    p.evidence = [{ file: "src/a/Extra.java", lines: [1, 1], why: "read it" }];
+    expect(submitLog(p, "s-read")).toContain("src/a/Extra.java");
+    runLogTool(st, "f_log_read", { file_path: "src/a/Extra.java" });
+    expect(submitLog(p, "s-read")).toContain("✅");
   });
 
   test("stale token → ignored; past the cap → forced accept of the last valid payload", () => {
