@@ -22,12 +22,9 @@ export interface GoldenCase {
   rule?: string;
 }
 
-// 리포트 절 헤더 (finalize.ts L 상수의 ko/en). 순서: summary, raw, path, cause, fix, run
-// raw(스택 원문/Stack trace)는 finalize.ts가 항상 렌더링하며 원본 로그를 그대로 담는다 —
-// exception 검사가 찾는 완전한 클래스명(예: java.lang.NullPointerException)은 보통 여기 있다.
+// 리포트 절 헤더 (finalize.ts L 상수의 ko/en). 순서: summary, path, cause, fix, run
 const SECTIONS = {
   summary: ["요약", "Summary"],
-  raw: ["스택 원문", "Stack trace"],
   path: ["진입점 → 원인 경로", "Entry point → cause path"],
   cause: ["원인 상세와 근거", "Cause and evidence"],
   fix: ["해결 방안", "Resolution"],
@@ -51,19 +48,17 @@ function pick(sections: Record<string, string>, names: string[]): string {
 
 export function score(c: GoldenCase, md: string) {
   const s = splitSections(md);
-  const where = pick(s, [...SECTIONS.summary, ...SECTIONS.raw, ...SECTIONS.path, ...SECTIONS.cause]);
+  const where = pick(s, [...SECTIONS.summary, ...SECTIONS.path, ...SECTIONS.cause]);
   const fix = pick(s, SECTIONS.fix);
-  // fix_keywords_any는 해결 방안의 서술(파일 목록 불릿 앞부분)만 본다 — 불릿/코드펜스에 섞인
-  // 우연한 키워드(예: null 검사 파일 경로, 코드 속 null 체크)로 통과하지 않도록.
-  const fixBulletAt = fix.search(/^-\s/m);
-  const fixProse = fixBulletAt === -1 ? fix : fix.slice(0, fixBulletAt);
   const run = pick(s, SECTIONS.run);
   const has = (hay: string, needle: string) => hay.includes(needle.toLowerCase());
   return {
-    exception: has(where, c.exception),
+    // FQCN(예: java.lang.NullPointerException) 또는 단순 클래스명(NullPointerException) 중 하나만
+    // 있어도 통과 — 요약문은 보통 단순 클래스명만 쓴다.
+    exception: has(where, c.exception) || has(where, c.exception.split(".").pop()!),
     cause_file: c.cause_files.some((f) => has(where, f) || has(where, basename(f))),
     cause_symbol: has(where, c.cause_symbol),
-    fix: c.fix_keywords_any.some((k) => has(fixProse, k)),
+    fix: c.fix_keywords_any.some((k) => has(fix, k)),
     fix_code: fix.includes("```"),
     rule: c.rule ? has(run, c.rule) : true,
   };

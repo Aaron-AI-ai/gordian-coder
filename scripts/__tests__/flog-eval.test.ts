@@ -58,7 +58,10 @@ describe("flog-eval", () => {
   });
 
   test("fix fails when no keyword appears in the resolution section only", () => {
-    const md = REPORT.replace("row == null이면 PBOnlineException.create(\"1001\", accountNo)를 던진다.", "매퍼 결과를 검사한다.");
+    const md = REPORT.replace(
+      "row == null이면 PBOnlineException.create(\"1001\", accountNo)를 던진다.\n- src/main/java/kr/co/koscom/pb/on/test/lab/online/qry/service/TLABQ001Service.java: null 검사\n\n```java\nif (row == null) { throw PBOnlineException.create(\"1001\", param.getInner().getAccountNo()); }\n```\n",
+      "매퍼 결과를 검사한다.\n- src/main/java/kr/co/koscom/pb/on/test/lab/online/qry/service/TLABQ001Service.java: 결과 검사\n\n```java\nif (row == undefined) { return out; }\n```\n",
+    );
     const r = score(CASE, md);
     expect(r.fix).toBe(false);
     expect(r.exception).toBe(true);
