@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** on-test-lab-online에 고의 버그 3개(NPE, MyBatis 바인딩, 빈 충돌)와 그 로그를 만드는 JUnit 테스트, 케이스별 정답 YAML을 두고, gordian-coder의 `scripts/flog-eval.ts`가 f-log 리포트를 정답과 자동 대조하게 한다.
+**Goal:** f-log 해결 방안에 수정 후 코드·설정 조각을 싣게 하고, on-test-lab-online에 고의 버그 3개(NPE, MyBatis 바인딩, 빈 충돌)와 그 로그를 만드는 JUnit 테스트, 케이스별 정답 YAML을 두고, gordian-coder의 `scripts/flog-eval.ts`가 f-log 리포트를 정답과 자동 대조하게 한다.
 
 **Architecture:** 대상 프로젝트(`target`)에는 on-stk-ord 패턴의 Controller/Service/VO/Mapper와 `src/test`의 케이스 테스트가 들어간다. 테스트는 Spring 컨텍스트 없이 예외를 일으켜 `CaseLog`로 fico 프리픽스 로그를 `logs/f-log-cases/<case>.log`에 쓴다. gordian-coder 쪽 단일 Bun 스크립트가 케이스마다 `opencode run --command f-log`를 돌리고 리포트 절을 잘라 채점한다.
 
@@ -45,6 +45,116 @@
 | `gordian-coder/scripts/flog-eval.ts` | 러너+채점기 |
 | `gordian-coder/scripts/__tests__/flog-eval.test.ts` | 절 분할·채점 단위 테스트 |
 | `gordian-coder/docs/reports/f-log-eval-testbed-run1-20260917.md` | 첫 실행 결과 |
+
+---
+
+### Task 0: 해결 방안에 코드·설정 조각 포함 (f-log 본체)
+
+**Files:**
+- Modify: `src/core/log/submit.ts:32-36` (`resolution.changes` 스키마)
+- Modify: `src/adapters/opencode/log/index.ts:84` (f_log_submit 툴 스키마)
+- Modify: `src/core/log/finalize.ts:133-135` (해결 방안 렌더링)
+- Modify: `src/adapters/opencode/log/prompts.ts:49` (분석자 지침 3번)
+- Modify: `docs/guides/f-log-usage.md:43` (리포트 설명)
+- Test: `src/core/log/__tests__/finalize.test.ts`
+
+**Interfaces:**
+- Produces: `resolution.changes[].code?: string` (≤4000자, 수정 후 코드/설정 조각). 리포트 "해결 방안" 절에서 각 change 아래 ```` ```<확장자> ```` fenced 블록으로 렌더링. Task 5 채점기의 `fix_code` 항목이 이 블록의 존재를 본다.
+
+- [ ] **Step 1: 실패하는 테스트 작성**
+
+`src/core/log/__tests__/finalize.test.ts`의 `describe("renderLogReport"` 블록(72행 근처 `test("nine sections, ...")` 뒤)에 추가:
+```ts
+  test("a change with code renders a fenced block tagged by the file extension under the change line", () => {
+    const withCode = { ...sub, resolution: { ...sub.resolution, changes: [
+      { file: "src/a/Svc.java", description: "null 검사 후 PBOnlineException", code: "if (row == null) {\n    throw PBOnlineException.create(\"1001\", accountNo);\n}" },
+      { file: "src/main/resources/application.yml", description: "eager init 끄기", code: "redis:\n  eager-initialization: false" },
+      { file: "src/a/Other.java", description: "코드 없음" },
+    ] } };
+    const md = renderLogReport({ ...input, submission: withCode }, { unexplainedExceptions: [], unreadSuspects: [], unresolvedObservations: [] }, "PASS", "ko", new Date());
+    const fix = md.split("## 해결 방안")[1].split("## 검토한 대안")[0];
+    expect(fix).toContain("- src/a/Svc.java: null 검사 후 PBOnlineException\n\n```java\nif (row == null) {");
+    expect(fix).toContain("```yml\nredis:\n  eager-initialization: false\n```");
+    expect(fix).toContain("- src/a/Other.java: 코드 없음\n");
+    expect(fix.match(/```/g)).toHaveLength(4);
+  });
+```
+`input`과 `sub`는 같은 파일 상단에 이미 정의된 픽스처다(`sub`는 38행, `input`은 `renderLogReport` describe 안 — 없으면 72행 테스트가 만드는 것과 같은 객체를 `const input = ...`으로 끌어올린다).
+
+- [ ] **Step 2: 실패 확인**
+
+Run: `bun test src/core/log/__tests__/finalize.test.ts 2>&1 | tail -6`
+Expected: 새 테스트 1건 FAIL (`expect(received).toContain` — fenced 블록 없음). TypeScript는 `code` 프로퍼티를 초과 속성으로 보지 않으므로(스프레드) 컴파일은 통과한다.
+
+- [ ] **Step 3: 제출 스키마 확장**
+
+`src/core/log/submit.ts` 32–36행:
+```ts
+  resolution: z.object({
+    summary: capped(1000),
+    changes: z.array(z.object({
+      file: capped(500),
+      description: capped(1000),
+      // 수정 후 모습 그대로의 코드/설정 조각. 설명만으로는 적용할 수 없다.
+      code: capped(4000).optional(),
+    })).max(20),
+    kind: z.enum(["root-cause", "mitigation"]),
+  }),
+```
+
+- [ ] **Step 4: 툴 스키마 확장**
+
+`src/adapters/opencode/log/index.ts` 84행을:
+```ts
+      resolution: z.object({
+        summary: z.string(),
+        changes: z.array(z.object({
+          file: z.string(),
+          description: z.string(),
+          code: z.string().optional().describe("The corrected code or configuration fragment as it should read after the fix (method body, XML/YAML snippet, annotation change). Omit only when no concrete edit applies."),
+        })),
+        kind: z.enum(["root-cause", "mitigation"]),
+      }),
+```
+
+- [ ] **Step 5: 리포트 렌더링**
+
+`src/core/log/finalize.ts` 8행 import에 `extname` 추가:
+```ts
+import { dirname, extname, isAbsolute, join } from "node:path";
+```
+133–135행을:
+```ts
+  out.push(t.fix, empty ? `_${t.none}_` : s.resolution.summary);
+  for (const c of s.resolution.changes) {
+    out.push(`- ${c.file}: ${c.description}`);
+    if (c.code) out.push("", "```" + extname(c.file).slice(1), c.code.trimEnd(), "```", "");
+  }
+  out.push("");
+```
+
+- [ ] **Step 6: 분석자 지침**
+
+`src/adapters/opencode/log/prompts.ts` 49행 문장 끝(`...only the symptom.`) 뒤에 이어서 추가:
+```
+ For every entry in resolution.changes fill `code` with the corrected code or configuration fragment as it should read after the fix — the method body, the XML/YAML snippet, the annotation change — grounded in the KB coding guide when one applies. A description without code is not actionable.
+```
+
+- [ ] **Step 7: 테스트·타입·빌드**
+
+Run: `bun test src/core/log src/adapters/opencode 2>&1 | tail -4 && bun run typecheck && bun run build 2>&1 | tail -1`
+Expected: 전부 pass(기존 80 + 1), tsc 출력 없음, `adapters/opencode/index.js … (entry point)`.
+
+- [ ] **Step 8: 가이드 한 줄**
+
+`docs/guides/f-log-usage.md` 43행의 `해결 방안` 뒤를 `해결 방안(변경 파일별 수정 후 코드·설정 조각 포함)`으로 바꾼다.
+
+- [ ] **Step 9: 커밋**
+
+```bash
+git add src/core/log/submit.ts src/adapters/opencode/log/index.ts src/core/log/finalize.ts src/adapters/opencode/log/prompts.ts src/core/log/__tests__/finalize.test.ts docs/guides/f-log-usage.md
+git commit -m "Carry a code or config fragment on each f-log resolution change"
+```
 
 ---
 
@@ -639,7 +749,8 @@ f-log-cases/case-03-bean-conflict.yaml 6 2
   ```ts
   export interface GoldenCase { id: string; log: string; exception: string; cause_files: string[]; cause_symbol: string; fix_keywords_any: string[]; rule?: string }
   export function splitSections(md: string): Record<string, string>   // "## 제목" → 본문. 제목은 trim, 본문은 다음 "## "까지
-  export function score(c: GoldenCase, md: string): Record<"exception"|"cause_file"|"cause_symbol"|"fix"|"rule", boolean>
+  export function score(c: GoldenCase, md: string): Record<"exception"|"cause_file"|"cause_symbol"|"fix"|"fix_code"|"rule", boolean>
+  // fix_code: "해결 방안" 절에 fenced 코드 블록(```)이 하나 이상 있는지 (Task 0의 code 필드가 실제로 채워지는지)
   ```
   `import.meta.main`일 때만 CLI 실행.
 
@@ -669,6 +780,11 @@ selectAcnt가 null을 반환했는데 row.getAcntNo()를 호출.
 
 ## 해결 방안
 row == null이면 PBOnlineException.create("1001", accountNo)를 던진다.
+- src/main/java/kr/co/koscom/pb/on/test/lab/online/qry/service/TLABQ001Service.java: null 검사
+
+\`\`\`java
+if (row == null) { throw PBOnlineException.create("1001", param.getInner().getAccountNo()); }
+\`\`\`
 
 ## 실행 정보
 - 적용 룰: npe, fico_exception_flow
@@ -693,7 +809,7 @@ describe("flog-eval", () => {
   });
 
   test("score passes every check on a matching report", () => {
-    expect(score(CASE, REPORT)).toEqual({ exception: true, cause_file: true, cause_symbol: true, fix: true, rule: true });
+    expect(score(CASE, REPORT)).toEqual({ exception: true, cause_file: true, cause_symbol: true, fix: true, fix_code: true, rule: true });
   });
 
   test("cause_file accepts a basename-only mention, case-insensitively", () => {
@@ -711,7 +827,7 @@ describe("flog-eval", () => {
   test("rule check passes when the case declares no rule; english headers are recognised", () => {
     const en = `## Summary\nNPE\n## Entry point → cause path\nTLABQ001Service.java tlabq001\n## Cause and evidence\nnull\n## Resolution\nadd a null check\n## Run info\n- rules: none\n`;
     const { rule, ...rest } = CASE;
-    expect(score(rest, en)).toEqual({ exception: false, cause_file: true, cause_symbol: true, fix: true, rule: true });
+    expect(score(rest, en)).toEqual({ exception: false, cause_file: true, cause_symbol: true, fix: true, fix_code: false, rule: true });
   });
 });
 ```
@@ -784,6 +900,7 @@ export function score(c: GoldenCase, md: string) {
     cause_file: c.cause_files.some((f) => has(where, f) || has(where, basename(f))),
     cause_symbol: has(where, c.cause_symbol),
     fix: c.fix_keywords_any.some((k) => has(fix, k)),
+    fix_code: fix.includes("```"),
     rule: c.rule ? has(run, c.rule) : true,
   };
 }
@@ -829,14 +946,14 @@ async function main(): Promise<void> {
     const report = `.fico/report/f-log/${c.id}.md`;
     if (!noRun) runFLog(target, c, report, model);
     const full = join(target, report);
-    if (!existsSync(full)) { rows.push(`| ${c.id} | – | – | – | – | – | 리포트 없음 |`); failed++; continue; }
+    if (!existsSync(full)) { rows.push(`| ${c.id} | – | – | – | – | – | – | 리포트 없음 |`); failed++; continue; }
     const r = score(c, await Bun.file(full).text());
     const cell = (b: boolean) => (b ? "PASS" : "FAIL");
     if (Object.values(r).some((b) => !b)) failed++;
-    rows.push(`| ${c.id} | ${cell(r.exception)} | ${cell(r.cause_file)} | ${cell(r.cause_symbol)} | ${cell(r.fix)} | ${cell(r.rule)} | ${report} |`);
+    rows.push(`| ${c.id} | ${cell(r.exception)} | ${cell(r.cause_file)} | ${cell(r.cause_symbol)} | ${cell(r.fix)} | ${cell(r.fix_code)} | ${cell(r.rule)} | ${report} |`);
   }
-  console.log("\n| case | exception | cause_file | cause_symbol | fix | rule | report |");
-  console.log("|---|---|---|---|---|---|---|");
+  console.log("\n| case | exception | cause_file | cause_symbol | fix | fix_code | rule | report |");
+  console.log("|---|---|---|---|---|---|---|---|");
   for (const row of rows) console.log(row);
   console.log(`\n${cases.length - failed}/${cases.length} cases fully PASS`);
   process.exit(failed ? 1 : 0);
@@ -966,6 +1083,7 @@ git commit -m "Record the first f-log test-bed run and document flog-eval"
 
 ## Self-review 메모
 
+- Task 0은 스펙 이후 사용자 요청(2026-09-17)으로 추가: 해결 방안의 change마다 `code` 조각. 채점기 `fix_code`가 이를 검증.
 - 스펙 §3 구조: Task 1–5가 파일 전부를 만든다. `.gitignore`는 Task 1.
 - §4 세 케이스: Task 1·2·3. CaseLog 형식은 Global Constraints와 Task 1 Step 8 코드가 일치.
 - §5 YAML: Task 4. 필드명은 Task 5 `GoldenCase`와 동일(`cause_files`, `fix_keywords_any`).
