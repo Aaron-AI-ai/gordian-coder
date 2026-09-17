@@ -83,7 +83,9 @@ function runFLog(target: string, c: GoldenCase, report: string, model?: string):
   mkdirSync(join(target, ".fico/report/f-log"), { recursive: true });
   const cmd = ["opencode", "run", "--command", "f-log", ...(model ? ["-m", model] : []), "--", `--file=${c.log} --output=${report}`];
   console.log(`\n$ ${cmd.join(" ")}`);
-  const r = Bun.spawnSync(cmd, { cwd: target, stdout: "inherit", stderr: "inherit" });
+  // opencode resolves its project root from the inherited PWD env var, not getcwd();
+  // Bun.spawnSync's cwd alone leaves PWD pointing at this repo.
+  const r = Bun.spawnSync(cmd, { cwd: target, env: { ...process.env, PWD: target }, stdout: "inherit", stderr: "inherit" });
   if (r.exitCode !== 0) console.error(`opencode exited ${r.exitCode} for ${c.id}`);
 }
 
