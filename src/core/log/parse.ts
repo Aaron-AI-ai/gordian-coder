@@ -2,7 +2,9 @@
  * Java / fico stack trace parser. Pure: string in, structure out.
  *
  * Handles what real fico logs contain (see spec §5): the log4j2 line prefix
- * `[LEVEL:trace:user][host:ts][thread][logger{5}:method:L]`, the four frame
+ * `[LEVEL:trace:user][host:ts][thread][logger{5}:method:L]` (plus the generic
+ * `ts LEVEL … : msg` and bracketed `[ts] [] [host] [LEVEL] [thread] [logger:L]`
+ * shapes), the four frame
  * suffix styles (`~[jar:ver]`, ` [jar:ver]`, `~[?:?]`, `[main/:?]`), the
  * `java.base/` module prefix, `Caused by:` chains with `... N more`
  * restoration, `Suppressed:`, Spring's legacy `; nested exception is`,
@@ -45,10 +47,16 @@ export interface ParsedLog {
 const FICO_PREFIX = /^\[(?:TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\s*:[^\]]*\]\s*\[[^\]]*\]\s*\[[^\]]*\]\s*\[([^\]:]+)(?::[^\]]*)?\]\s*/;
 // generic: 2026-01-01 00:00:00.000  INFO 1 --- [main] a.b.C : msg   /   2026-01-01T00:00:00Z LEVEL ... - msg
 const GENERIC_PREFIX = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}[.,]?\d*Z?\s+(?:\S+\s+)*?(?:TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\b[^:]*?(?:\s[-:]\s|:\s)/;
+// bracketed everything: [2026-09-17T09:47:07.352912] [] [host] [ERROR] [main] [logger.method:857] msg
+const BRACKET_PREFIX = /^\[\d{4}-\d{2}-\d{2}[ T][^\]]*\]\s*(?:\[[^\]]*\]\s*)*\[(?:TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\]\s*\[[^\]]*\]\s*\[([^\]:]+)(?::[^\]]*)?\]\s*/;
 const FRAME = /^\s*at\s+(?:[\w.$]+\/)?([\w$.]+)\.([\w$<>]+)\((?:([^:)]+):(\d+)|[^)]*)\)/;
 const SUFFIX = /\s*~?\[[^\]]*\]\s*$/;
 const MORE = /^\s*\.\.\.\s*(\d+)\s+more\s*$/;
 const HEADER = /^(Caused by:\s*|Suppressed:\s*)?(?:Exception in thread "[^"]*"\s+)?([\w$.]+(?:Exception|Error|Throwable)[\w$]*)(?::\s?(.*))?$/;
+// "Application run failed org.x.FooException: msg" — the logger message and the
+// throwable glued on one line. FQCN only, so a bare "CommonException: errorCode=1"
+// handler line is still a handler line and not a block.
+const INLINE_HEADER = /(?:^|\s)([\w$]+(?:\.[\w$]+)+(?:Exception|Error|Throwable)[\w$]*):\s(.*)$/s;
 const NESTED = /;\s*nested exception is\s+([\w$.]+(?:Exception|Error|Throwable)[\w$]*)(?::\s?(.*))?$/s;
 const PROXY = /\$\$(?:EnhancerBySpringCGLIB|FastClassBySpringCGLIB|EnhancerByCGLIB|SpringCGLIB|Lambda)(?:\$\$[\w$]*|\$\d+)$/;
 // JDK8+ hidden-class lambda naming glued onto the frame's module-prefix slot:
@@ -72,6 +80,8 @@ export function isExceptionType(s: string): boolean {
 export function stripLinePrefix(line: string): { text: string; logger?: string; found: boolean } {
   const f = FICO_PREFIX.exec(line);
   if (f) return { text: line.slice(f[0].length), logger: f[1], found: true };
+  const b = BRACKET_PREFIX.exec(line);
+  if (b) return { text: line.slice(b[0].length), logger: b[1], found: true };
   const g = GENERIC_PREFIX.exec(line);
   if (g) return { text: line.slice(g[0].length), found: true };
   return { text: line, found: false };
@@ -157,6 +167,13 @@ export function parseStackTrace(raw: string): ParsedLog {
     if (!current) {
       // Only before the first block: the handler line that precedes the trace.
       if (logger && !handler.logger) handler.logger = logger;
+      const inline = INLINE_HEADER.exec(text);
+      if (inline) {
+        extractHandler(text.slice(0, inline.index), handler);
+        current = { type: inline[1], message: inline[2].trim(), frames: [], omitted: 0 };
+        chain.push(current);
+        continue;
+      }
       extractHandler(text, handler);
       lastHandlerText = text;
     } else if (found) {

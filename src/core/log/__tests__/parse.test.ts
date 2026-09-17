@@ -135,6 +135,21 @@ describe("parseStackTrace", () => {
     });
   });
 
+  test("bracketed-timestamp prefix and same-line 'msg xxxException: …' header (Spring Boot reportFailure)", () => {
+    const log = `[2026-09-17T09:47:07.352912] [] [host.local] [ERROR] [main] [org.springframework.boot.SpringApplication.reportFailure:857] Application run failed org.springframework.context.annotation.ConflictingBeanDefinitionException: Annotation-specified bean name 'selHigherAcntMapper' for bean class [a.bm.mapper.SelHigherAcntMapper] conflicts with existing, non-compatible bean definition of same name and class [a.ac.mapper.SelHigherAcntMapper]
+    at org.springframework.context.annotation.ClassPathBeanDefinitionScanner.checkCandidate(ClassPathBeanDefinitionScanner.java:361)
+    at org.springframework.context.annotation.ClassPathBeanDefinitionScanner.doScan(ClassPathBeanDefinitionScanner.java:287)
+[2026-09-17T09:47:07.400000] [] [host.local] [INFO] [main] [a.b.C:m:1] next entry`;
+    const p = parseStackTrace(log);
+    expect(p.chain).toHaveLength(1);
+    expect(p.chain[0].type).toBe("org.springframework.context.annotation.ConflictingBeanDefinitionException");
+    expect(p.chain[0].message).toStartWith("Annotation-specified bean name 'selHigherAcntMapper'");
+    expect(p.chain[0].message).not.toContain("next entry");
+    expect(p.chain[0].frames).toHaveLength(2);
+    expect(p.handler.logger).toBe("org.springframework.boot.SpringApplication.reportFailure");
+    expect(stripLinePrefix("[2026-09-17T09:47:07.352912] [] [h] [ERROR] [main] [a.b.C:m:1] hello").text).toBe("hello");
+  });
+
   test("helpers", () => {
     expect(stripLinePrefix("[INFO ::][h:2026-01-01 00:00:00.000][main][a.b.C:m:1] hello").text).toBe("hello");
     expect(stripLinePrefix("2026-01-01 00:00:00.000  INFO 1 --- [main] a.b.C : hello").text).toBe("hello");
