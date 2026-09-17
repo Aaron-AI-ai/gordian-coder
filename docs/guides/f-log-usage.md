@@ -68,3 +68,5 @@ bun scripts/flog-eval.ts /path/to/target [--model provider/model] [--case case-0
 정답 YAML 필드: `log`(로그 경로), `exception`(체인 중 하나의 FQCN), `cause_files`(하나 이상 등장), `cause_symbol`(메서드/SQL id), `fix_keywords_any`(해결 방안 절에 하나 이상), `rule`(선택, 실행 정보의 적용 룰). 첫 대상 프로젝트는 `on-test-lab-online`이며 `gradle test`가 케이스 로그를 다시 만든다. 설계: `docs/superpowers/specs/2026-09-17-f-log-eval-testbed-design.md`.
 
 1차 실행 결과와 발견한 개선점은 `docs/reports/f-log-eval-testbed-run1-20260917.md` 참조.
+
+빌드부터 채점까지는 `./scripts/run-flog-eval.sh`(옵션은 그대로 flog-eval.ts에 전달, 대상/모델은 `FLOG_TARGET`/`FLOG_MODEL` 환경변수로 override), 채점기 자체의 단위 테스트는 `./scripts/test-flog-eval.sh`로 돌린다.

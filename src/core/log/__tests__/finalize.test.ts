@@ -94,6 +94,14 @@ describe("renderLogReport", () => {
     expect(fix).toContain("- src/a/Other.java: 코드 없음\n");
     expect(fix.match(/```/g)).toHaveLength(4);
   });
+  test("code containing a fenced block itself widens the fence past 3 backticks", () => {
+    const withNestedFence = { ...sub, resolution: { ...sub.resolution, changes: [
+      { file: "src/a/Svc.java", description: "예시 포함", code: "// example:\n```java\nfoo();\n```" },
+    ] } };
+    const md = renderLogReport({ ...input, submission: withNestedFence }, { unexplainedExceptions: [], unreadSuspects: [], unresolvedObservations: [] }, "PASS", "ko", new Date());
+    const fix = md.split("## 해결 방안")[1].split("## 검토한 대안")[0];
+    expect(fix).toContain("````java\n// example:\n```java\nfoo();\n```\n````");
+  });
   test("en labels, mitigation warning, envCause line, empty gaps text", () => {
     const md = renderLogReport({ ...input, submission: { ...sub, envCause: true, resolution: { ...sub.resolution, kind: "mitigation" } } }, { unexplainedExceptions: [], unreadSuspects: [], unresolvedObservations: [] }, "PASS", "en", new Date());
     expect(md).toContain("## Summary");

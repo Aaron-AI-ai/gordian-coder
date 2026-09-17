@@ -133,7 +133,12 @@ export function renderLogReport(i: FinalizeInput, gaps: Gaps, badge: Badge, lang
   out.push(t.fix, empty ? `_${t.none}_` : s.resolution.summary);
   for (const c of s.resolution.changes) {
     out.push(`- ${c.file}: ${c.description}`);
-    if (c.code) out.push("", "```" + extname(c.file).slice(1), c.code.trimEnd(), "```", "");
+    if (c.code) {
+      const code = c.code.trimEnd();
+      const longestRun = Math.max(0, ...(code.match(/`+/g) ?? []).map((r) => r.length));
+      const fence = "`".repeat(Math.max(3, longestRun + 1));
+      out.push("", fence + extname(c.file).slice(1), code, fence, "");
+    }
   }
   out.push("");
 

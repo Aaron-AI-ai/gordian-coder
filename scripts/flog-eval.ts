@@ -7,6 +7,7 @@
  * <target-dir>/f-log-cases/<id>.yaml 마다 target-dir에서 `opencode run --command f-log`를 돌려
  * .fico/report/f-log/<id>.md 를 만들고, 리포트 절을 정답과 대조해 PASS/FAIL 표를 찍는다.
  * FAIL 또는 리포트 없음이 하나라도 있으면 exit 1. --no-run 은 기존 리포트만 채점한다.
+ * exit 2: 사용법 오류(target 누락) 또는 케이스 없음(f-log-cases/ 없거나 비어 있음).
  * 설계: docs/superpowers/specs/2026-09-17-f-log-eval-testbed-design.md §6
  */
 import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
@@ -66,6 +67,7 @@ export function score(c: GoldenCase, md: string) {
 
 async function loadCases(target: string, only?: string): Promise<GoldenCase[]> {
   const dir = join(target, "f-log-cases");
+  if (!existsSync(dir)) return [];
   const files = readdirSync(dir).filter((f) => f.endsWith(".yaml")).sort();
   const cases: GoldenCase[] = [];
   for (const f of files) {
