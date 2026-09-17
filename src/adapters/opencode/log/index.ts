@@ -81,7 +81,15 @@ export function createLogModule(input: PluginInput): {
       evidence: z.array(z.object({ file: z.string(), lines: z.tuple([z.number().int().positive(), z.number().int().positive()]), why: z.string() })),
       observations: z.array(z.object({ observation: z.string(), explained: z.boolean(), how: z.string().optional() })),
       alternatives: z.array(z.object({ hypothesis: z.string(), rejectedBecause: z.string() })),
-      resolution: z.object({ summary: z.string(), changes: z.array(z.object({ file: z.string(), description: z.string() })), kind: z.enum(["root-cause", "mitigation"]) }),
+      resolution: z.object({
+        summary: z.string(),
+        changes: z.array(z.object({
+          file: z.string(),
+          description: z.string(),
+          code: z.string().optional().describe("The corrected code or configuration fragment as it should read after the fix (method body, XML/YAML snippet, annotation change). Omit only when no concrete edit applies."),
+        })),
+        kind: z.enum(["root-cause", "mitigation"]),
+      }),
       confidence: z.number().min(0).max(100),
       envCause: z.boolean().optional(),
     },

@@ -31,7 +31,12 @@ export const LogSubmitSchema = z.object({
   alternatives: z.array(z.object({ hypothesis: capped(500), rejectedBecause: capped(500) })).min(1).max(10),
   resolution: z.object({
     summary: capped(1000),
-    changes: z.array(z.object({ file: capped(500), description: capped(1000) })).max(20),
+    changes: z.array(z.object({
+      file: capped(500),
+      description: capped(1000),
+      // 수정 후 모습 그대로의 코드/설정 조각. 설명만으로는 적용할 수 없다.
+      code: capped(4000).optional(),
+    })).max(20),
     kind: z.enum(["root-cause", "mitigation"]),
   }),
   confidence: z.number().min(0).max(100),

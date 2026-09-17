@@ -81,6 +81,19 @@ describe("renderLogReport", () => {
     expect(md).toContain("4/10");                    // tool calls
     expect(md).toContain("npe.md");
   });
+  test("a change with code renders a fenced block tagged by the file extension under the change line", () => {
+    const withCode = { ...sub, resolution: { ...sub.resolution, changes: [
+      { file: "src/a/Svc.java", description: "null 검사 후 PBOnlineException", code: "if (row == null) {\n    throw PBOnlineException.create(\"1001\", accountNo);\n}" },
+      { file: "src/main/resources/application.yml", description: "eager init 끄기", code: "redis:\n  eager-initialization: false" },
+      { file: "src/a/Other.java", description: "코드 없음" },
+    ] } };
+    const md = renderLogReport({ ...input, submission: withCode }, { unexplainedExceptions: [], unreadSuspects: [], unresolvedObservations: [] }, "PASS", "ko", new Date());
+    const fix = md.split("## 해결 방안")[1].split("## 검토한 대안")[0];
+    expect(fix).toContain("- src/a/Svc.java: null 검사 후 PBOnlineException\n\n```java\nif (row == null) {");
+    expect(fix).toContain("```yml\nredis:\n  eager-initialization: false\n```");
+    expect(fix).toContain("- src/a/Other.java: 코드 없음\n");
+    expect(fix.match(/```/g)).toHaveLength(4);
+  });
   test("en labels, mitigation warning, envCause line, empty gaps text", () => {
     const md = renderLogReport({ ...input, submission: { ...sub, envCause: true, resolution: { ...sub.resolution, kind: "mitigation" } } }, { unexplainedExceptions: [], unreadSuspects: [], unresolvedObservations: [] }, "PASS", "en", new Date());
     expect(md).toContain("## Summary");

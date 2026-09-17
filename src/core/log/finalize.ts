@@ -5,7 +5,7 @@
  * the stored response and never rewrites the report.
  */
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, extname, isAbsolute, join } from "node:path";
 import { readFileAt, renderFileContent } from "../review/tools/read";
 import { loadLogConfig, type LogConfig } from "./config";
 import { bestSubmission } from "./judge";
@@ -131,7 +131,10 @@ export function renderLogReport(i: FinalizeInput, gaps: Gaps, badge: Badge, lang
   out.push("");
 
   out.push(t.fix, empty ? `_${t.none}_` : s.resolution.summary);
-  for (const c of s.resolution.changes) out.push(`- ${c.file}: ${c.description}`);
+  for (const c of s.resolution.changes) {
+    out.push(`- ${c.file}: ${c.description}`);
+    if (c.code) out.push("", "```" + extname(c.file).slice(1), c.code.trimEnd(), "```", "");
+  }
   out.push("");
 
   out.push(t.alts);

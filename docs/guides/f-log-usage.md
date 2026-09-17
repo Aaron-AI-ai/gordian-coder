@@ -40,7 +40,7 @@ OpenCode에서 대상 프로젝트를 연 뒤:
 .fico/f-log/runs/<runId>/               input.log · plan.json · context-<n>.md · submission-<n>.json · judgments.json · finalize.json
 ```
 
-리포트 순서: 요약 → 스택 원문 → 진입점→원인 경로 → 원인 상세와 근거(실제 코드 인용) → 해결 방안 → 검토한 대안 → **못 본 것** → 심사 이력 → 실행 정보. 배지: `PASS` / `TERMINAL`(임계값 미달, 최고점 채택) / `FORCED` / `PARTIAL` / `JUDGE SKIPPED`.
+리포트 순서: 요약 → 스택 원문 → 진입점→원인 경로 → 원인 상세와 근거(실제 코드 인용) → 해결 방안(변경 파일별 수정 후 코드·설정 조각 포함) → 검토한 대안 → **못 본 것** → 심사 이력 → 실행 정보. 배지: `PASS` / `TERMINAL`(임계값 미달, 최고점 채택) / `FORCED` / `PARTIAL` / `JUDGE SKIPPED`.
 
 ## 룰 파일 — `log/rules/*.md`
 
