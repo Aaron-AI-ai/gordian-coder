@@ -140,7 +140,9 @@ export function parseStackTrace(raw: string): ParsedLog {
   let currentIsSuppressed = false;
   let lastHandlerText: string | undefined;
 
-  for (const rawLine of raw.split(/\r?\n/)) {
+  const lines = raw.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
     if (!rawLine.trim()) continue;
     const frame = parseFrame(rawLine);
     if (frame) {
@@ -168,8 +170,11 @@ export function parseStackTrace(raw: string): ParsedLog {
       // Only before the first block: the handler line that precedes the trace.
       if (logger && !handler.logger) handler.logger = logger;
       const inline = INLINE_HEADER.exec(text);
-      if (inline) {
-        extractHandler(text.slice(0, inline.index), handler);
+      // Only a real header: the next non-blank line must be a stack frame, or
+      // this is prose that merely quotes/mentions an FQCN (F1).
+      const next = inline ? lines.slice(i + 1).find((l) => l.trim()) : undefined;
+      if (inline && next && parseFrame(next)) {
+        extractHandler(text, handler);
         current = { type: inline[1], message: inline[2].trim(), frames: [], omitted: 0 };
         chain.push(current);
         continue;

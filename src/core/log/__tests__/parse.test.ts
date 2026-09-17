@@ -150,6 +150,43 @@ describe("parseStackTrace", () => {
     expect(stripLinePrefix("[2026-09-17T09:47:07.352912] [] [h] [ERROR] [main] [a.b.C:m:1] hello").text).toBe("hello");
   });
 
+  test("inline header ignores an FQCN merely quoted in a message (F1)", () => {
+    const p = parseStackTrace(
+      "[ERROR::][h:2026-07-01 10:00:00.000][main][a.b.C:m:1] threw exception [Request processing failed: java.lang.NullPointerException: Cannot invoke \"x\"] with root cause\n" +
+        'java.lang.NullPointerException: Cannot invoke "x" because "y" is null\n' +
+        "\tat a.B.c(B.java:1)\n"
+    );
+    expect(p.chain).toHaveLength(1);
+    expect(p.chain[0].type).toBe("java.lang.NullPointerException");
+    expect(p.chain[0].frames).toHaveLength(1);
+  });
+
+  test("inline header on a stale entry doesn't shadow the real trace two lines later (F1)", () => {
+    const p = parseStackTrace(
+      "[INFO :t:u][h:2026-07-01 10:00:00.000][exec-1][a.b.C:m:1] retry after org.springframework.dao.DataAccessException: transient\n" +
+        "[INFO :t:u][h:2026-07-01 10:00:00.000][exec-1][a.b.C:m:2] retrying now\n" +
+        "[ERROR:a1b2c3:user01][host1:2026-07-01 15:32:08.194][http-nio-8080-exec-1][ext.aspect.PBExceptionHandlerAspect:handleFixedLengthException:59] 고정길이 전문 CommonException: errorCode=1001\n" +
+        "kr.co.koscom.pb.framework.site.ext.exception.PBOnlineException: real failure\n" +
+        "\tat kr.co.koscom.pb.on.stk.ord.online.qry.service.SONAQ001Service.query(SONAQ001Service.java:41) [main/:?]\n"
+    );
+    expect(p.chain).toHaveLength(1);
+    expect(p.chain[0].type).toBe("kr.co.koscom.pb.framework.site.ext.exception.PBOnlineException");
+    expect(p.chain[0].frames).toHaveLength(1);
+    expect(p.handler.errorCode).toBe("1001");
+  });
+
+  test("inline header keeps handler fields that follow it on the same line (F2)", () => {
+    const p = parseStackTrace(
+      "[ERROR:a1b2c3:user01][host1:2026-07-01 15:32:08.194][http-nio-8080-exec-1][ext.aspect.PBExceptionHandlerAspect:handleFixedLengthException:59] 처리 실패 kr.co.koscom.pb.framework.site.ext.exception.PBOnlineException: errorCode=1001, URI=/ON/X\n" +
+        "\tat kr.co.koscom.pb.on.stk.ord.online.qry.service.SONAQ001Service.query(SONAQ001Service.java:41) [main/:?]\n"
+    );
+    expect(p.chain).toHaveLength(1);
+    expect(p.chain[0].type).toBe("kr.co.koscom.pb.framework.site.ext.exception.PBOnlineException");
+    expect(p.chain[0].frames).toHaveLength(1);
+    expect(p.handler.errorCode).toBe("1001");
+    expect(p.handler.uri).toBe("/ON/X");
+  });
+
   test("helpers", () => {
     expect(stripLinePrefix("[INFO ::][h:2026-01-01 00:00:00.000][main][a.b.C:m:1] hello").text).toBe("hello");
     expect(stripLinePrefix("2026-01-01 00:00:00.000  INFO 1 --- [main] a.b.C : hello").text).toBe("hello");
