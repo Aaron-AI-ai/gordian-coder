@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>f-review 커밋 기준 리뷰 한눈에 보기</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #666666;
+    --border: #e2e2e2;
+    --card-bg: #f7f8fa;
+    --accent: #2f6feb;
+    --accent-bg: #eaf1ff;
+    --code-bg: #eef0f3;
+    --group-bg: #f0f2f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --fg: #e8e8e8;
+      --muted: #9aa0a6;
+      --border: #2c2f36;
+      --card-bg: #1b1e24;
+      --accent: #6ea8fe;
+      --accent-bg: #1c2a42;
+      --code-bg: #20232a;
+      --group-bg: #1d2128;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+      "Noto Sans KR", Helvetica, Arial, sans-serif;
+  }
+  .page {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 28px 32px 70px;
+    min-height: 100vh;
+    display: none;
+    flex-direction: column;
+  }
+  .page.active { display: flex; }
+  .title {
+    font-size: 1.9em;
+    font-weight: 700;
+    margin: 0 0 2px;
+  }
+  .subtitle {
+    color: var(--muted);
+    font-size: 0.95em;
+    margin: 0 0 14px;
+  }
+  .formula {
+    display: inline-block;
+    background: var(--accent-bg);
+    color: var(--accent);
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.95em;
+    font-weight: 600;
+    margin-bottom: 18px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    flex: 1;
+  }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+  }
+  .card .tag {
+    display: inline-block;
+    align-self: flex-start;
+    background: var(--accent);
+    color: #fff;
+    font-size: 0.7em;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 999px;
+    margin-bottom: 8px;
+  }
+  .card h3 {
+    margin: 0 0 8px;
+    font-size: 1.02em;
+  }
+  .card code.cmd {
+    display: block;
+    background: var(--code-bg);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.78em;
+    margin-bottom: 8px;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .card .range {
+    font-size: 0.78em;
+    color: var(--accent);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    margin-bottom: 6px;
+  }
+  .card p {
+    margin: 0;
+    font-size: 0.82em;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.86em;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  thead th {
+    background: var(--accent);
+    color: #fff;
+    font-weight: 700;
+  }
+  td.group {
+    background: var(--group-bg);
+    font-weight: 700;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  td.key code, td.val code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--code-bg);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.95em;
+  }
+  td.val {
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-width: 220px;
+  }
+  td.desc { color: var(--fg); line-height: 1.5; }
+  .footer {
+    margin-top: 16px;
+    font-size: 0.78em;
+    color: var(--muted);
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+  }
+  .nav {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 12px;
+    background: linear-gradient(to top, var(--bg) 60%, transparent);
+  }
+  .nav button {
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--fg);
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 0.85em;
+    cursor: pointer;
+  }
+  .nav button:disabled { opacity: 0.35; cursor: default; }
+  .nav button:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
+  .nav .dots { display: flex; gap: 6px; }
+  .nav .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--border);
+  }
+  .nav .dot.on { background: var(--accent); }
+  .weight {
+    font-size: 1.7em;
+    font-weight: 800;
+    color: var(--accent);
+    line-height: 1;
+    margin-bottom: 6px;
+  }
+  .bar {
+    height: 6px;
+    border-radius: 999px;
+    background: var(--code-bg);
+    overflow: hidden;
+    margin-bottom: 10px;
+  }
+  .bar > span {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+    border-radius: 999px;
+  }
+  @media (max-width: 900px) {
+    .grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 520px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<section class="page active" id="page-1">
+  <div class="title">f-review 커밋 기준 리뷰 한눈에 보기</div>
+  <div class="subtitle">/f-review [커밋/범위] [--files=...] — 대상을 어떻게 지정하느냐에 따른 5가지 경우</div>
+  <div class="formula">대상 = (커밋 diff 파일) ∪ (--files) − exclude</div>
+
+  <div class="grid">
+    <div class="card">
+      <span class="tag">기본값</span>
+      <h3>인자 없음</h3>
+      <code class="cmd">/f-review</code>
+      <div class="range">→ HEAD~1..HEAD</div>
+      <p>최근 커밋 1개만 리뷰. 커밋을 만든 직후 바로 확인할 때.</p>
+    </div>
+
+    <div class="card">
+      <span class="tag">HEAD</span>
+      <h3>단일 커밋</h3>
+      <code class="cmd">/f-review HEAD
+/f-review a1b2c3d</code>
+      <div class="range">→ &lt;ref&gt;~1..&lt;ref&gt;</div>
+      <p>특정 커밋 하나만 콕 집어 그 변경분만 리뷰.</p>
+    </div>
+
+    <div class="card">
+      <span class="tag">범위</span>
+      <h3>A..B</h3>
+      <code class="cmd">/f-review main..feature/x</code>
+      <div class="range">→ A..B (그대로)</div>
+      <p>A와 B 두 커밋 사이 diff 전체를 리뷰. main과 갈라진 뒤 feature에 쌓인 변경분 전체.</p>
+    </div>
+
+    <div class="card">
+      <span class="tag">from/to</span>
+      <h3>범위 분리 지정</h3>
+      <code class="cmd">--from=main --to=feature/x
+--from=v1.2.0</code>
+      <div class="range">→ A..B / A..HEAD</div>
+      <p><code>to</code> 생략 시 HEAD까지. bare 범위와 결과 동일.</p>
+    </div>
+
+    <div class="card">
+      <span class="tag">파일만</span>
+      <h3>커밋 없이 --files</h3>
+      <code class="cmd">--files=A.java,B.java</code>
+      <div class="range">→ 커밋 diff 없음 (파일 모드)</div>
+      <p>지정 파일 자체가 대상, 전체 파일 검토. 아직 커밋 안 한 작업 중 파일에 적합.</p>
+    </div>
+  </div>
+
+  <div class="footer">
+    상세 설명 및 근거: <code>docs/guides/f-review-commit-review.md</code> · <code>docs/specs/f-review-spec.md</code> §3.1
+  </div>
+</section>
+
+<section class="page" id="page-2">
+  <div class="title">fico_ai.json &nbsp;<code style="font-size:0.6em; vertical-align:2px;">review</code> 설정값 설명</div>
+  <div class="subtitle">현재 프로젝트 설정에 있는 키만 정리 — 값과 의미</div>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width:70px;">구분</th>
+        <th style="width:150px;">키</th>
+        <th style="width:220px;">현재 값</th>
+        <th>설명</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="group" rowspan="8">review</td>
+        <td class="key"><code>rulesDir</code></td>
+        <td class="val"><code>"fcq/rules"</code></td>
+        <td class="desc">프로젝트 자체 리뷰 룰 디렉터리. 이 하위의 <code>.md</code> 파일을 재귀적으로 전부 읽어 룰로 사용(기본값은 <code>review/rules</code>).</td>
+      </tr>
+      <tr>
+        <td class="key"><code>language</code></td>
+        <td class="val"><code>"ko"</code></td>
+        <td class="desc">리포트와 지적사항(findings)의 언어. 한국어로 고정.</td>
+      </tr>
+      <tr>
+        <td class="key"><code>frameworkKb</code></td>
+        <td class="val"><code>import 접두사 → KB 디렉터리</code> 매핑 4건<br><small>fico-fwk-extension / fico-fwk-core / framework-site-ext / fico-common-model</small></td>
+        <td class="desc">해당 import 접두사를 쓰는 코드를 리뷰할 때, <code>framework_kb</code> 룰의 기본 표를 이 매핑으로 대체해 관련 KB 문서를 근거로 자동 주입.</td>
+      </tr>
+      <tr>
+        <td class="key"><code>deepPasses</code></td>
+        <td class="val"><code>2</code></td>
+        <td class="desc">파일(세그먼트)당 리뷰 라운드 수. 1보다 크면 최초 리뷰 뒤 반박·심화·보정 패스가 추가로 돈다.</td>
+      </tr>
+      <tr>
+        <td class="key"><code>maxToolCalls</code></td>
+        <td class="val"><code>20</code></td>
+        <td class="desc">리뷰어 세션당 총 도구 호출 수(컨텍스트·탐색·제출 포함). 파일/라운드가 바뀌어도 리셋되지 않음. 기본값 10보다 넉넉하게 설정.</td>
+      </tr>
+      <tr>
+        <td class="key"><code>judgeRounds</code></td>
+        <td class="val"><code>2</code></td>
+        <td class="desc">판정(f-judge) 불합격 시 재리뷰를 허용하는 최대 재작업 횟수. 0이면 채점만 하고 재리뷰는 없음.</td>
+      </tr>
+      <tr>
+        <td class="key"><code>judge</code></td>
+        <td class="val"><code>true</code></td>
+        <td class="desc">판정 게이트 상시 활성화. 매 파일 리뷰가 끝나면 f-judge가 항상 채점.</td>
+      </tr>
+      <tr>
+        <td class="key"><code>fcq</code></td>
+        <td class="val"><code>true</code></td>
+        <td class="desc">계획(plan) 단계에서 fcq 정적 분석을 1회 실행해, 위반 사항을 리뷰어 증거로 주입하고 최종 리포트에도 병합.</td>
+      </tr>
+      <tr>
+        <td class="key"><code>fcqFix</code></td>
+        <td class="val"><code>true</code></td>
+        <td class="desc">fcq 위반 전체(사소한 MINOR 포함)에 대해 f-fixer 서브에이전트가 TO-BE 수정 코드를 작성하는 픽스 패스를 추가.</td>
+      </tr>
+      <tr>
+        <td class="group" rowspan="2">wikiKb</td>
+        <td class="key"><code>fico_framework.url</code></td>
+        <td class="val"><code>http://221.168.33.62:1980/fico-ai/fico-wiki</code></td>
+        <td class="desc"><code>fico_framework</code> 지식베이스로 미러링할 git wiki 저장소 주소. <code>gdc kb-sync</code> 실행 시 이 URL을 clone/pull.</td>
+      </tr>
+      <tr>
+        <td class="key"><code>fico_framework.tokenEnv</code></td>
+        <td class="val"><code>"FICO_WIKI_TOKEN"</code></td>
+        <td class="desc">위 저장소 인증 토큰을 담은 <strong>환경변수 이름</strong>. 토큰 값 자체는 설정 파일에 저장하지 않음.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="footer">
+    이 표는 위 <code>fico_ai.json</code>에 실제로 존재하는 키만 다룹니다. 그 외 설정 항목은 <code>docs/guides/f-review-usage.md</code> §3 전체 키 표 참고.
+  </div>
+</section>
+
+<section class="page" id="page-3">
+  <div class="title">f-judge 평가 기준 한눈에 보기</div>
+  <div class="subtitle">제출된 리뷰(findings)를 코드와 대조해 채점 — 코드가 아니라 "리뷰의 품질"을 평가</div>
+  <div class="formula">5개 기준 가중합 ≥ 70점 → PASS, 미만이면 REWORK (최대 2회 재리뷰)</div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="weight">40%</div>
+      <div class="bar"><span style="width:40%"></span></div>
+      <h3>Validity 타당성</h3>
+      <p>finding을 코드와 대조해 적대적으로 반박. 코드와 안 맞으면 무효.</p>
+    </div>
+
+    <div class="card">
+      <div class="weight">20%</div>
+      <div class="bar"><span style="width:20%"></span></div>
+      <h3>Coverage 커버리지</h3>
+      <p>변경의 주요 부분을 빠짐없이 봤는지. 안 본 곳은 coverageGaps로 표시.</p>
+    </div>
+
+    <div class="card">
+      <div class="weight">15%</div>
+      <div class="bar"><span style="width:15%"></span></div>
+      <h3>Evidence 근거</h3>
+      <p>"문제가 될 수 있다"가 아니라 구체적 실패 시나리오를 제시했는지.</p>
+    </div>
+
+    <div class="card">
+      <div class="weight">15%</div>
+      <div class="bar"><span style="width:15%"></span></div>
+      <h3>Severity 심각도 보정</h3>
+      <p>blocker/major가 진짜 그 정도인지, 실제 결함을 축소하지 않았는지.</p>
+    </div>
+
+    <div class="card">
+      <div class="weight">10%</div>
+      <div class="bar"><span style="width:10%"></span></div>
+      <h3>Actionability 실행 가능성</h3>
+      <p>blocker/major마다 실제 수정안(asIs → toBe)이 달려 있는지.</p>
+    </div>
+  </div>
+
+  <div class="footer">
+    finding 개수로 가점 없음(0건도 100점 가능) · 중복·과장 지적은 감점 · 위양성보다 위음성 선호
+  </div>
+</section>
+
+<div class="nav">
+  <button id="prevBtn" onclick="goTo(current-1)">← 이전</button>
+  <div class="dots">
+    <span class="dot" id="dot-1"></span>
+    <span class="dot" id="dot-2"></span>
+    <span class="dot" id="dot-3"></span>
+  </div>
+  <button id="nextBtn" onclick="goTo(current+1)">다음 →</button>
+</div>
+
+<script>
+  var total = 3;
+  var current = 1;
+  function goTo(n) {
+    if (n < 1 || n > total) return;
+    document.getElementById('page-' + current).classList.remove('active');
+    document.getElementById('dot-' + current).classList.remove('on');
+    current = n;
+    document.getElementById('page-' + current).classList.add('active');
+    document.getElementById('dot-' + current).classList.add('on');
+    document.getElementById('prevBtn').disabled = current === 1;
+    document.getElementById('nextBtn').disabled = current === total;
+  }
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowRight') goTo(current + 1);
+    if (e.key === 'ArrowLeft') goTo(current - 1);
+  });
+  goTo(1);
+</script>
+
+</body>
+</html>
