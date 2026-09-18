@@ -2,12 +2,14 @@
 /**
  * f-log 평가 러너 + 채점기.
  *
- *   bun scripts/flog-eval.ts <target-dir> [--model <provider/model>] [--case <id>] [--no-run]
+ *   bun scripts/flog-eval.ts <target-dir> [--model <provider/model>] [--case <selector>] [--no-run]
  *
  * <target-dir>/f-log-cases/<id>.yaml 마다 target-dir에서 `opencode run --command f-log`를 돌려
  * .fico/report/f-log/<id>.md 를 만들고, 리포트 절을 정답과 대조해 PASS/FAIL 표를 찍는다.
  * FAIL 또는 리포트 없음이 하나라도 있으면 exit 1. --no-run 은 기존 리포트만 채점한다.
  * exit 2: 사용법 오류(target 누락) 또는 케이스 없음(f-log-cases/ 없거나 비어 있음).
+ * <selector>는 콤마로 구분한 케이스 ID 목록이며, 각 항목에 `*` 와일드카드(접두어/구간 지정용,
+ * 예 case-0*)를 쓸 수 있다: --case 'case-04-fixed-string-length-overflow,case-1*'
  * 설계: docs/superpowers/specs/2026-09-17-f-log-eval-testbed-design.md §6
  */
 import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
@@ -65,14 +67,25 @@ export function score(c: GoldenCase, md: string) {
   };
 }
 
-async function loadCases(target: string, only?: string): Promise<GoldenCase[]> {
+// selector: 콤마로 구분한 케이스 ID 목록, 각 항목은 정확한 ID이거나 `*` 와일드카드를 쓸 수 있다.
+// undefined/빈 문자열이면(전부 매치) --case 미지정과 동일하다.
+export function matchesCaseSelector(id: string, selector?: string): boolean {
+  if (!selector || !selector.trim()) return true;
+  return selector.split(",").map((p) => p.trim()).filter(Boolean).some((pattern) => {
+    if (!pattern.includes("*")) return id === pattern;
+    const re = new RegExp(`^${pattern.split("*").map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`);
+    return re.test(id);
+  });
+}
+
+async function loadCases(target: string, selector?: string): Promise<GoldenCase[]> {
   const dir = join(target, "f-log-cases");
   if (!existsSync(dir)) return [];
   const files = readdirSync(dir).filter((f) => f.endsWith(".yaml")).sort();
   const cases: GoldenCase[] = [];
   for (const f of files) {
     const id = f.replace(/\.yaml$/, "");
-    if (only && id !== only) continue;
+    if (!matchesCaseSelector(id, selector)) continue;
     const y = Bun.YAML.parse(await Bun.file(join(dir, f)).text()) as Omit<GoldenCase, "id">;
     cases.push({ id, ...y });
   }
@@ -94,7 +107,7 @@ function runFLog(target: string, c: GoldenCase, report: string, model?: string):
 async function main(): Promise<void> {
   const args = Bun.argv.slice(2);
   const target = args.find((a, i) => !a.startsWith("--") && args[i - 1] !== "--model" && args[i - 1] !== "--case");
-  if (!target) { console.error("usage: bun scripts/flog-eval.ts <target-dir> [--model <id>] [--case <id>] [--no-run]"); process.exit(2); }
+  if (!target) { console.error("usage: bun scripts/flog-eval.ts <target-dir> [--model <id>] [--case <id>[,<id-or-glob>...]] [--no-run]"); process.exit(2); }
   const flag = (n: string) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : undefined; };
   const model = flag("--model");
   const only = flag("--case");

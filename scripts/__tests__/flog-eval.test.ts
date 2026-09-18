@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { score, splitSections, type GoldenCase } from "../flog-eval";
+import { matchesCaseSelector, score, splitSections, type GoldenCase } from "../flog-eval";
 
 const REPORT = `# f-log 리포트
 
@@ -71,5 +71,27 @@ describe("flog-eval", () => {
     const en = `## Summary\nNPE\n## Entry point → cause path\nTLABQ001Service.java tlabq001\n## Cause and evidence\nnull\n## Resolution\nadd a null check\n## Run info\n- rules: none\n`;
     const { rule, ...rest } = CASE;
     expect(score(rest, en)).toEqual({ exception: false, cause_file: true, cause_symbol: true, fix: true, fix_code: false, rule: true });
+  });
+
+  test("matchesCaseSelector: comma-separated exact ids", () => {
+    expect(matchesCaseSelector("case-05-fixed-list-size-exceeded", "case-04-fixed-string-length-overflow,case-05-fixed-list-size-exceeded")).toBe(true);
+    expect(matchesCaseSelector("case-06-fixed-list-missing-size-not-last", "case-04-fixed-string-length-overflow,case-05-fixed-list-size-exceeded")).toBe(false);
+  });
+
+  test("matchesCaseSelector: '*' glob pattern for a prefix range", () => {
+    expect(matchesCaseSelector("case-04-fixed-string-length-overflow", "case-0*")).toBe(true);
+    expect(matchesCaseSelector("case-15-ext-transactional-missing-manager", "case-0*")).toBe(false);
+  });
+
+  test("matchesCaseSelector: mixed exact ids and glob patterns, whitespace tolerant", () => {
+    const selector = " case-01-npe , case-3*, case-10-fixed-nested-vo-block-count";
+    expect(matchesCaseSelector("case-01-npe", selector)).toBe(true);
+    expect(matchesCaseSelector("case-10-fixed-nested-vo-block-count", selector)).toBe(true);
+    expect(matchesCaseSelector("case-30-encrypt-blake2b-digest-range", selector)).toBe(true);
+    expect(matchesCaseSelector("case-02-mybatis-binding", selector)).toBe(false);
+  });
+
+  test("matchesCaseSelector: no selector (undefined) matches everything", () => {
+    expect(matchesCaseSelector("case-99-anything", undefined)).toBe(true);
   });
 });

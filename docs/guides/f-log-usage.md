@@ -62,7 +62,16 @@ mode: reference                    # 선택: 본문 대신 목록만 주고 f_lo
 `scripts/flog-eval.ts`는 대상 프로젝트의 `f-log-cases/<id>.yaml`(정답)마다 f-log를 실행해 리포트를 자동 채점한다.
 
 ```bash
-bun scripts/flog-eval.ts /path/to/target [--model provider/model] [--case case-01-npe] [--no-run]
+bun scripts/flog-eval.ts /path/to/target [--model provider/model] [--case <selector>] [--no-run]
+```
+
+`--case`는 콤마로 구분한 케이스 ID 목록이며, 각 항목에 `*` 와일드카드를 쓸 수 있다(정확한 ID와 섞어도 된다):
+
+```bash
+--case case-01-npe                              # 한 케이스만
+--case case-04-fixed-string-length-overflow,case-10-fixed-nested-vo-block-count  # 여러 개 지정
+--case 'case-0*'                                 # 접두어로 구간 지정(04~09)
+--case 'case-01-npe,case-2*'                     # 정확한 ID + glob 혼용
 ```
 
 정답 YAML 필드: `log`(로그 경로), `exception`(체인 중 하나의 FQCN), `cause_files`(하나 이상 등장), `cause_symbol`(메서드/SQL id), `fix_keywords_any`(해결 방안 절에 하나 이상), `rule`(선택, 실행 정보의 적용 룰). 첫 대상 프로젝트는 `on-test-lab-online`이며 `gradle test`가 케이스 로그를 다시 만든다. 설계: `docs/superpowers/specs/2026-09-17-f-log-eval-testbed-design.md`.
