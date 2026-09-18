@@ -23,7 +23,7 @@
 | 13 | fw-request-scope-outside-thread | 요청 스레드 밖 `RequestScopeUtils` (RequestScopeUtils:106) | IllegalStateException "RequestAttributes is null" | fico_request_scope | P | ★ |
 | 14 | fw-paging-conttrkey-index | `setContTrKeyFields` 2개, values 1개 → catch가 잡지 못하는 IndexOutOfBounds (MyBatisQueryInterceptor:86/91) | IndexOutOfBoundsException | — | P | ★★★ |
 | 15 | fw-ext-transactional-missing-manager | `@ExtTransactional`인데 `extTransactionManager` 빈 없음 (ExtTransactional:18) | NoSuchBeanDefinitionException(TransactionAspectSupport 프레임) | fico_transaction | C | ★★ |
-| 16 | fw-seed-key-not-initialized | SeedKeyInitializer 전 `CryptoUtils.seedEncryptHex` (SeedKeyConfig:30) | IllegalStateException "SEED 키(dk)가 주입되지 않았습니다." | — | P | ★ |
+| 16 | fw-encrypt-utils-null-key | `EncryptUtils.setKey(null)` — null 미검증 후 `.getBytes()` (EncryptUtils:53) | NullPointerException | npe | P | ★ |
 | 17 | fw-cubeone-missing-cryptoid | `CubeOneCryptoService.encrypt(text, null)` (CubeOneCryptoService:64) | CubeOneCryptoException errorCode 20008 | fico_fixed_message | P | ★ |
 | 18 | fw-jwt-blank-secret | `JwtUtils.setKey("  ")` (JwtUtils:55) | IllegalArgumentException | — | P | ★ |
 | 19 | fw-ext-mapper-required-injection | `mapper/ext` 매퍼는 선택 빈(fico 규약: `extLogMapper != null` 체크)인데 생성자 필수 주입 → ext 설정 없는 컨텍스트에서 기동 실패 (fico_wiring.md 규약 2번) | UnsatisfiedDependencyException→NoSuchBeanDefinitionException | fico_wiring | C | ★★ |
@@ -164,7 +164,7 @@
 |---|---|
 | 난도 | ★ 52 · ★★ 36 · ★★★ 12 |
 | 환경 | 순수 Java 55 · 최소 컨텍스트/H2/로컬 소켓 45 |
-| 기대 룰 | fico_fixed_message 12 · fico_mybatis 11 · fico_wiring 13 · fico_datasource 8 · fico_exception_flow 10 · fico_transaction 5 · fico_outbound 7 · npe 3 · fico_redis 2 · fico_request_scope 1 · fico_error_code 1 · 없음 27 |
+| 기대 룰 | fico_fixed_message 12 · fico_mybatis 11 · fico_wiring 13 · fico_datasource 8 · fico_exception_flow 10 · fico_transaction 5 · fico_outbound 7 · npe 4 · fico_redis 2 · fico_request_scope 1 · fico_error_code 1 · 없음 27 |
 
 ## 케이스 설명 요약
 
