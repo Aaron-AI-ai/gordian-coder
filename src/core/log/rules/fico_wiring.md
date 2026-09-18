@@ -1,5 +1,5 @@
 ---
-exceptions: "org.springframework.beans.factory.*", "*BeanCreationException", "*UnsatisfiedDependencyException", "*NoSuchBeanDefinitionException", "*NoUniqueBeanDefinitionException", "*ApplicationContextException", "*BeanDefinitionStoreException"
+exceptions: "org.springframework.beans.factory.*", "*BeanCreationException", "*UnsatisfiedDependencyException", "*NoSuchBeanDefinitionException", "*NoUniqueBeanDefinitionException", "*ApplicationContextException", "*BeanDefinitionStoreException", "*ConflictingBeanDefinitionException", "*BeanDefinitionOverrideException"
 ---
 #### 기동 실패: 프레임워크 AutoConfiguration과 조건부 빈
 - 프레임워크가 켜는 자동 설정: `PBDaemonAutoConfiguration`, `PBWarmupAutoConfiguration`, `LogLevelStoreAutoConfiguration`. 프로퍼티(`redis.enabled`, `pb.daemon.*`, `pb.warmup.*`)로 조건부 활성화된다.

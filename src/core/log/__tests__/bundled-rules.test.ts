@@ -37,6 +37,10 @@ describe("bundled fico rules", () => {
     expect(files(["java.lang.NullPointerException"])).toContain("npe.md");
     expect(files(["java.lang.NullPointerException"])).toContain("fico_error_code.md"); // always-on
   });
+  test("fico_wiring also fires on Spring's context.annotation bean-definition-conflict exceptions", () => {
+    expect(files(["org.springframework.context.annotation.ConflictingBeanDefinitionException"])).toContain("fico_wiring.md");
+    expect(files(["org.springframework.context.annotation.BeanDefinitionOverrideException"])).toContain("fico_wiring.md");
+  });
   test("handler gate: fico_exception_flow fires on a handler errorCode even without a matching exception type (I-4)", () => {
     expect(files(["java.lang.NullPointerException"], [], { errorCode: "1001" })).toContain("fico_exception_flow.md");
     expect(files(["java.lang.NullPointerException"])).not.toContain("fico_exception_flow.md");
