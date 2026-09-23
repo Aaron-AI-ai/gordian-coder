@@ -41,6 +41,10 @@ describe("bundled fico rules", () => {
     expect(files(["org.h2.jdbc.JdbcSQLIntegrityConstraintViolationException"])).toContain("fico_datasource.md");
     expect(files(["org.h2.jdbc.JdbcSQLDataException"])).toContain("fico_datasource.md");
   });
+  test("fico_transaction also fires on Spring's NestedTransactionNotSupportedException/TransactionTimedOutException (subclasses of TransactionException, but *TransactionException is a literal suffix match)", () => {
+    expect(files(["org.springframework.transaction.NestedTransactionNotSupportedException"])).toContain("fico_transaction.md");
+    expect(files(["org.springframework.transaction.TransactionTimedOutException"])).toContain("fico_transaction.md");
+  });
   test("fico_wiring also fires on Spring's context.annotation bean-definition-conflict exceptions", () => {
     expect(files(["org.springframework.context.annotation.ConflictingBeanDefinitionException"])).toContain("fico_wiring.md");
     expect(files(["org.springframework.context.annotation.BeanDefinitionOverrideException"])).toContain("fico_wiring.md");

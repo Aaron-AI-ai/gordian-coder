@@ -1,5 +1,5 @@
 ---
-exceptions: "*TransactionException", "*UnexpectedRollbackException", "*CannotCreateTransactionException", "*TransactionSystemException", "*IllegalTransactionStateException"
+exceptions: "*TransactionException", "*UnexpectedRollbackException", "*CannotCreateTransactionException", "*TransactionSystemException", "*IllegalTransactionStateException", "*NestedTransactionNotSupportedException", "*TransactionTimedOutException"
 ---
 #### fico 트랜잭션은 `@Transactional`이 아니라 `PBTransactionAspect`가 연다
 - `@Around("bean(*Service)")`: PB 고정길이 요청(svcId 존재)이면 **Service 진입 시 트랜잭션을 열고**, svcId 5번째 글자가 `Q`/`R`(조회·보고서)이면 **정상 종료도 rollback**, `T`/`U`면 commit. 조회 서비스에서 INSERT/UPDATE가 "사라지는" 현상의 원인이다.
