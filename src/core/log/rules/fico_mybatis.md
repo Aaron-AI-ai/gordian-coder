@@ -1,5 +1,5 @@
 ---
-exceptions: "org.apache.ibatis.*", "*MyBatisSystemException", "*PersistenceException", "*DataAccessException", "*DataIntegrityViolationException", "*DuplicateKeyException", "*TooManyResultsException"
+exceptions: "org.apache.ibatis.*", "*MyBatisSystemException", "*PersistenceException", "*DataAccessException", "*DataIntegrityViolationException", "*DuplicateKeyException", "*TooManyResultsException", "*OptimisticLockingFailureException"
 ---
 #### MyBatis 오류는 XML·인터페이스·인터셉터 셋 중 하나
 - `MyBatisPagingInterceptor`가 `StatementHandler.prepare`에서 **SQL을 감싼다**(`PagingSqlHelper`: ORACLE11 `ROWNUM`, ORACLE `OFFSET … FETCH`, POSTGRESQL `LIMIT … OFFSET`). 페이징 조회의 문법 오류는 원본 XML이 아니라 래핑 결과다 — 원본에 `ORDER BY`가 없거나 서브쿼리 별칭이 없으면 래핑 후에 깨진다.

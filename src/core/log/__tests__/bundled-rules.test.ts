@@ -45,6 +45,13 @@ describe("bundled fico rules", () => {
     expect(files(["org.springframework.transaction.NestedTransactionNotSupportedException"])).toContain("fico_transaction.md");
     expect(files(["org.springframework.transaction.TransactionTimedOutException"])).toContain("fico_transaction.md");
   });
+  test("fico_mybatis also fires on Spring's OptimisticLockingFailureException (data-access family, not caught by the existing *DataAccessException suffix match)", () => {
+    expect(files(["org.springframework.dao.OptimisticLockingFailureException"])).toContain("fico_mybatis.md");
+  });
+  test("fico_datasource also fires on H2's own deadlock/timeout JdbcSQL*Exception subclasses", () => {
+    expect(files(["org.h2.jdbc.JdbcSQLTransactionRollbackException"])).toContain("fico_datasource.md");
+    expect(files(["org.h2.jdbc.JdbcSQLTimeoutException"])).toContain("fico_datasource.md");
+  });
   test("fico_wiring also fires on Spring's context.annotation bean-definition-conflict exceptions", () => {
     expect(files(["org.springframework.context.annotation.ConflictingBeanDefinitionException"])).toContain("fico_wiring.md");
     expect(files(["org.springframework.context.annotation.BeanDefinitionOverrideException"])).toContain("fico_wiring.md");
