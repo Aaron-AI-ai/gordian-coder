@@ -37,6 +37,10 @@ describe("bundled fico rules", () => {
     expect(files(["java.lang.NullPointerException"])).toContain("npe.md");
     expect(files(["java.lang.NullPointerException"])).toContain("fico_error_code.md"); // always-on
   });
+  test("fico_datasource also fires on H2's own JdbcSQL*Exception subclasses (constraint/data, not just syntax)", () => {
+    expect(files(["org.h2.jdbc.JdbcSQLIntegrityConstraintViolationException"])).toContain("fico_datasource.md");
+    expect(files(["org.h2.jdbc.JdbcSQLDataException"])).toContain("fico_datasource.md");
+  });
   test("fico_wiring also fires on Spring's context.annotation bean-definition-conflict exceptions", () => {
     expect(files(["org.springframework.context.annotation.ConflictingBeanDefinitionException"])).toContain("fico_wiring.md");
     expect(files(["org.springframework.context.annotation.BeanDefinitionOverrideException"])).toContain("fico_wiring.md");

@@ -1,5 +1,5 @@
 ---
-exceptions: "*BadSqlGrammarException", "*CannotGetJdbcConnectionException", "*DataSourceLookupFailureException", "*SQLSyntaxErrorException", "*PSQLException", "*SQLException"
+exceptions: "*BadSqlGrammarException", "*CannotGetJdbcConnectionException", "*DataSourceLookupFailureException", "*SQLSyntaxErrorException", "*PSQLException", "*SQLException", "*JdbcSQLIntegrityConstraintViolationException", "*JdbcSQLDataException", "*SQLTransientConnectionException"
 ---
 #### 데이터소스가 바뀌었을 수 있다
 - `DynamicDataSourceAspect`(`@Before` `kr.co..*Controller.*` / `*Module.*`, `args(commonRequest,..)`): `commonHeader.even` `'1'`→`PRIMARY`, `'2'`→`SECONDARY`, 그 외·null→`PRIMARY`. **첫 인자가 `CommonRequest`가 아니면(예: `PBRequest`) 스위칭이 일어나지 않는다.**
