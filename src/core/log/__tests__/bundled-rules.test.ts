@@ -52,6 +52,12 @@ describe("bundled fico rules", () => {
     expect(files(["org.h2.jdbc.JdbcSQLTransactionRollbackException"])).toContain("fico_datasource.md");
     expect(files(["org.h2.jdbc.JdbcSQLTimeoutException"])).toContain("fico_datasource.md");
   });
+  test("package-prefix patterns preempt future leaf-name gaps: transaction/dao/h2-jdbc namespaces", () => {
+    // None of these three leaf names are individually listed — only reachable via a package-prefix glob.
+    expect(files(["org.springframework.transaction.InvalidTimeoutException"])).toContain("fico_transaction.md");
+    expect(files(["org.springframework.dao.PessimisticLockingFailureException"])).toContain("fico_mybatis.md");
+    expect(files(["org.h2.jdbc.JdbcSQLNonTransientException"])).toContain("fico_datasource.md");
+  });
   test("fico_wiring also fires on Spring's context.annotation bean-definition-conflict exceptions", () => {
     expect(files(["org.springframework.context.annotation.ConflictingBeanDefinitionException"])).toContain("fico_wiring.md");
     expect(files(["org.springframework.context.annotation.BeanDefinitionOverrideException"])).toContain("fico_wiring.md");
