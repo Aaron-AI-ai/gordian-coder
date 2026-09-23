@@ -7,17 +7,19 @@
 
 범례 — 환경: P=순수 Java, C=최소 컨텍스트/H2/로컬 소켓. 난도: ★ 스택 첫 줄로 충분, ★★ 체인·프레임 추적 필요, ★★★ 로그에 없는 코드까지 읽어야 함. 룰 `—`는 매칭되는 번들 룰 없음(정답 YAML에서 `rule` 생략).
 
+골든 YAML의 `exception`은 항상 로그에 실제로 먼저(맨 위) 찍히는 예외를 적는다 — 프레임워크가 감싼 경우 바깥쪽 타입이다(예: MyBatis는 대부분 `PersistenceException`으로 감싼다, 사례: 02·35·38·39; Spring 생성자 주입 실패는 `UnsatisfiedDependencyException`으로 감싼다, 사례: 15·19·49·50). 안쪽 원인은 카탈로그 설명 칸에 참고로만 남긴다. (2026-09-23 실측 반영, 04~10·34는 `rule` 생략 대신 실제 매칭되는 룰을 적는다: `CommonException`은 `fico_exception_flow`, `IllegalStateException`은 `fico_request_scope`.)
+
 ## A. 프레임워크 코드 위반 (31)
 
 | # | ID | 오사용 | 루트 예외 | 룰 | 환경 | 난도 |
 |---|---|---|---|---|---|---|
-| 04 | fw-fixed-string-length-overflow | `@FixedString(length=5)`에 14자 직렬화 (FormatterUtils:1018/1064) | CommonException "invalid fixed value(length error)" | fico_fixed_message | P | ★ |
-| 05 | fw-fixed-list-size-exceeded | `@FixedList(size=2)`에 3건 (FormatterUtils:255) | CommonException "invalid data(list field)" | fico_fixed_message | P | ★ |
-| 06 | fw-fixed-list-missing-size-not-last | size 없는 `@FixedList`가 마지막 필드 아님 (FormatterUtils:338) | CommonException | fico_fixed_message | P | ★★ |
-| 07 | fw-fixed-parse-no-noarg-ctor | 기본 생성자 없는 VO로 전문 파싱 (FormatterUtils:862) | CommonException(msg null, cause InstantiationException) | fico_fixed_message | P | ★★ |
-| 08 | fw-fixed-parse-oversize-input | 전문이 VO 길이 초과 (FormatterUtils:726) | CommonException "invalid fixed data(byte length)…" | fico_fixed_message | P | ★ |
-| 09 | fw-fixed-long-invalid-sign-byte | `@FixedLong(signed)` 부호 바이트 'A' (FormatterUtils:828) | CommonException "invalid signed byte" | fico_fixed_message | P | ★ |
-| 10 | fw-fixed-nested-vo-block-count | 중첩 `@FixedVo` VO에 기본 생성자 없음 → 블록 길이 0 캐시 → 뒤늦게 무관한 파싱 오류 (PBFixedDataConverter:721) | CommonException(원인과 무관한 메시지) | fico_fixed_message | C | ★★★ |
+| 04 | fw-fixed-string-length-overflow | `@FixedString(length=5)`에 14자 직렬화 (FormatterUtils:1018/1064) | CommonException "invalid fixed value(length error)" | fico_exception_flow(범용 CommonException, fixed_message는 이 타입 미매칭) | P | ★ |
+| 05 | fw-fixed-list-size-exceeded | `@FixedList(size=2)`에 3건 (FormatterUtils:255) | CommonException "invalid data(list field)" | fico_exception_flow | P | ★ |
+| 06 | fw-fixed-list-missing-size-not-last | size 없는 `@FixedList`가 마지막 필드 아님 (FormatterUtils:338) | CommonException | fico_exception_flow | P | ★★ |
+| 07 | fw-fixed-parse-no-noarg-ctor | 기본 생성자 없는 VO로 전문 파싱 (FormatterUtils:862) | CommonException(msg null, cause InstantiationException) | fico_exception_flow | P | ★★ |
+| 08 | fw-fixed-parse-oversize-input | 전문이 VO 길이 초과 (FormatterUtils:726) | CommonException "invalid fixed data(byte length)…" | fico_exception_flow | P | ★ |
+| 09 | fw-fixed-long-invalid-sign-byte | `@FixedLong(signed)` 부호 바이트 'A' (FormatterUtils:828) | CommonException "invalid signed byte" | fico_exception_flow | P | ★ |
+| 10 | fw-fixed-nested-vo-block-count | 중첩 `@FixedVo` VO에 기본 생성자 없음 → 블록 길이 0 캐시 → 뒤늦게 무관한 파싱 오류 (PBFixedDataConverter:721) | CommonException(원인과 무관한 메시지) | fico_exception_flow | C | ★★★ |
 | 11 | fw-pbresponse-null-header | `PBResponse.success(null, data)` (PBResponse:67) | NullPointerException(getContYn) | fico_fixed_message | P | ★ |
 | 12 | fw-controller-aspect-missing-header | commonHeader null 요청으로 `ControllerAspect.onBeforeHandler` (ControllerAspect:117) | CommonException FWKE0002 | fico_error_code | P | ★★ |
 | 13 | fw-request-scope-outside-thread | 요청 스레드 밖 `RequestScopeUtils` (RequestScopeUtils:106) | IllegalStateException "RequestAttributes is null" | fico_request_scope | P | ★ |
@@ -41,24 +43,24 @@
 | 31 | fw-encrypt-aes-bad-base64 | `decryptAES("not-base64!!")` — catch가 checked만 잡아 래핑 안 됨 (EncryptUtils:218) | IllegalArgumentException(Base64) | — | P | ★★ |
 | 32 | fw-compression-corrupt-lzo | `decompressLzo("hello".getBytes(),100)` (CompressionUtils:99) | io.airlift.compress.MalformedInputException | fico_fixed_message | P | ★ |
 | 33 | fw-retry-template-zero-attempts | `retry-template.max-count=0` (RetryableRestTemplate:58) | IllegalArgumentException "Number of attempts should be positive" | — | C | ★★ |
-| 34 | fw-crypto-field-processor-propagation | `@EncryptData("bad-id")` 필드, CryptoService가 throw (CryptoFieldProcessor:178) | 구현체 RuntimeException 그대로 | — | P | ★★ |
+| 34 | fw-crypto-field-processor-propagation | `@EncryptData("bad-id")` 필드, CryptoService가 throw (CryptoFieldProcessor:178) | IllegalStateException(구현체가 실제로 던진 타입) | fico_request_scope(범용 IllegalStateException 패턴, 내용상 무관) | P | ★★ |
 
 ## B. MyBatis · SQL · DataSource (15)
 
 | # | ID | 유발 | 루트 예외 | 룰 | 환경 | 난도 |
 |---|---|---|---|---|---|---|
 | 02 | mybatis-binding (기존) | `#{acntNo}` vs 필드 accountNo | ReflectionException | fico_mybatis | C | ★★ |
-| 35 | mybatis-result-mapping | VARCHAR 컬럼 → Integer 필드 | ResultMapException | fico_mybatis | C | ★ |
+| 35 | mybatis-result-mapping | VARCHAR 컬럼 → Integer 필드 | PersistenceException(outer, cause ResultMapException) | fico_mybatis | C | ★ |
 | 36 | mybatis-too-many-results | selectOne이 2행 | TooManyResultsException | fico_mybatis | C | ★ |
 | 37 | mybatis-unknown-statement | 매퍼 메서드에 XML statement 없음 | BindingException "Invalid bound statement" | fico_mybatis | C | ★ |
-| 38 | mybatis-no-constructor | 불변 결과 클래스에 맞는 생성자 없음 | ExecutorException "No constructor found" | fico_mybatis | C | ★★ |
-| 39 | mybatis-foreach-empty-list | `IN <foreach>`에 빈 리스트 → `IN ()` | JdbcSQLSyntaxErrorException | fico_datasource | C | ★★ |
+| 38 | mybatis-no-constructor | 불변 결과 클래스에 맞는 생성자 없음 | PersistenceException(outer, cause ExecutorException "No constructor found") | fico_mybatis | C | ★★ |
+| 39 | mybatis-foreach-empty-list | `IN <foreach>`에 빈 리스트 → `IN ()` | PersistenceException(outer, cause JdbcSQLSyntaxErrorException) | fico_mybatis | C | ★★ |
 | 40 | mybatis-xml-parse-error | 닫히지 않은 태그 | BuilderException | fico_mybatis | C | ★ |
 | 41 | sql-syntax | `SELEC` 오타 | JdbcSQLSyntaxErrorException | fico_datasource | C | ★ |
 | 42 | sql-unknown-column | 없는 컬럼 참조 | JdbcSQLSyntaxErrorException "Column not found" | fico_datasource | C | ★ |
-| 43 | sql-duplicate-key | 같은 PK INSERT 2회 | JdbcSQLIntegrityConstraintViolationException | fico_mybatis | C | ★ |
-| 44 | sql-not-null-violation | NOT NULL 컬럼에 null | JdbcSQLIntegrityConstraintViolationException | fico_mybatis | C | ★ |
-| 45 | sql-data-too-long | VARCHAR(20)에 30자 | JdbcSQLDataException "Value too long" | fico_mybatis | C | ★ |
+| 43 | sql-duplicate-key | 같은 PK INSERT 2회 | JdbcSQLIntegrityConstraintViolationException | fico_datasource | C | ★ |
+| 44 | sql-not-null-violation | NOT NULL 컬럼에 null | JdbcSQLIntegrityConstraintViolationException | fico_datasource | C | ★ |
+| 45 | sql-data-too-long | VARCHAR(20)에 30자 | JdbcSQLDataException "Value too long" | fico_datasource | C | ★ |
 | 46 | datasource-bad-url | HikariCP 잘못된 URL + JdbcTemplate | CannotGetJdbcConnectionException | fico_datasource | C | ★ |
 | 47 | datasource-pool-exhausted | maxPool 1, timeout 500ms, 커넥션 점유 후 재요청 | SQLTransientConnectionException | fico_datasource | C | ★★ |
 | 48 | jdbc-empty-result | `queryForObject` 0행 | EmptyResultDataAccessException | fico_mybatis | C | ★ |
@@ -67,9 +69,9 @@
 
 | # | ID | 유발 | 루트 예외 | 룰 | 환경 | 난도 |
 |---|---|---|---|---|---|---|
-| 03 | bean-conflict (기존) | 동명 빈 2개 | ConflictingBeanDefinitionException | fico_wiring(현재 미매칭) | C | ★ |
+| 03 | bean-conflict (기존) | 동명 빈 2개 | ConflictingBeanDefinitionException | fico_wiring | C | ★ |
 | 49 | wiring-no-such-bean | 스캔 밖 @Repository 생성자 주입 | UnsatisfiedDependency→NoSuchBeanDefinition | fico_wiring | C | ★ |
-| 50 | wiring-no-unique | 인터페이스 구현체 2개 타입 주입 | NoUniqueBeanDefinitionException | fico_wiring | C | ★ |
+| 50 | wiring-no-unique | 인터페이스 구현체 2개 타입 주입 | UnsatisfiedDependencyException(outer, cause NoUniqueBeanDefinitionException) | fico_wiring | C | ★ |
 | 51 | wiring-circular | A→B→A 생성자 순환 | BeanCurrentlyInCreationException | fico_wiring | C | ★★ |
 | 52 | wiring-placeholder | `@Value("${tlab.missing}")` | BeanCreationException→IllegalArgument "Could not resolve placeholder" | fico_wiring | C | ★ |
 | 53 | wiring-init-method-failed | `@PostConstruct`가 throw | BeanCreationException "Invocation of init method failed" | fico_wiring | C | ★★ |
