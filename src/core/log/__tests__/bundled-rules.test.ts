@@ -58,6 +58,9 @@ describe("bundled fico rules", () => {
     expect(files(["org.springframework.dao.PessimisticLockingFailureException"])).toContain("fico_mybatis.md");
     expect(files(["org.h2.jdbc.JdbcSQLNonTransientException"])).toContain("fico_datasource.md");
   });
+  test("fico_fixed_message also fires on CharacterCodingException's other concrete subclass, UnmappableCharacterException (not just the sibling MalformedInputException)", () => {
+    expect(files(["java.nio.charset.UnmappableCharacterException"])).toContain("fico_fixed_message.md");
+  });
   test("fico_outbound also fires on Spring's nested-class Http*ErrorException status subclasses (e.g. HttpClientErrorException$NotFound), not just the bare outer type", () => {
     expect(files(["org.springframework.web.client.HttpClientErrorException$NotFound"])).toContain("fico_outbound.md");
     expect(files(["org.springframework.web.client.HttpServerErrorException$InternalServerError"])).toContain("fico_outbound.md");

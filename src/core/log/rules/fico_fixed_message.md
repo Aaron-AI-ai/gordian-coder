@@ -1,5 +1,5 @@
 ---
-exceptions: "*HttpMessageNotReadableException", "*HttpMessageNotWritableException", "*CharacterCodingException", "*MalformedInputException", "*CubeOneCryptoException"
+exceptions: "*HttpMessageNotReadableException", "*HttpMessageNotWritableException", "*CharacterCodingException", "*MalformedInputException", "*UnmappableCharacterException", "*CubeOneCryptoException"
 ---
 #### 고정길이 전문 파싱 (`PBFixedDataConverter`, 에러코드 9604)
 - charset: Content-Type의 charset 최우선, 없으면 converter 설정값. 바이트 길이 기준이라 한글 길이 계산이 틀리면 뒤 필드가 전부 밀린다.
