@@ -1,5 +1,5 @@
 ---
-exceptions: "*RestClientException", "*ResourceAccessException", "*HttpClientErrorException", "*HttpServerErrorException", "*WebClientResponseException", "*WebClientRequestException", "*CallNotPermittedException", "*SocketTimeoutException", "*ConnectException", "*UnknownHostException"
+exceptions: "*RestClientException", "*ResourceAccessException", "*HttpClientErrorException*", "*HttpServerErrorException*", "*WebClientResponseException*", "*WebClientRequestException", "*CallNotPermittedException", "*SocketTimeoutException", "*ConnectException", "*UnknownHostException"
 ---
 #### 외부 호출: 서킷브레이커·재시도·타임아웃
 - `RestCallModule`은 resilience4j `CircuitBreaker` + `RetryableRestTemplate`(spring-retry)로 감싼다. `CallNotPermittedException`은 **서킷이 열린 상태**라는 뜻 — 이 로그의 원인은 그 이전에 누적된 실패다. 이 로그만으로 코드 원인을 단정하지 마라.

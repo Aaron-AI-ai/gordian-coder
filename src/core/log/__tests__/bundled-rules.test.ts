@@ -58,6 +58,10 @@ describe("bundled fico rules", () => {
     expect(files(["org.springframework.dao.PessimisticLockingFailureException"])).toContain("fico_mybatis.md");
     expect(files(["org.h2.jdbc.JdbcSQLNonTransientException"])).toContain("fico_datasource.md");
   });
+  test("fico_outbound also fires on Spring's nested-class Http*ErrorException status subclasses (e.g. HttpClientErrorException$NotFound), not just the bare outer type", () => {
+    expect(files(["org.springframework.web.client.HttpClientErrorException$NotFound"])).toContain("fico_outbound.md");
+    expect(files(["org.springframework.web.client.HttpServerErrorException$InternalServerError"])).toContain("fico_outbound.md");
+  });
   test("fico_wiring also fires on Spring's context.annotation bean-definition-conflict exceptions", () => {
     expect(files(["org.springframework.context.annotation.ConflictingBeanDefinitionException"])).toContain("fico_wiring.md");
     expect(files(["org.springframework.context.annotation.BeanDefinitionOverrideException"])).toContain("fico_wiring.md");
