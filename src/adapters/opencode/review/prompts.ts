@@ -62,7 +62,7 @@ export const FIXER_AGENT_STEPS = 6;
 /** Legacy OpenCode `tools` compatibility. `permission` above is the security
  * boundary; the wildcard and explicit built-in denies keep older releases as
  * confined as their legacy matching supports. */
-const BUILTINS_OFF: Record<string, boolean> = {
+export const BUILTINS_OFF: Record<string, boolean> = {
   "*": false,
   bash: false,
   read: false,

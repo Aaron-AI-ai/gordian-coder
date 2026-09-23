@@ -167,7 +167,7 @@ function parseRule(raw: string): { globs: string[]; content: string; reference: 
  * SOURCES defaults via buildRubric — bundling it again injected the same
  * bullets twice into every prompt (and the two copies drifted).
  * ponytail: static imports — adding a bundled rule means adding a line here. */
-const BUNDLED_RULES: ExtraRule[] = [
+export const BUNDLED_RULES: ExtraRule[] = [
   { file: "java.md", ...parseRule(JAVA_RULE) },
   { file: "mapper_dao_xml.md", ...parseRule(MAPPER_RULE) },
 ];
@@ -198,7 +198,7 @@ const KB_INJECTION_NOTICE = [
  * `frameworkKb` (prefix→directory map) then replaces the rule's table — both
  * differ per project. Missing/unreadable file → fall back to the bundled md.
  * The injection notice is appended last, so it survives either substitution. */
-function frameworkKbRule(cwd: string): ExtraRule {
+export function frameworkKbRule(cwd: string): ExtraRule {
   const cfg = loadConfig(cwd);
   let base = { file: "framework_kb.md", ...parseRule(FRAMEWORK_KB_RULE) };
   if (cfg.frameworkKbFile) {

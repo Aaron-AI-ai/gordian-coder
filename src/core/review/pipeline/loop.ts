@@ -24,6 +24,8 @@ import { type FileReviewResult } from "./artifact";
 import { getState, clearState, currentFile, isDone, rotateSubmitToken, type ReviewState } from "./state";
 import { fileRead, renderFileContent, sanitizeFindingLines, MAX_ITER } from "../tools/read";
 import { languageName } from "./prompt";
+import { guardExploration as guardScoped, MAX_DUP_CALLS, MAX_MISS_STREAK } from "../../guard";
+export { MAX_DUP_CALLS, MAX_MISS_STREAK };
 
 import { targetPath } from "./segment";
 
@@ -42,75 +44,10 @@ export const MAX_RESUMES = 3;
  * looping on the same broken payload must not stall the review forever. */
 export const MAX_FAILED_SUBMITS = 5;
 
-/** Max times the SAME tool call (identical args) is answered per target/round;
- * past this, the output is withheld — a looping model gets no new content. */
-export const MAX_DUP_CALLS = 2;
-
-/** Max CONSECUTIVE not-found exploration results; past this, output is
- * withheld. Catches the "hunt an external symbol with endless pattern
- * variations" loop that exact-duplicate detection cannot see — each attempt
- * differs, but they all miss. Any hit resets the streak. */
-export const MAX_MISS_STREAK = 4;
-
-/** Not-found openings of the reader ops (see reader.ts / evidence.ts). */
-const MISS_PREFIXES = [
-  "No matches for:", // code_search
-  "// No file matches", // file_find
-  "Error: file not found", // file_read
-  "Error: diff not found", // file_read_diff
-  "No related code candidates", // related_code
-  "No git history found", // git_history
-];
-
-/** Count an exploration call (logged per file/tool for the final check) and
- * guard against degenerate loops: past MAX_ITER the output is withheld entirely
- * (returning content past the budget keeps a runaway loop fed), and an exact
- * duplicate call (same tool + args, tracked when the adapter passes `args`) is
- * answered at most MAX_DUP_CALLS times. The op itself still runs — it's local
- * and cheap; the defense is starving the loop of fresh tokens. */
-export function guardExploration(
-  st: ReviewState,
-  tool: string,
-  out: string,
-  args?: unknown
-): string {
-  if (st.explorationSealed) {
-    return (
-      `⚠️ Exploration is sealed for this reviewer session (${st.toolCalls}/${st.maxToolCalls} ` +
-      `tool calls used). Output withheld. Call f_review_submit now.`
-    );
-  }
-  const file = currentFile(st);
-  if (file) {
-    const log = (st.callLog[file] ??= {});
-    log[tool] = (log[tool] ?? 0) + 1;
-  }
-  st.iterations++;
-  const budget = st.maxIter ?? MAX_ITER;
-  if (st.iterations > budget) {
-    return `⚠️ Exploration limit reached (${budget} calls this round) — output withheld. Review with what you have and call f_review_submit now. Do not fetch more context through any other tool.`;
-  }
-  if (args !== undefined) {
-    const key = JSON.stringify([file ?? "", tool, Bun.hash(JSON.stringify(args)).toString()]);
-    const n = (st.dupCalls[key] = (st.dupCalls[key] ?? 0) + 1);
-    if (n > MAX_DUP_CALLS) {
-      return (
-        `⚠️ Duplicate call — this exact ${tool} call already ran ${MAX_DUP_CALLS} times and its result does not change; output withheld. ` +
-        `Explore something different or call f_review_submit for ${file ?? "the current file"} — do not re-fetch this content through any other tool.`
-      );
-    }
-  }
-  const miss = MISS_PREFIXES.some((p) => out.startsWith(p));
-  st.missStreak = miss ? st.missStreak + 1 : 0;
-  if (miss && st.missStreak >= MAX_MISS_STREAK) {
-    return (
-      `⚠️ ${st.missStreak} consecutive lookups found NOTHING — output withheld. What you are ` +
-      `hunting was not resolved by the allowed targeted lookups; it may be external, generated, ` +
-      `or a local alias the resolver cannot map. STOP retrying path/name variations with any tool. ` +
-      `Review with the evidence you already have and call f_review_submit.`
-    );
-  }
-  return out;
+/** Review wrapper over the shared guard: the scope is the file under review
+ * and the productive next move is always f_review_submit. */
+export function guardExploration(st: ReviewState, tool: string, out: string, args?: unknown): string {
+  return guardScoped(st, currentFile(st), tool, out, args, "f_review_submit");
 }
 
 /** Content of a review RULE file listed in the prompt (reference mode), or

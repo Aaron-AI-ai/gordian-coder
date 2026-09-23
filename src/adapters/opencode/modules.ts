@@ -9,6 +9,7 @@
 import type { PluginInput, Hooks } from "@opencode-ai/plugin";
 import type { tool } from "@opencode-ai/plugin";
 import { createReviewModule } from "./review";
+import { createLogModule } from "./log";
 
 export interface OpenCodeModule {
   tools: Record<string, ReturnType<typeof tool>>;
@@ -21,6 +22,7 @@ export interface OpenCodeModule {
 /** Registered module factories — the single place to add a new module. */
 const factories: Array<(input: PluginInput) => OpenCodeModule> = [
   createReviewModule,
+  createLogModule,
 ];
 
 export function createModules(input: PluginInput): OpenCodeModule[] {

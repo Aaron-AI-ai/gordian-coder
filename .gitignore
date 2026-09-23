@@ -16,6 +16,7 @@ Thumbs.db
 
 # Logs
 *.log
+!src/core/log/__tests__/fixtures/*.log
 npm-debug.log*
 
 # Lock files (use bun.lock instead)
