@@ -396,7 +396,13 @@ async function writeRunReview(
   sessionId: string,
   partial: boolean
 ): Promise<string> {
-  const file = targetPath(st.targets[0]); // single file per run session (segments share it)
+  // One unit per run session: a file, or one segment of it. The artifact is
+  // keyed by the unit (so sibling segments never overwrite each other) and
+  // reports findings under the real path. A legacy run's in-session split
+  // queues several segments of one file in ONE session; its unit is the file,
+  // which is what that run's coverage expects.
+  const file = targetPath(st.targets[0]);
+  const target = st.targets.length === 1 ? st.targets[0] : file;
   // Merge segment-keyed findings back under the real file path. Segments
   // overlap, so the same issue arrives from two of them — collapse before the
   // artifact is written, or every downstream reader (aggregate report, fcq
@@ -413,6 +419,7 @@ async function writeRunReview(
   ];
   const result: FileReviewResult = {
     file,
+    target,
     assessed,
     findings: merged,
     explorationCalls,
@@ -440,11 +447,11 @@ async function writeRunReview(
   clearState(sessionId);
   const head = partial
     ? st.toolBudgetExhausted
-      ? `⚠️ ${file} review stopped at maxToolCalls=${st.maxToolCalls}; partial review saved.`
-      : `⚠️ ${file} partially reviewed (${Object.keys(st.findings).length}/${st.targets.length} segment(s)); partial review saved.`
+      ? `⚠️ ${target} review stopped at maxToolCalls=${st.maxToolCalls}; partial review saved.`
+      : `⚠️ ${target} partially reviewed (${Object.keys(st.findings).length}/${st.targets.length} segment(s)); partial review saved.`
     : forced
-      ? `⚠️ ${file} force-advanced after bounded recovery (${merged.length} issue(s) salvaged)${forced}; incomplete review saved with a forced marker.`
-      : `✅ ${file} reviewed (${merged.length} issue(s)); review saved.`;
+      ? `⚠️ ${target} force-advanced after bounded recovery (${merged.length} issue(s) salvaged)${forced}; incomplete review saved with a forced marker.`
+      : `✅ ${target} reviewed (${merged.length} issue(s)); review saved.`;
   return `${head} ${path}\nThis subagent's task is COMPLETE. Do not review any other file.`;
 }
 

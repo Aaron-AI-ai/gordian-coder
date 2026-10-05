@@ -584,7 +584,50 @@ describe("run-mode session (startReview/submitReview with runId)", () => {
     expect(existsSync(join(d, "fcq/report/f-review"))).toBe(false);
   });
 
-  it("splits a large whole-mode target into segments within ONE session", async () => {
+  it("joins one segment unit of a split file and writes a unit-keyed artifact", async () => {
+    const d = gitRepo();
+    const big = Array.from({ length: 1200 }, (_, i) => `// l${i}`).join("\n") + "\n";
+    writeFileSync(join(d, "big.ts"), big);
+    const msg = await planReview({ files: ["big.ts"] }, d);
+    const runId = /Run created: (\S+)/.exec(msg)![1];
+
+    const joined = await startReview({ runId, files: ["big.ts#441-940"] }, d, "rs");
+    expect(joined).toContain(`Run ${runId}: reviewing big.ts#441-940 (lines 441-940 of big.ts`);
+    expect(getState("rs")?.targets).toEqual(["big.ts#441-940"]);
+
+    guardExploration(getState("rs")!, "file_read", "");
+    const done = await submitReview(fullSubmit("big.ts", { line: 450 }), "rs");
+    expect(done).toContain("✅ big.ts#441-940 reviewed");
+    const results = readRunResults(runId, d);
+    expect(results).toHaveLength(1);
+    expect(results[0].file).toBe("big.ts");
+    expect(results[0].target).toBe("big.ts#441-940");
+    expect(
+      existsSync(join(runDir(runId, d), "reviews", `${reviewSlug("big.ts#441-940")}.json`))
+    ).toBe(true);
+  });
+
+  it("bare path of a split file returns the unit list instead of a session", async () => {
+    const d = gitRepo();
+    writeFileSync(
+      join(d, "big.ts"),
+      Array.from({ length: 1200 }, (_, i) => `// l${i}`).join("\n") + "\n"
+    );
+    const msg = await planReview({ files: ["big.ts"] }, d);
+    const runId = /Run created: (\S+)/.exec(msg)![1];
+
+    const out = await startReview({ runId, files: ["big.ts"] }, d, "rs");
+    expect(out).toContain("big.ts is reviewed in 3 units");
+    expect(out).toContain("big.ts#1-500, big.ts#441-940, big.ts#881-1200");
+    expect(out).toContain("exactly ONE of these ids");
+    expect(getState("rs")).toBeUndefined();
+    // A unit that is not in the plan is still refused.
+    expect(await startReview({ runId, files: ["big.ts#1-999"] }, d, "rs")).toContain(
+      "not a unit of run"
+    );
+  });
+
+  it("legacy run without units still splits a large whole-mode target within ONE session", async () => {
     const d = gitRepo();
     const big = Array.from({ length: 1200 }, (_, i) => `// l${i}`).join("\n") + "\n";
     writeFileSync(join(d, "big.ts"), big);
@@ -609,7 +652,7 @@ describe("run-mode session (startReview/submitReview with runId)", () => {
     expect(results[0].findings.length).toBe(segments); // one per segment
   });
 
-  it("collapses one issue found by every overlapping segment into a single row", async () => {
+  it("legacy run: collapses one issue found by every overlapping segment into a single row", async () => {
     const d = gitRepo();
     const big = Array.from({ length: 1400 }, (_, i) => `// l${i}`).join("\n") + "\n";
     writeFileSync(join(d, "big.ts"), big);
