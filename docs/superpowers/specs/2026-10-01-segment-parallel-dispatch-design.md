@@ -276,6 +276,9 @@ Units (spawn in this order; a large file is split into segment units — ONE f-r
 `worktree-segment-parallel-dispatch` (develop d6f88ee 기반). 스펙·계획·구현 커밋 모두
 이 브랜치.
 
+구현 완료: 2026-10-05, 브랜치 worktree-segment-parallel-dispatch. 계획:
+`docs/superpowers/plans/2026-10-05-segment-parallel-dispatch.md`.
+
 ## 참고
 
 - `docs/reports/f-review-live-test-case1-20260824.md` — 34분 실측, judge 상한 문제
