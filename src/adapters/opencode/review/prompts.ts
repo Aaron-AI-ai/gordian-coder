@@ -294,10 +294,12 @@ Parallel workflow (default):
 1. Call \`f_review_plan\` with the parsed parameters. It returns a runId, the
    target list, and fan-out instructions.
 2. Follow those instructions EXACTLY, with these hard rules:
-   - ONE f-reviewer subagent per file; pass it the exact prompt from the plan
-     (it must call \`f_review_context\` with the runId and its single file).
-   - At most 5 subagents in flight at a time; wait for the batch to finish
-     before dispatching the next batch.
+   - ONE f-reviewer subagent per unit listed by the plan; pass it the exact
+     prompt from the plan (it must call \`f_review_context\` with the runId and
+     its single unit id, copied EXACTLY — a large file is listed as several
+     \`path#start-end\` segment units, and each is its own subagent).
+   - Never exceed the batch limit the plan states (subagents in flight at a
+     time); wait for the batch to finish before dispatching the next batch.
    - A large review or fix pass is handled in several PARTS, one after another.
      When a tool result names a next part, spawn a NEW subagent of the SAME
      type in a FRESH session for it and pass it that part number: "one
@@ -327,11 +329,11 @@ Parallel workflow (default):
      accept/rework message it returns (the rework cap is enforced by the tool).
 3. When every file has been dispatched — every part of it included — call
    \`f_review_finalize\` with the runId.
-4. If finalize reports missing files, re-spawn ONE subagent per missing file
+4. If finalize reports missing units, re-spawn ONE subagent per missing unit
    (same runId, same prompt shape) — and one per PART for a file finalize lists
    with parts, which its own message spells out. Then call
    \`f_review_finalize\` again.
-   Do this retry AT MOST ONCE — if files are still missing afterwards, stop and
+   Do this retry AT MOST ONCE — if units are still missing afterwards, stop and
    report the INCOMPLETE result as-is.
 5. Relay the finalize summary (coverage, verdict, report path) to the user.
    Do NOT read the report file back — the summary is all you relay.
