@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { finalizeRun, planReview } from "../run";
 import { MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, UNFINISHED_RUN_TTL_MS, RUN_BATCH_SIZE, createRun, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, writeFileReview } from "../run-store";
-import { loadRun, type RunMeta } from "../artifact";
+import { loadRun, readFileReviewResult, resultUnit, runUnits, type RunMeta } from "../artifact";
 import { RUNS_DIR, reviewSlug, runDir, type FileReviewResult } from "../artifact";
 import { submitReview, guardExploration, onSessionIdle, MAX_RESUMES } from "../loop";
 import { startReview } from "../start";
@@ -155,6 +155,61 @@ describe("run store primitives", () => {
     bad.findings[0].file = "other.ts";
     expect(writeFileReview(meta.runId, bad, "# bad", d)).rejects.toThrow("does not match");
     expect(readRunResults(meta.runId, d)).toEqual([]);
+  });
+
+  it("runUnits falls back to targets for a legacy run.json without units", async () => {
+    const d = dir();
+    const meta = await createRun(baseMeta(["a.ts", "b.ts"]), d);
+    expect(runUnits(meta)).toEqual(["a.ts", "b.ts"]);
+    const split = await createRun(
+      { ...baseMeta(["a.ts"]), units: ["a.ts#1-500", "a.ts#441-900"], batchSize: 7 },
+      d
+    );
+    expect(loadRun(split.runId, d)?.units).toEqual(["a.ts#1-500", "a.ts#441-900"]);
+    expect(loadRun(split.runId, d)?.batchSize).toBe(7);
+    expect(runUnits(loadRun(split.runId, d)!)).toEqual(["a.ts#1-500", "a.ts#441-900"]);
+  });
+
+  it("two units of one file write distinct artifacts that never overwrite each other", async () => {
+    const d = dir();
+    const meta = await createRun(
+      { ...baseMeta(["big.ts"]), whole: true, units: ["big.ts#1-500", "big.ts#441-900"] },
+      d
+    );
+    await writeFileReview(meta.runId, result("big.ts", { target: "big.ts#1-500" }), "# s1", d);
+    await writeFileReview(
+      meta.runId,
+      result("big.ts", { target: "big.ts#441-900", findings: [] }),
+      "# s2",
+      d
+    );
+    const results = readRunResults(meta.runId, d);
+    expect(results.map(resultUnit).sort()).toEqual(["big.ts#1-500", "big.ts#441-900"]);
+    expect(results.every((r) => r.file === "big.ts")).toBe(true);
+    expect(readFileReviewResult(meta.runId, "big.ts#1-500", d)?.findings).toHaveLength(1);
+    expect(readFileReviewResult(meta.runId, "big.ts#441-900", d)?.findings).toHaveLength(0);
+    // The bare file is not a unit of this run: nothing is filed under it.
+    expect(readFileReviewResult(meta.runId, "big.ts", d)).toBeNull();
+    expect(runCoverage(meta, results)).toEqual({
+      reviewed: ["big.ts#1-500", "big.ts#441-900"],
+      missing: [],
+    });
+  });
+
+  it("a file-unit artifact keeps the legacy filename and a legacy artifact reads back as its own unit", async () => {
+    const d = dir();
+    const meta = await createRun(baseMeta(["a.ts"]), d);
+    await writeFileReview(meta.runId, result("a.ts"), "# a", d);
+    const p = join(runDir(meta.runId, d), "reviews", `${reviewSlug("a.ts")}.json`);
+    expect(existsSync(p)).toBe(true);
+    // Simulate an artifact written before `target` existed.
+    const legacy = JSON.parse(readFileSync(p, "utf8"));
+    delete legacy.target;
+    writeFileSync(p, JSON.stringify(legacy));
+    const back = readFileReviewResult(meta.runId, "a.ts", d);
+    expect(back?.target).toBeUndefined();
+    expect(resultUnit(back!)).toBe("a.ts");
+    expect(runCoverage(meta, readRunResults(meta.runId, d)).missing).toEqual([]);
   });
 
   it("runCoverage reports reviewed vs missing", async () => {
