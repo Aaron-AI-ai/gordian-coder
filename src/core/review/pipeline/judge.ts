@@ -20,7 +20,7 @@
 
 import { join, resolve } from "node:path";
 
-import { loadRun } from "./artifact";
+import { loadRun, runUnits } from "./artifact";
 import { runDir, type PersistedFileReviewResult } from "./artifact";
 import { DEFAULT_JUDGE_THRESHOLD, JudgeIdentitySchema, JudgeSubmitSchema, MAX_INVALID_JUDGE_SUBMISSIONS, MAX_JUDGE_ROUNDS, artifactIdentity, attemptMatchesReview, currentPendingParts, judgmentPath, consistencyValidationError, indexValidationError, loadJudgment, loadReviewResult, persistJudgment, persistJudgmentSync, submissionHash, terminalMatchesReview, terminalMessage, type FileJudgment, type JudgeAttempt, type JudgeSubmitPayload, type JudgeTerminal } from "./judge-store";
 import { buildPartContext, buildPartPrompt, contextOverflowTerminal, isContextOverflow, judgePartPlanFor, overflowContext } from "./judge-prompt";
@@ -92,8 +92,8 @@ function alreadySubmittedLine(file: string, part: number, total: number): string
 export function judgeContext(runId: string, file: string, cwd: string, part?: number): string {
   const meta = loadRun(runId, cwd);
   if (!meta) return `Unknown run: ${runId}. Call f_review_plan first (or check the runId).`;
-  if (!meta.targets.includes(file)) {
-    return `❌ ${file} is not a target of run ${runId}. Targets: ${meta.targets.join(", ")}`;
+  if (!runUnits(meta).includes(file)) {
+    return `❌ ${file} is not a unit of run ${runId}. Units: ${runUnits(meta).join(", ")}`;
   }
   const result = loadReviewResult(runId, file, cwd);
   if (!result) {
@@ -356,8 +356,8 @@ async function submitJudgeSerialized(
 
   const meta = loadRun(runId, cwd);
   if (!meta) return `Unknown run: ${runId}. Call f_review_plan first (or check the runId).`;
-  if (!meta.targets.includes(file)) {
-    return `❌ ${file} is not a target of run ${runId}. Targets: ${meta.targets.join(", ")}`;
+  if (!runUnits(meta).includes(file)) {
+    return `❌ ${file} is not a unit of run ${runId}. Units: ${runUnits(meta).join(", ")}`;
   }
   const review = loadReviewResult(runId, file, cwd);
   if (!review) {

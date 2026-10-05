@@ -170,10 +170,10 @@ describe("judgeContext", () => {
     expect(judgeContext("ghost", "a.ts", dir())).toContain("Unknown run");
   });
 
-  it("rejects a file outside the run's targets", async () => {
+  it("rejects a file outside the run's units", async () => {
     const d = gitRepo();
     const meta = await createRun(baseMeta(), d);
-    expect(judgeContext(meta.runId, "zz.ts", d)).toContain("not a target");
+    expect(judgeContext(meta.runId, "zz.ts", d)).toContain("not a unit");
   });
 
   it("refuses to judge before the review is submitted", async () => {
@@ -240,12 +240,12 @@ describe("submitJudge", () => {
     expect(await submitJudge({ nope: true }, dir())).toContain("Invalid judge submission");
   });
 
-  it("rejects an unknown run and a non-target file", async () => {
+  it("rejects an unknown run and a non-unit file", async () => {
     const d = gitRepo();
     expect(await submitJudge(judgePayload("ghost", 90), d)).toContain("Unknown run");
     const meta = await createRun(baseMeta(), d);
     expect(await submitJudge(judgePayload(meta.runId, 90, { file: "zz.ts" }), d)).toContain(
-      "not a target"
+      "not a unit"
     );
   });
 
@@ -851,6 +851,135 @@ describe("judge excerpt covers finding lines past the cap", () => {
     expect(out).toContain("Judge context INCOMPLETE");
     expect(out).toContain("merged finding window(s)");
     expect(out).toContain("Do NOT call f_review_judge");
+  });
+});
+
+describe("segment units", () => {
+  /** 1200-line whole-file run planned into three segment units. Lines are kept
+   * short (~32 bytes rendered) so a 500-line segment fits JUDGE_CHANGE_MAX_BYTES
+   * whole — the tests below depend on the base being shown, not windowed. */
+  async function segmentRun() {
+    const d = gitRepo();
+    writeFileSync(
+      join(d, "big.ts"),
+      Array.from({ length: 1200 }, (_, i) => `function f${i}(){} // line ${i + 1}`).join("\n") + "\n"
+    );
+    const meta = await createRun(
+      baseMeta({
+        targets: ["big.ts"],
+        whole: true,
+        range: null,
+        units: ["big.ts#1-500", "big.ts#441-940", "big.ts#881-1200"],
+      }),
+      d
+    );
+    const segmentReview = (unit: string, line: number): FileReviewResult => ({
+      ...reviewResult("big.ts"),
+      target: unit,
+      findings: [{ ...reviewResult("big.ts").findings[0], line }],
+    });
+    return { d, meta, segmentReview };
+  }
+
+  it("judges one unit over its own window and addresses the verdict to the unit id", async () => {
+    const { d, meta, segmentReview } = await segmentRun();
+    await writeFileReview(meta.runId, segmentReview("big.ts#441-940", 600), "# s2", d);
+
+    // The bare file is not a unit of a split run.
+    expect(judgeContext(meta.runId, "big.ts", d)).toContain("not a unit");
+    const out = judgeContext(meta.runId, "big.ts#441-940", d);
+    expect(out).toContain("judging the review of big.ts lines 441-940");
+    expect(out).toMatch(/\/\/ line 600\b/);
+    // \b: "// line 100" must not match inside "// line 1000".
+    expect(out).not.toMatch(/\/\/ line 100\b/);
+    expect(out).not.toMatch(/\/\/ line 1000\b/);
+    expect(out).toContain('file="big.ts#441-940"');
+  });
+
+  it("a finding outside the segment window gets an evidence window", async () => {
+    const { d, meta, segmentReview } = await segmentRun();
+    // inFileRelated can surface a declaration from outside the segment; the
+    // judge must see that line rather than refute the finding against absence.
+    await writeFileReview(meta.runId, segmentReview("big.ts#441-940", 1100), "# s2", d);
+    const out = judgeContext(meta.runId, "big.ts#441-940", d);
+    expect(out).toMatch(/\/\/ line 1100\b/);
+    expect(out).toContain("Excerpts around finding lines");
+  });
+
+  it("judge verdicts for two units of one file are isolated", async () => {
+    const { d, meta, segmentReview } = await segmentRun();
+    await writeFileReview(meta.runId, segmentReview("big.ts#1-500", 10), "# s1", d);
+    await writeFileReview(meta.runId, segmentReview("big.ts#441-940", 600), "# s2", d);
+
+    const pass = await submitJudge(judgePayload(meta.runId, 90, { file: "big.ts#1-500" }), d);
+    expect(pass).toContain("Judge PASS for big.ts#1-500");
+    const rework = await submitJudge(judgePayload(meta.runId, 10, { file: "big.ts#441-940" }), d);
+    expect(rework).toContain("Judge REWORK for big.ts#441-940");
+    expect(rework).toContain('files=["big.ts#441-940"]');
+
+    expect(readRunJudgments(meta.runId, d).map((j) => j.file).sort()).toEqual([
+      "big.ts#1-500",
+      "big.ts#441-940",
+    ]);
+    expect(judgeFeedbackFor(meta.runId, "big.ts#1-500", d)).toBe("");
+    expect(judgeFeedbackFor(meta.runId, "big.ts#441-940", d)).toContain("rework required");
+
+    // Re-joining the reworked unit carries the feedback; the passed one is refused.
+    expect(await startReview({ runId: meta.runId, files: ["big.ts#1-500"] }, d, SESSION)).toContain(
+      "already has a terminal review artifact"
+    );
+    const rejoin = await startReview({ runId: meta.runId, files: ["big.ts#441-940"] }, d, SESSION);
+    expect(rejoin).toContain("reviewing big.ts#441-940");
+    expect(getState(SESSION)?.requirementBackground).toContain("rework required");
+  });
+
+  it("a clean segment unit is judged over its own lines", async () => {
+    const { d, meta } = await segmentRun();
+    await writeFileReview(
+      meta.runId,
+      { ...reviewResult("big.ts"), target: "big.ts#881-1200", findings: [] },
+      "# s3",
+      d
+    );
+    const out = judgeContext(meta.runId, "big.ts#881-1200", d);
+    expect(out).toMatch(/\/\/ line 881\b/);
+    expect(out).toMatch(/\/\/ line 1200\b/);
+    expect(out).not.toMatch(/\/\/ line 100\b/);
+    expect(out).toContain('file="big.ts#881-1200"');
+  });
+
+  it("a clean segment too wide for the base falls back to the coverage part addressed to the unit", async () => {
+    // 500 lines × ~130 bytes ≈ 65 KB > JUDGE_CHANGE_MAX_BYTES: the segment base
+    // cannot be shown whole, and a zero-finding review has no anchors, so the
+    // coverage-only salvage runs — and must still name the unit, not the file.
+    const d = gitRepo();
+    writeFileSync(
+      join(d, "wide.ts"),
+      Array.from(
+        { length: 1200 },
+        (_, i) => `export function g${i}() { return "${"x".repeat(100)}"; } // line ${i + 1}`
+      ).join("\n") + "\n"
+    );
+    const meta = await createRun(
+      baseMeta({
+        targets: ["wide.ts"],
+        whole: true,
+        range: null,
+        units: ["wide.ts#1-500", "wide.ts#441-940", "wide.ts#881-1200"],
+      }),
+      d
+    );
+    await writeFileReview(
+      meta.runId,
+      { ...reviewResult("wide.ts"), target: "wide.ts#441-940", findings: [] },
+      "# s2",
+      d
+    );
+    const out = judgeContext(meta.runId, "wide.ts#441-940", d);
+    expect(out).not.toContain("Judge context INCOMPLETE");
+    expect(out).toContain("COVERAGE ONLY");
+    expect(out).toContain('file="wide.ts#441-940"');
+    expect(out).toContain("lines 441-940");
   });
 });
 
