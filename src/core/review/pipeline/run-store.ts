@@ -19,6 +19,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, 
 import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 
+import { DEFAULT_BATCH_SIZE } from "../config";
 import { buildRubric, loadExtraRules, loadFrameworkGuide } from "../evidence/rubric";
 import { readRunJudgments } from "./judge-store";
 import { loadAllFixes } from "./fixer";
@@ -27,8 +28,8 @@ import { RUNS_DIR, loadRun, type RunMeta, FileReviewResultSchema, readFileReview
 /** Hard cap on targets per run — refuse larger fan-outs (split the range instead). */
 export const MAX_RUN_TARGETS = 100;
 
-/** Spawn-batch guidance for the orchestrator: at most this many subagents at once. */
-export const RUN_BATCH_SIZE = 5;
+/** Default spawn-batch size; a run pins its effective value in `RunMeta.batchSize`. */
+export const RUN_BATCH_SIZE = DEFAULT_BATCH_SIZE;
 
 /** How many terminal run directories pruneRuns keeps (newest first). */
 export const RUNS_KEEP = 10;

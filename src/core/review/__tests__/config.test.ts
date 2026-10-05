@@ -13,7 +13,7 @@ afterEach(() => {
   while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
 });
 
-import { loadConfig, DEFAULT_MAX_TOOL_CALLS, resolveMaxIter, resolveMaxToolCalls } from "../config";
+import { loadConfig, DEFAULT_MAX_TOOL_CALLS, DEFAULT_BATCH_SIZE, MAX_BATCH_SIZE, resolveBatchSize, resolveMaxIter, resolveMaxToolCalls } from "../config";
 import { MAX_ITER } from "../tools/read";
 
 describe("loadConfig", () => {
@@ -96,6 +96,27 @@ describe("resolveMaxToolCalls", () => {
     expect(resolveMaxToolCalls(d)).toBe(7);
     writeFileSync(join(d, ".f-review.json"), '{"maxToolCalls": "many"}');
     expect(resolveMaxToolCalls(d)).toBe(DEFAULT_MAX_TOOL_CALLS);
+  });
+});
+
+describe("resolveBatchSize", () => {
+  it("defaults to DEFAULT_BATCH_SIZE without config", () => {
+    expect(resolveBatchSize(tmp())).toBe(DEFAULT_BATCH_SIZE);
+    expect(DEFAULT_BATCH_SIZE).toBe(5);
+  });
+
+  it("reads batchSize from .f-review.json, clamped to [1, MAX_BATCH_SIZE] and truncated", () => {
+    const d = tmp();
+    writeFileSync(join(d, ".f-review.json"), '{"batchSize": 8}');
+    expect(resolveBatchSize(d)).toBe(8);
+    writeFileSync(join(d, ".f-review.json"), '{"batchSize": 0}');
+    expect(resolveBatchSize(d)).toBe(1);
+    writeFileSync(join(d, ".f-review.json"), '{"batchSize": 99}');
+    expect(resolveBatchSize(d)).toBe(MAX_BATCH_SIZE);
+    writeFileSync(join(d, ".f-review.json"), '{"batchSize": 7.9}');
+    expect(resolveBatchSize(d)).toBe(7);
+    writeFileSync(join(d, ".f-review.json"), '{"batchSize": "many"}');
+    expect(resolveBatchSize(d)).toBe(DEFAULT_BATCH_SIZE);
   });
 });
 

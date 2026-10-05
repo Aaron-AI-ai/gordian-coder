@@ -41,6 +41,7 @@ export const ReviewConfigSchema = z.object({
   deepPasses: field(z.number()), // review rounds per file/segment (clamped 1..5; 1 = single pass)
   maxIter: field(z.number()), // exploration tool calls per round before forced convergence (default MAX_ITER)
   maxToolCalls: field(z.number()), // total tool calls per reviewer session, including context/submit
+  batchSize: field(z.number()), // run mode: subagents in flight at once (clamped 1..MAX_BATCH_SIZE, default DEFAULT_BATCH_SIZE)
   rulesDir: field(z.string()), // project rules directory, relative to root (default "review/rules")
   frameworkKb: field(z.record(z.string())), // import prefix → KB dir map; replaces the framework_kb rule's table
   frameworkKbFile: field(z.string()), // path to an md replacing the bundled framework_kb.md entirely (frontmatter globs respected)
@@ -143,4 +144,16 @@ export function resolveMaxToolCalls(cwd: string): number {
   const v = loadConfig(cwd).maxToolCalls;
   if (typeof v !== "number" || !Number.isFinite(v)) return DEFAULT_MAX_TOOL_CALLS;
   return Math.max(MIN_MAX_TOOL_CALLS, Math.trunc(v));
+}
+
+/** Spawn-batch guidance for the orchestrator: subagents in flight at once.
+ * A larger batch shortens a run only when the provider's rate limit allows
+ * it; the cap keeps a typo from fanning out a hundred sessions. */
+export const DEFAULT_BATCH_SIZE = 5;
+export const MAX_BATCH_SIZE = 20;
+
+export function resolveBatchSize(cwd: string): number {
+  const v = loadConfig(cwd).batchSize;
+  if (typeof v !== "number" || !Number.isFinite(v)) return DEFAULT_BATCH_SIZE;
+  return Math.max(1, Math.min(MAX_BATCH_SIZE, Math.trunc(v)));
 }
