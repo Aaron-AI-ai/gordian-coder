@@ -243,9 +243,11 @@ Units (spawn in this order; a large file is split into segment units — ONE f-r
 - `target` 없는 아티팩트: `target = file`로 읽힌다.
 - 파일 단위 unit의 아티팩트 파일명은 `reviewSlug(file)` 그대로 — 기존 run 디렉터리
   의 coverage·finalize 캐시(`finalize.json` fingerprint)가 그대로 맞는다.
-  단 `finalizeFingerprint`의 results 키가 `file` → `target`으로 바뀌므로 **진행 중
-  run의 finalize 캐시는 1회 무효화**된다(재finalize하면 같은 리포트를 다시 쓴다).
-  허용.
+  `finalizeFingerprint`의 results 항목은 unit 값을 **기존 `file` 키 이름 그대로** 담는다
+  — 분할 없는 run은 unit === file이라 지문이 바이트 단위로 동일하고, 업그레이드 전에
+  끝난 run의 `finalize.json`을 `runIsTerminal`이 계속 terminal로 인식한다. (리뷰에서
+  확인: 키 이름을 바꾸면 끝난 run 전부가 TTL까지 "미완"으로 집계되어
+  `MAX_UNFINISHED_RUNS`를 잠식한다.)
 
 ## 테스트 계획 (TDD — 실패 확인 후 구현)
 
