@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { finalizeRun, planReview } from "../run";
+import { finalizeRun, planReview, planUnits } from "../run";
 import { MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, UNFINISHED_RUN_TTL_MS, RUN_BATCH_SIZE, createRun, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, writeFileReview } from "../run-store";
 import { loadRun, readFileReviewResult, resultUnit, runUnits, type RunMeta } from "../artifact";
 import { RUNS_DIR, reviewSlug, runDir, type FileReviewResult } from "../artifact";
@@ -417,6 +417,56 @@ describe("planReview", () => {
     // A commit-range run keeps the diff default, even with explicit files added.
     const msg2 = await planReview({ commit: "HEAD", files: ["a.ts"] }, d);
     expect(msg2).not.toContain("whole-file");
+  });
+
+  it("expands a whole-file run into segment units, largest first, and pins batchSize", async () => {
+    const d = gitRepo();
+    const big = Array.from({ length: 1200 }, (_, i) => `// l${i}`).join("\n") + "\n";
+    writeFileSync(join(d, "big.ts"), big);
+    writeFileSync(join(d, ".f-review.json"), JSON.stringify({ batchSize: 8 }));
+    const msg = await planReview({ files: ["a.ts", "big.ts"] }, d); // files-only ⇒ whole-file
+    const runId = /Run created: (\S+)/.exec(msg)![1];
+    const meta = loadRun(runId, d)!;
+    expect(meta.targets).toEqual(["a.ts", "big.ts"]);
+    expect(meta.batchSize).toBe(8);
+    expect(meta.units).toEqual(["big.ts#1-500", "big.ts#441-940", "big.ts#881-1200", "a.ts"]);
+    expect(msg).toContain("2 file(s) → 4 unit(s)");
+    expect(msg).toContain("Units (spawn in this order");
+    expect(msg).toContain("- big.ts#1-500 (segment 1/3 of big.ts, 1200 lines)");
+    expect(msg).toContain("- big.ts#881-1200 (segment 3/3 of big.ts)");
+    expect(msg).toContain("at most 8 subagents");
+    expect(msg).toContain('files=["<unit id exactly as listed above');
+    expect(msg).toContain("ONE subagent per missing unit");
+  });
+
+  it("keeps units equal to targets, in target order, for a diff-mode run", async () => {
+    const d = gitRepo();
+    const msg = await planReview({}, d);
+    const runId = /Run created: (\S+)/.exec(msg)![1];
+    const meta = loadRun(runId, d)!;
+    expect(meta.units).toEqual(["a.ts", "b.ts"]);
+    expect(runUnits(meta)).toEqual(meta.targets);
+    expect(msg).not.toContain("unit(s)");
+    expect(msg).toContain("2 file(s)");
+  });
+
+  it("planUnits sorts whole-file units by line count, ties by path then start", () => {
+    const d = dir();
+    writeFileSync(join(d, "s.ts"), "x\n".repeat(300));
+    writeFileSync(join(d, "m.ts"), "x\n".repeat(700));
+    writeFileSync(join(d, "big.ts"), "x\n".repeat(2500));
+    expect(planUnits(["s.ts", "big.ts", "m.ts"], true, null, d)).toEqual([
+      "m.ts",
+      "big.ts#1-500",
+      "big.ts#441-940",
+      "big.ts#881-1380",
+      "big.ts#1321-1820",
+      "big.ts#1761-2260",
+      // 300-line tie between the last segment and s.ts: path ascending wins.
+      "big.ts#2201-2500",
+      "s.ts",
+    ]);
+    expect(planUnits(["s.ts", "big.ts", "m.ts"], false, null, d)).toEqual(["s.ts", "big.ts", "m.ts"]);
   });
 
   it("tells the orchestrator to wait for the fix pass before finalizing", async () => {

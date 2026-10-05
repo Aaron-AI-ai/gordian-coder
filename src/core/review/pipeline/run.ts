@@ -21,9 +21,11 @@ import { join } from "node:path";
 import { SEVERITIES, dedupeFindings, verdict, type Finding, type Severity } from "../contract";
 import { collectTargets, resolveDiffRange, type CommitSpec } from "./context";
 import { FinalizeCacheSchema, MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, RUN_BATCH_SIZE, absoluteOutputPath, createRun, diskTextHash, filesSnapshotIdentity, finalizeFingerprint, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, runFreshness, unfinishedRuns } from "./run-store";
-import { loadRun, type RunMeta } from "./artifact";
+import { loadRun, resultUnit, runUnits, type RunMeta } from "./artifact";
 import { RUNS_DIR, reviewArtifactHash, runDir } from "./artifact";
-import { loadConfigSource, resolveDeepPasses } from "../config";
+import { planSegments, targetPath, targetRange } from "./segment";
+import { afterRef, fileLineCount } from "../tools/read";
+import { loadConfigSource, resolveBatchSize, resolveDeepPasses } from "../config";
 import { defaultLabel, loadBaseline, manifestTimestamp, renderReviewContext, resolveOutputPath, writeReport } from "../report/output";
 import { readRunJudgments } from "./judge-store";
 import { DEFAULT_JUDGE_THRESHOLD, describeTruncation } from "./judge-store";
@@ -123,6 +125,34 @@ function shortSha(cwd: string): string | undefined {
   return p.exitCode === 0 ? p.stdout.toString().trim() || undefined : undefined;
 }
 
+/**
+ * The dispatch units of a run. Diff mode: the targets, in order — the work is
+ * the diff, not the file. Whole-file mode: every target over SEGMENT_THRESHOLD
+ * expanded to its segment ids, the whole list sorted by line count descending
+ * so a batch holds units of similar cost; ties by (path, start) so the order is
+ * deterministic. A file's short last segment may therefore sort after a small
+ * whole file — intended.
+ */
+export function planUnits(targets: string[], whole: boolean, ref: string | null, cwd: string): string[] {
+  if (!whole) return [...targets];
+  const lines = new Map<string, number>();
+  const units = targets.flatMap((path) => {
+    const total = fileLineCount(cwd, ref, path) ?? 0;
+    const segments = planSegments(cwd, ref, path);
+    for (const unit of segments) {
+      const range = targetRange(unit);
+      lines.set(unit, range ? range.end - range.start + 1 : total);
+    }
+    return segments;
+  });
+  return units.sort(
+    (a, b) =>
+      lines.get(b)! - lines.get(a)! ||
+      targetPath(a).localeCompare(targetPath(b)) ||
+      (targetRange(a)?.start ?? 0) - (targetRange(b)?.start ?? 0)
+  );
+}
+
 /** Collect targets, create the run, and return the fan-out instructions the
  * orchestrator follows. All error cases come back as text (shown to the model). */
 export async function planReview(args: PlanReviewArgs, cwd: string): Promise<string> {
@@ -155,12 +185,18 @@ export async function planReview(args: PlanReviewArgs, cwd: string): Promise<str
   }
 
   const config = loadConfigSource(cwd).config;
+  // Files-only reviews default to whole-file (same rule as startReview):
+  // no commit diff exists, so a diff-mode review could be empty.
+  const whole = args.whole ?? (commit === undefined && !!args.files?.length);
   const planned: PlannedRun = {
     targets,
+    // Pinned here, once: every reviewer join, judge, and finalize reads this
+    // list instead of re-deriving it, so they can never disagree about what a
+    // unit is.
+    units: planUnits(targets, whole, afterRef(range), cwd),
+    batchSize: resolveBatchSize(cwd),
     range,
-    // Files-only reviews default to whole-file (same rule as startReview):
-    // no commit diff exists, so a diff-mode review could be empty.
-    whole: args.whole ?? (commit === undefined && !!args.files?.length),
+    whole,
     label: shortSha(cwd) ?? defaultLabel(),
     language: args.language ?? config.language ?? "ko",
     output: args.output,
@@ -228,9 +264,30 @@ export async function planReview(args: PlanReviewArgs, cwd: string): Promise<str
 }
 
 export function renderPlanInstructions(meta: RunMeta, cwd: string): string {
-  // List every target: the orchestrator dispatches from this text, so a
-  // truncated list would silently drop files onto the single finalize retry.
-  const list = meta.targets.map((target) => `  - ${target}`);
+  // List every UNIT: the orchestrator dispatches from this text, so a truncated
+  // list would silently drop work onto the single finalize retry. Order is the
+  // spawn order (planUnits sorted it by cost).
+  const units = runUnits(meta);
+  const split = units.length !== meta.targets.length;
+  const segmentsOf = new Map<string, string[]>();
+  for (const unit of units) {
+    const path = targetPath(unit);
+    if (targetRange(unit)) (segmentsOf.get(path) ?? segmentsOf.set(path, []).get(path)!).push(unit);
+  }
+  // Siblings in file order, so "segment 2/6" counts by position, not by cost.
+  for (const siblings of segmentsOf.values()) {
+    siblings.sort((a, b) => targetRange(a)!.start - targetRange(b)!.start);
+  }
+  const list = units.map((unit) => {
+    const range = targetRange(unit);
+    if (!range) return `  - ${unit}`;
+    const path = targetPath(unit);
+    const siblings = segmentsOf.get(path)!;
+    const index = siblings.findIndex((u) => targetRange(u)!.start === range.start) + 1;
+    const total = targetRange(siblings[siblings.length - 1])!.end;
+    const first = index === 1 ? `, ${total} lines` : "";
+    return `  - ${unit} (segment ${index}/${siblings.length} of ${path}${first})`;
+  });
   // Steps are numbered at the end: the fix pass is conditional, and a hardcoded
   // "3." in the judge block silently collided with it.
   // Spawn a fixer only where there is something to fix. "for EACH file above"
@@ -276,15 +333,15 @@ export function renderPlanInstructions(meta: RunMeta, cwd: string): string {
     ? [
         [
           `JUDGE GATE — after EACH f-reviewer subagent finishes, spawn ONE subagent of type \`f-judge\` with this prompt:`,
-          `   "Call f_review_judge_context with runId=\"${meta.runId}\" and file=\"<file>\", evaluate that review, then call f_review_judge."`,
+          `   "Call f_review_judge_context with runId=\"${meta.runId}\" and file=\"<unit id>\", evaluate that review, then call f_review_judge."`,
         ].join("\n"),
-        `Follow the message f_review_judge returns EXACTLY: it either accepts the file, tells you to spawn a NEW f-judge for the next part of the same review, or tells you to re-spawn the f-reviewer for that file (judge feedback is injected automatically) and judge again. A large review is judged in several parts — each part needs its OWN fresh f-judge subagent, one after another, called with the part number the previous tool result named. The rework cap is enforced by the tool — never re-spawn beyond what it instructs.`,
-        `When every file is accepted${fixReturned}, call f_review_finalize with runId="${meta.runId}".`,
-        `If finalize reports missing files, re-spawn subagents for ONLY those files ONCE (judging each again), then finalize again.${recoveryParts}`,
+        `Follow the message f_review_judge returns EXACTLY: it either accepts the unit, tells you to spawn a NEW f-judge for the next part of the same review, or tells you to re-spawn the f-reviewer for that unit (judge feedback is injected automatically) and judge again. A large review is judged in several parts — each part needs its OWN fresh f-judge subagent, one after another, called with the part number the previous tool result named. The rework cap is enforced by the tool — never re-spawn beyond what it instructs.`,
+        `When every unit is accepted${fixReturned}, call f_review_finalize with runId="${meta.runId}".`,
+        `If finalize reports missing units, re-spawn ONE subagent per missing unit ONCE (judging each again), then finalize again.${recoveryParts}`,
       ]
     : [
-        `When every file has been dispatched${fixReturned}, call f_review_finalize with runId="${meta.runId}".`,
-        `If finalize reports missing files, re-spawn subagents for ONLY those files ONCE, then finalize again.${recoveryParts}`,
+        `When every unit has been dispatched${fixReturned}, call f_review_finalize with runId="${meta.runId}".`,
+        `If finalize reports missing units, re-spawn ONE subagent per missing unit ONCE, then finalize again.${recoveryParts}`,
       ];
   const fcqLine = !meta.fcq
     ? []
@@ -306,10 +363,10 @@ export function renderPlanInstructions(meta: RunMeta, cwd: string): string {
       : [`⚠️ Static analysis (fcq) FAILED: ${meta.fcq.reason}. The LLM review proceeds without it; finalize fails closed on failOn.`];
   const steps = [
     [
-      `For EACH file above, spawn ONE subagent of type \`f-reviewer\` with this prompt:`,
-      `   "Call f_review_context with runId=\"${meta.runId}\" and files=[\"<file>\"], review that single file, and call f_review_submit. Review no other files."`,
+      `For EACH unit above, spawn ONE subagent of type \`f-reviewer\` with this prompt:`,
+      `   "Call f_review_context with runId=\"${meta.runId}\" and files=[\"<unit id exactly as listed above, including any #start-end suffix>\"], review that single unit, and call f_review_submit. Review nothing else."`,
     ].join("\n"),
-    `Spawn at most ${RUN_BATCH_SIZE} subagents at a time; wait for a batch to finish before the next.`,
+    `Spawn at most ${meta.batchSize ?? RUN_BATCH_SIZE} subagents at a time; wait for a batch to finish before the next.`,
     ...fixSteps,
     ...judgeSteps,
   ];
@@ -322,8 +379,11 @@ export function renderPlanInstructions(meta: RunMeta, cwd: string): string {
     `fcq=${meta.fcq ? "on" : "off"} · fcqFix=${meta.fcqFix ? "on" : "off"} ` +
     (configSource ? `(config: ${configSource}, plus any call arguments)` : "(no project config found; tool defaults)");
   return [
-    `Run created: ${meta.runId} — ${meta.targets.length} file(s), mode: ${meta.range ? `commit diff (${meta.range})` : "explicit files"}${meta.whole ? " · whole-file" : ""}${(meta.deepPasses ?? 1) > 1 ? ` · ${meta.deepPasses} review rounds/target` : ""}${meta.failOn ? ` · gate: failOn=${meta.failOn}` : ""}${meta.judge ? ` · judge gate on` : ""}${meta.fcqFix ? ` · fix pass on` : ""}.`,
+    `Run created: ${meta.runId} — ${meta.targets.length} file(s)${split ? ` → ${units.length} unit(s)` : ""}, mode: ${meta.range ? `commit diff (${meta.range})` : "explicit files"}${meta.whole ? " · whole-file" : ""}${(meta.deepPasses ?? 1) > 1 ? ` · ${meta.deepPasses} review rounds/target` : ""}${meta.failOn ? ` · gate: failOn=${meta.failOn}` : ""}${meta.judge ? ` · judge gate on` : ""}${meta.fcqFix ? ` · fix pass on` : ""}.`,
     settingsLine,
+    ...(split
+      ? [`Units (spawn in this order; a large file is split into segment units — ONE f-reviewer per unit):`]
+      : []),
     ...list,
     ...fcqLine,
     "",

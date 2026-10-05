@@ -93,7 +93,9 @@ join/finalize마다 git 줄 수를 세지 않는다.
   별도 상한을 두지 않는다 (파일 100개 × 분할 몇 개면 수백 unit — 디스크 아티팩트라
   메모리 문제 없음).
 - `units` 계산: `planned.whole ? targets.flatMap(p => planSegments(cwd, afterRef(range), p)) : targets`.
-- **unit 정렬: 라인 수 내림차순.** 배치는 가장 느린 unit에 묶이므로 비슷한 크기끼리
+- **unit 정렬 (whole-file 모드만): 라인 수 내림차순.** diff 모드는 비용이 diff 크기에
+  비례하므로 정렬하지 않고 `targets` 순서를 그대로 쓴다. whole 모드에서는 배치가
+  가장 느린 unit에 묶이므로 비슷한 크기끼리
   같은 배치에 들어가게 한다. 1차 키 = unit의 줄 수(세그먼트는 `end - start + 1`,
   파일은 `fileLineCount`) 내림차순, 동률은 `(path, start)` 오름차순. 한 파일의
   마지막 세그먼트는 짧을 수 있어(2500줄 → 마지막 300줄) 같은 파일의 다른
