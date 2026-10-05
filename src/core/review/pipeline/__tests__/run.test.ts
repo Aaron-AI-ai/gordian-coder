@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { finalizeRun, planReview, planUnits } from "../run";
+import { fcqShardPath } from "../../evidence/fcq";
 import { MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, UNFINISHED_RUN_TTL_MS, RUN_BATCH_SIZE, createRun, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, writeFileReview } from "../run-store";
 import { loadRun, readFileReviewResult, resultUnit, runUnits, type RunMeta } from "../artifact";
 import { RUNS_DIR, reviewSlug, runDir, type FileReviewResult } from "../artifact";
@@ -722,6 +723,149 @@ describe("finalizeRun", () => {
     expect(md).toContain("- Rubric: ");
     expect(md).toContain("### Files");
     expect(md).toContain("- a.ts");
+  });
+
+  it("merges segment units of one file into one report section and dedupes the overlap", async () => {
+    const d = gitRepo();
+    const meta = await createRun(
+      {
+        ...baseMeta(["big.ts", "a.ts"]),
+        whole: true,
+        range: null,
+        units: ["big.ts#1-500", "big.ts#441-940", "a.ts"],
+      },
+      d
+    );
+    const f = (line: number, rule: string, message = "issue") => ({
+      category: "correctness" as const,
+      severity: "major" as const,
+      file: "big.ts",
+      line,
+      rule,
+      message,
+      suggestion: "fix",
+    });
+    await writeFileReview(
+      meta.runId,
+      result("big.ts", { target: "big.ts#1-500", findings: [f(10, "r-early"), f(450, "dup", "phrasing A")] }),
+      "# s1",
+      d
+    );
+    await writeFileReview(
+      meta.runId,
+      result("big.ts", { target: "big.ts#441-940", findings: [f(450, "dup", "phrasing B"), f(900, "r-late")] }),
+      "# s2",
+      d
+    );
+    await writeFileReview(meta.runId, result("a.ts", { findings: [] }), "# a", d);
+
+    const msg = await finalizeRun(meta.runId, d);
+    expect(msg).toContain("✅ Run complete — 3 unit(s) across 2 file(s), 3 issue(s)");
+    const path = /Report: (.+)$/.exec(msg)![1];
+    const md = readFileSync(join(d, path), "utf8");
+    expect(md.match(/^## big\.ts$/gm)).toHaveLength(1); // one section, not one per segment
+    expect(md).toContain("## a.ts");
+    expect((md.match(/\| dup \|/g) ?? []).length).toBe(1); // overlap duplicate collapsed
+    expect(md.indexOf("r-early")).toBeLessThan(md.indexOf("r-late")); // segment order kept
+    expect(md).toContain("- big.ts (2 segments)");
+  });
+
+  it("names the missing and partial units, not their files", async () => {
+    const d = gitRepo();
+    const meta = await createRun(
+      {
+        ...baseMeta(["big.ts"]),
+        whole: true,
+        range: null,
+        units: ["big.ts#1-500", "big.ts#441-940", "big.ts#881-1200"],
+      },
+      d
+    );
+    await writeFileReview(meta.runId, result("big.ts", { target: "big.ts#1-500" }), "# s1", d);
+    await writeFileReview(
+      meta.runId,
+      result("big.ts", { target: "big.ts#881-1200", partial: true, coverageComplete: false }),
+      "# s3",
+      d
+    );
+
+    const msg = await finalizeRun(meta.runId, d);
+    expect(msg).toContain("⚠️ INCOMPLETE — 2/3");
+    expect(msg).toContain("missing: big.ts#441-940");
+    expect(msg).not.toContain("missing: big.ts.");
+    expect(msg).toContain("per missing unit");
+
+    await writeFileReview(meta.runId, result("big.ts", { target: "big.ts#441-940" }), "# s2", d);
+    const again = await finalizeRun(meta.runId, d);
+    expect(again).toContain("1 partial review(s)");
+    expect(again).toContain("Run terminated — INCOMPLETE: 3/3");
+  });
+
+  it("overlap duplicate collapses before the fcq merge pairs it with one fcq row", async () => {
+    const d = gitRepo();
+    const meta = await createRun(
+      {
+        ...baseMeta(["big.ts"]),
+        whole: true,
+        range: null,
+        units: ["big.ts#1-500", "big.ts#441-940"],
+        fcq: { status: "ok", command: "fcq", durationMs: 1, exitCode: 0 },
+      },
+      d
+    );
+    // One fcq violation on the overlap line, in the shard layout readFcqFile reads.
+    // (No summary.json on purpose: finalize then reports the run quality-incomplete,
+    // but the fcq rows still merge into the report, which is what this test checks.)
+    const shard = fcqShardPath(runDir(meta.runId, d), "big.ts");
+    mkdirSync(dirname(shard), { recursive: true });
+    writeFileSync(
+      shard,
+      JSON.stringify([
+        {
+          analyzer: "pmd",
+          ruleId: "LineLength",
+          description: "line too long",
+          category: "code-style",
+          severity: "MINOR",
+          line: 450,
+          message: "too long",
+        },
+      ])
+    );
+    const follow = (message: string) => ({
+      category: "maintainability" as const,
+      severity: "minor" as const,
+      file: "big.ts",
+      line: 450,
+      rule: "LineLength follow-up",
+      message,
+      asIs: "x",
+      toBe: "y",
+    });
+    // Each segment also carries its own unrelated finding: both surviving proves
+    // the two artifacts were MERGED rather than one overwriting the other (in
+    // either readdir order), which would also leave a single line-450 row.
+    await writeFileReview(
+      meta.runId,
+      result("big.ts", { target: "big.ts#1-500", findings: [{ ...follow("A"), line: 10, rule: "r-early" }, follow("A")] }),
+      "# s1",
+      d
+    );
+    await writeFileReview(
+      meta.runId,
+      result("big.ts", { target: "big.ts#441-940", findings: [follow("B"), { ...follow("B"), line: 900, rule: "r-late" }] }),
+      "# s2",
+      d
+    );
+
+    const msg = await finalizeRun(meta.runId, d);
+    const path = /Report: (.+)$/.exec(msg)![1];
+    const md = readFileSync(join(d, path), "utf8");
+    expect(md).toContain("r-early");
+    expect(md).toContain("r-late");
+    // Exactly one row for line 450: the two reviewer copies collapsed, then paired with the fcq row.
+    expect((md.match(/\| 450 \|/g) ?? []).length).toBe(1);
+    expect(md).toContain("fcq:pmd/LineLength"); // the fcq identity won the merged row
   });
 
   it("flags missing files as INCOMPLETE with a single-retry instruction", async () => {

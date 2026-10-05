@@ -426,18 +426,30 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
     }
   }
   const { reviewed, missing } = runCoverage(meta, results);
+  const units = runUnits(meta);
+  const split = units.length !== meta.targets.length;
 
-  const targetResults = results.filter((result) => meta.targets.includes(result.file));
-  const resultByFile = new Map(targetResults.map((result) => [result.file, result]));
-  const findings: Record<string, Finding[]> = {};
+  const unitResults = results.filter((result) => units.includes(resultUnit(result)));
+  const resultByUnit = new Map(unitResults.map((result) => [resultUnit(result), result]));
+  // Segments of one file merge back under its real path, in segment order.
   // dedupeFindings returns a NEW array, which is also the copy this needs: the
   // fcq merge below appends to it, and the judge check hashes the parsed review
   // objects — mutating those would unmatch every recorded judgment and report
-  // the run as unjudged. Deduping again here, not only in writeRunReview,
-  // covers artifacts written before that collapse existed, and keeps the fcq
-  // merge honest: it pairs one fcq row with one reviewer finding, so a
-  // surviving repeat would ship as a second, unmerged row.
-  for (const r of targetResults) findings[r.file] = dedupeFindings(r.findings);
+  // the run as unjudged. It also collapses the overlap-band repeats two
+  // segments report with different wording, and it runs BEFORE the fcq merge
+  // so one fcq row pairs with one reviewer finding, never with two copies.
+  const byFile = new Map<string, typeof unitResults>();
+  for (const result of unitResults) {
+    (byFile.get(result.file) ?? byFile.set(result.file, []).get(result.file)!).push(result);
+  }
+  const findings: Record<string, Finding[]> = {};
+  for (const [file, group] of byFile) {
+    group.sort(
+      (a, b) =>
+        (targetRange(resultUnit(a))?.start ?? 0) - (targetRange(resultUnit(b))?.start ?? 0)
+    );
+    findings[file] = dedupeFindings(group.flatMap((result) => result.findings));
+  }
 
   // Static-analysis findings merge into the same per-file tables (rule `fcq:…`).
   const runRoot = runDir(runId, cwd);
@@ -454,11 +466,10 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
     }
   }
   const all = Object.values(findings).flat();
-  const partials = targetResults.filter((r) => r.partial).map((r) => r.file);
-  const forced = targetResults.filter((r) => r.forced).map((r) => r.file);
-  const coverageIncomplete = targetResults
-    .filter((r) => !r.coverageComplete)
-    .map((r) => r.file);
+  // Named by unit: the orchestrator re-spawns exactly the segment that failed.
+  const partials = unitResults.filter((r) => r.partial).map(resultUnit);
+  const forced = unitResults.filter((r) => r.forced).map(resultUnit);
+  const coverageIncomplete = unitResults.filter((r) => !r.coverageComplete).map(resultUnit);
 
   // Judge outcomes are bound to the current review revision. A pass for an
   // artifact that was subsequently rewritten cannot bless the newer review.
@@ -469,22 +480,23 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
   if (meta.judge) {
     const threshold = meta.judgeThreshold ?? DEFAULT_JUDGE_THRESHOLD;
     const judgments = allJudgments;
-    const byFile = new Map(judgments.map((judgment) => [judgment.file, judgment]));
-    const currentAttempt = (file: string) => {
-      const review = resultByFile.get(file);
+    // Judgments are keyed by unit (a judgment's `file` field holds the unit id).
+    const judgmentByUnit = new Map(judgments.map((judgment) => [judgment.file, judgment]));
+    const currentAttempt = (unit: string) => {
+      const review = resultByUnit.get(unit);
       if (!review) return undefined;
       const hash = reviewArtifactHash(review);
-      return byFile.get(file)?.attempts.findLast(
+      return judgmentByUnit.get(unit)?.attempts.findLast(
         (attempt) =>
           attempt.reviewRevision === review.revision &&
           attempt.reviewArtifactHash === hash
       );
     };
-    const currentTerminal = (file: string) => {
-      const review = resultByFile.get(file);
+    const currentTerminal = (unit: string) => {
+      const review = resultByUnit.get(unit);
       if (!review) return undefined;
       const hash = reviewArtifactHash(review);
-      const terminal = byFile.get(file)?.terminal;
+      const terminal = judgmentByUnit.get(unit)?.terminal;
       return terminal?.reviewRevision === review.revision &&
         terminal.reviewArtifactHash === hash
         ? terminal
@@ -559,7 +571,11 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
   // finding-only PASS line for incomplete runs; the tool response carries the
   // fail-closed quality verdict. The only appendix is the Review Context —
   // input parameters and criteria sources, never run-quality noise.
-  const context = renderReviewContext(meta.targets, {
+  const contextFiles = meta.targets.map((file) => {
+    const n = units.filter((unit) => targetPath(unit) === file).length;
+    return n > 1 ? `${file} (${n} segments)` : file;
+  });
+  const context = renderReviewContext(contextFiles, {
     mode: `${meta.range ? `commit diff (${meta.range})` : "explicit files"}${meta.whole ? " · whole-file" : ""}`,
     range: meta.range,
     excludes: meta.excludes ?? [],
@@ -637,21 +653,27 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
           );
         })()
       : "";
+  // "file(s)" stays the word for an unsplit run; a split run counts units and
+  // says so, because its missing/partial names are segment ids.
+  const unitWord = split ? "unit" : "file";
+  const scope = split
+    ? `${reviewed.length} unit(s) across ${meta.targets.length} file(s)`
+    : `${reviewed.length} file(s)`;
   let response: string;
   if (missing.length) {
     response = (
-      `⚠️ INCOMPLETE — ${reviewed.length}/${meta.targets.length} file(s) reviewed; missing: ${missing.join(", ")}.` +
+      `⚠️ INCOMPLETE — ${reviewed.length}/${units.length} ${unitWord}(s) reviewed; missing: ${missing.join(", ")}.` +
       `${gate}${forcedWarn}${truncatedWarn} Partial report: ${path}\n` +
-      `Re-spawn ONE f-reviewer subagent per missing file (same runId), then call f_review_finalize again. Do this at most once.`
+      `Re-spawn ONE f-reviewer subagent per missing ${unitWord} (same runId), then call f_review_finalize again. Do this at most once.`
     );
   } else if (qualityIncomplete) {
     response = (
-      `⚠️ Run terminated — INCOMPLETE: ${reviewed.length}/${meta.targets.length} review artifact(s) present; ` +
+      `⚠️ Run terminated — INCOMPLETE: ${reviewed.length}/${units.length} review artifact(s) present; ` +
       `${qualityReasons.join("; ")}.${gate}${forcedWarn}${truncatedWarn}${fixWarn} Report: ${path}`
     );
   } else {
     const fcqNote = fcqSummary ? ` (incl. ${fcqSummary.targetViolations} from fcq)` : "";
-    response = `✅ Run complete — ${reviewed.length} file(s), ${all.length} issue(s)${fcqNote}.${gate}${forcedWarn}${truncatedWarn}${fixWarn} Report: ${path}`;
+    response = `✅ Run complete — ${scope}, ${all.length} issue(s)${fcqNote}.${gate}${forcedWarn}${truncatedWarn}${fixWarn} Report: ${path}`;
   }
   await Bun.write(
     cachePath,
