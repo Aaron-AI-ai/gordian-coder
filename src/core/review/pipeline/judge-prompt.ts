@@ -627,13 +627,21 @@ function declarationOutline(
   file: string,
   content: string,
   totalLines: number,
-  budget: number
+  budget: number,
+  /** The unit's window. A segment unit lists only the declarations inside
+   * it: the other segments are other units' reviews, and listing their
+   * symbols here reads as areas THIS reviewer skipped. */
+  lo = 1,
+  hi = totalLines
 ): string | null {
-  const declared = [...fileDeclarations(content)].sort((a, b) => a[1] - b[1]);
+  const declared = [...fileDeclarations(content)]
+    .filter(([, line]) => line >= lo && line <= hi)
+    .sort((a, b) => a[1] - b[1]);
   if (!declared.length) return null;
+  const scope = lo === 1 && hi === totalLines ? "this file" : `lines ${lo}-${hi} of this file`;
   const text = [
-    `File: ${file} (Total lines: ${totalLines})`,
-    `DECLARATION OUTLINE — every symbol this file declares, and its line.`,
+    `File: ${file} (Total lines: ${totalLines}${lo === 1 && hi === totalLines ? "" : `; this unit: lines ${lo}-${hi}`})`,
+    `DECLARATION OUTLINE — every symbol ${scope} declares, and its line.`,
     ...declared.map(([name, line]) => `L${line}: ${name}`),
   ].join("\n");
   return byteLen(text) <= budget ? text : null;
@@ -671,11 +679,11 @@ function coverageOutline(
   let text = render(shownTo);
   if (byteLen(text) <= budget) return { text, shownTo, kind: "whole" };
 
-  const outline = declarationOutline(file, content, totalLines, budget);
+  const outline = declarationOutline(file, content, totalLines, budget, lo, hi);
   if (outline) {
     return {
       text: outline,
-      shownTo: totalLines,
+      shownTo: hi - lo + 1,
       kind: "outline",
       declared: outline.split("\n").length - 2,
     };
@@ -785,13 +793,22 @@ function coveragePrompt(
           `coverage gaps — judge coverage only over the lines below.`,
         ];
 
-  const outlineHeading = [
-    `### The file under review — ${totalLines} lines, STRUCTURE ONLY`,
-    `The file is too large to show whole, so below is every symbol it declares`,
-    `with the line it starts on — no bodies. Judge coverage over that structure:`,
-    `which declared areas the review never looked at. Do NOT report a`,
-    `declaration as a gap merely because you cannot see its body.`,
-  ];
+  const outlineHeading = range
+    ? [
+        `### The file under review — lines ${lo}-${hi} of ${totalLines}, STRUCTURE ONLY`,
+        `This unit's segment is too large to show whole, so below is every symbol`,
+        `it declares with the line it starts on — no bodies. Judge coverage over`,
+        `that structure: which declared areas the review never looked at. Lines`,
+        `outside ${lo}-${hi} belong to other units and are NOT coverage gaps here.`,
+        `Do NOT report a declaration as a gap merely because you cannot see its body.`,
+      ]
+    : [
+        `### The file under review — ${totalLines} lines, STRUCTURE ONLY`,
+        `The file is too large to show whole, so below is every symbol it declares`,
+        `with the line it starts on — no bodies. Judge coverage over that structure:`,
+        `which declared areas the review never looked at. Do NOT report a`,
+        `declaration as a gap merely because you cannot see its body.`,
+      ];
 
   const of = diff ? diff.replace(/\n$/, "").split("\n").length : hi - lo + 1;
   // Everything except the outline, measured with the longest heading variant,
@@ -829,7 +846,7 @@ function coveragePrompt(
     view.kind === "whole"
       ? undefined
       : view.kind === "outline"
-        ? { view: "outline", shown: view.declared ?? 0, total: totalLines }
+        ? { view: "outline", shown: view.declared ?? 0, total: hi - lo + 1 }
         : { view: diff ? "diff" : "lines", shown: view.shownTo, total: of };
   return truncated ? { prompt, truncated } : { prompt };
 }

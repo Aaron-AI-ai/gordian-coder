@@ -81,9 +81,14 @@ export function finalizeFingerprint(
       meta,
       currentCriteriaIdentity,
       currentSourceIdentity,
+      // Keyed by unit under the historical `file` name: for an unsplit run the
+      // unit IS the file, so the fingerprint is byte-identical to what every
+      // pre-upgrade finalize.json recorded and runIsTerminal keeps honouring
+      // them. A new key name would have flipped every finished run to
+      // "unfinished" until its TTL.
       results: results
-        .map((result) => ({ unit: resultUnit(result), hash: reviewArtifactHash(result) }))
-        .sort((a, b) => a.unit.localeCompare(b.unit)),
+        .map((result) => ({ file: resultUnit(result), hash: reviewArtifactHash(result) }))
+        .sort((a, b) => a.file.localeCompare(b.file)),
       // Include the full validated judgment semantics, not only caller-owned
       // submissionHash/revision fields. Score/verdict/check changes must never
       // reuse a stale PASS response.

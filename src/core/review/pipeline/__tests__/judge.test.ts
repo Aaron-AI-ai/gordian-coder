@@ -980,6 +980,16 @@ describe("segment units", () => {
     expect(out).toContain("COVERAGE ONLY");
     expect(out).toContain('file="wide.ts#441-940"');
     expect(out).toContain("lines 441-940");
+    // The structure outline must cover THIS unit's window only. Listing the
+    // other segments' declarations tells the judge the reviewer skipped them,
+    // and a clean segment rides that fabricated gap to a rework and INCOMPLETE.
+    expect(out).toContain("STRUCTURE ONLY");
+    expect(out).toContain("L441: g440");
+    expect(out).toContain("L940: g939");
+    expect(out).not.toMatch(/^L1: g0$/m);
+    expect(out).not.toMatch(/^L1200: g1199$/m);
+    expect(out).toContain("lines 441-940");
+    expect(out).not.toContain("1200 lines, STRUCTURE ONLY");
   });
 });
 

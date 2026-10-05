@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { finalizeRun, planReview, planUnits } from "../run";
 import { fcqShardPath } from "../../evidence/fcq";
-import { MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, UNFINISHED_RUN_TTL_MS, RUN_BATCH_SIZE, createRun, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, writeFileReview } from "../run-store";
-import { loadRun, readFileReviewResult, resultUnit, runUnits, type RunMeta } from "../artifact";
+import { MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, UNFINISHED_RUN_TTL_MS, RUN_BATCH_SIZE, createRun, finalizeFingerprint, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, writeFileReview } from "../run-store";
+import { loadRun, readFileReviewResult, resultUnit, reviewArtifactHash, runUnits, type RunMeta } from "../artifact";
 import { RUNS_DIR, reviewSlug, runDir, type FileReviewResult } from "../artifact";
 import { submitReview, guardExploration, onSessionIdle, MAX_RESUMES } from "../loop";
 import { startReview } from "../start";
@@ -211,6 +211,27 @@ describe("run store primitives", () => {
     expect(back?.target).toBeUndefined();
     expect(resultUnit(back!)).toBe("a.ts");
     expect(runCoverage(meta, readRunResults(meta.runId, d)).missing).toEqual([]);
+  });
+
+  it("finalize fingerprint of an unsplit run is unchanged by the unit keying (old caches stay valid)", async () => {
+    // A finished run's finalize.json carries this fingerprint; runIsTerminal
+    // compares against it to prune and to keep the unfinished-run cap honest.
+    // Renaming the key would mark every pre-upgrade finished run unfinished.
+    const d = dir();
+    const meta = await createRun(baseMeta(["a.ts"]), d);
+    await writeFileReview(meta.runId, result("a.ts"), "# a", d);
+    const results = readRunResults(meta.runId, d);
+    const legacy = Bun.hash(
+      JSON.stringify({
+        meta,
+        currentCriteriaIdentity: "c",
+        currentSourceIdentity: "s",
+        results: results.map((r) => ({ file: r.file, hash: reviewArtifactHash(r) })),
+        judgments: [],
+        fixes: [],
+      })
+    ).toString();
+    expect(finalizeFingerprint(meta, results, [], "c", "s", [])).toBe(legacy);
   });
 
   it("runCoverage reports reviewed vs missing", async () => {
