@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   ANALYST_AGENT_NAME, ANALYST_AGENT_PERMISSION, ANALYST_AGENT_TOOLS, ANALYST_AGENT_PROMPT, analystAgentSteps,
   JUDGE_AGENT_NAME, LOG_JUDGE_AGENT_PERMISSION, LOG_JUDGE_AGENT_TOOLS, LOG_JUDGE_AGENT_STEPS, LOG_COMMAND_NAME, LOG_COMMAND_TEMPLATE,
+  LOG_JUDGE_AGENT_PROMPT,
 } from "../log/prompts";
 import { LOG_EXPLORERS } from "../../../core/log/tools";
 import { BUILTINS_OFF, JUDGE_AGENT_STEPS, reviewerAgentSteps } from "../review/prompts";
@@ -30,6 +31,16 @@ describe("f-log agent definitions", () => {
     for (const s of ["--file=", "--output=", "--judge", "f_log_plan", "f_log_finalize", "f-log-analyst", "f-log-judge", "NEVER"]) expect(LOG_COMMAND_TEMPLATE).toContain(s);
     expect(ANALYST_AGENT_PROMPT).toContain("f_log_context");
     expect(ANALYST_AGENT_PROMPT).toContain("f_log_submit");
+  });
+  test("language-specific fix conventions live in the rule files, not the prompts: prompts defer to the applied rules", () => {
+    // Lombok/MessageCode guidance moved to review/evidence/rules/java_fix_conventions.md (glob-gated to *.java),
+    // so a non-Java project never sees it and the wording is maintainable without a rebuild.
+    for (const s of ["Lombok", "@NoArgsConstructor", "MessageCode.FWKE0002"]) {
+      expect(ANALYST_AGENT_PROMPT).not.toContain(s);
+      expect(LOG_JUDGE_AGENT_PROMPT).not.toContain(s);
+    }
+    expect(ANALYST_AGENT_PROMPT).toContain("coding conventions");
+    expect(LOG_JUDGE_AGENT_PROMPT).toContain("coding conventions");
   });
   test("both agent tools share review's complete BUILTINS_OFF (including task, skill, todowrite, todoread, question)", () => {
     for (const k of Object.keys(BUILTINS_OFF)) {

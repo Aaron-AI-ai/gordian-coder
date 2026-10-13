@@ -59,12 +59,15 @@ const fromReview = (r: ExtraRule): LogRule => ({
   file: r.file, exceptions: [], globs: r.globs, handler: [], reference: r.reference ?? false, content: r.content,
 });
 
-/** review's framework_kb (config table substituted) and mapper rules, then the fico set. */
+/** review's framework_kb (config table substituted), the shared glob-gated rules
+ * (mapper XML, Java fix conventions), then the fico set. */
 export function bundledLogRules(cwd: string): LogRule[] {
-  const mapper = BUNDLED_RULES.find((r) => r.file === "mapper_dao_xml.md");
+  const shared = ["mapper_dao_xml.md", "java_fix_conventions.md"]
+    .map((file) => BUNDLED_RULES.find((r) => r.file === file))
+    .filter((r): r is ExtraRule => r !== undefined);
   return [
     fromReview(frameworkKbRule(cwd)),
-    ...(mapper ? [fromReview(mapper)] : []),
+    ...shared.map(fromReview),
     ...BUNDLED.map(([file, raw]) => parseLogRule(file, raw)),
   ];
 }

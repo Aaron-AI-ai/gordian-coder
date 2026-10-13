@@ -116,11 +116,13 @@ describe("extra rules (review/rules)", () => {
     expect(rules.map((r) => r.file)).toEqual([
       "framework_kb.md",
       "java.md",
+      "java_fix_conventions.md",
       "mapper_dao_xml.md",
     ]);
     expect(rules[0].globs).toEqual(["*.java"]);
     expect(rules[1].globs).toEqual(["*.java"]);
-    expect(rules[2].globs).toContain("*Mapper.xml");
+    expect(rules[2].globs).toEqual(["*.java"]);
+    expect(rules[3].globs).toContain("*Mapper.xml");
   });
 
   it("appends project md files recursively, sorted, with frontmatter globs parsed out", () => {
@@ -131,7 +133,8 @@ describe("extra rules (review/rules)", () => {
       '---\nglobs: "**/*.sql", db/**\n---\nNo SELECT *.\n'
     );
     const rules = loadExtraRules(d);
-    expect(rules.slice(3)).toEqual([
+    // 4 bundled rules come first: framework_kb, java, java_fix_conventions, mapper_dao_xml
+    expect(rules.slice(4)).toEqual([
       { file: "review/rules/always.md", globs: [], content: "Never use var.", reference: false },
       {
         file: "review/rules/team/sql.md",
@@ -210,10 +213,12 @@ describe("extra rules (review/rules)", () => {
     const rules = loadExtraRules(tmp());
     const java = renderExtraRules(rules, "src/main/java/UserService.java");
     expect(java).toContain("Dead Code"); // java.md
+    expect(java).toContain("@NoArgsConstructor"); // java_fix_conventions.md
     expect(java).not.toContain("JOIN Condition Errors"); // mapper_dao_xml.md
     const mapper = renderExtraRules(rules, "src/main/resources/mapper/UserMapper.xml");
     expect(mapper).toContain("JOIN Condition Errors");
     expect(mapper).not.toContain("Dead Code");
+    expect(mapper).not.toContain("@NoArgsConstructor");
     const ts = renderExtraRules(rules, "src/a.ts");
     expect(ts).toBe(""); // no bundled rule targets .ts — the rubric covers it
   });

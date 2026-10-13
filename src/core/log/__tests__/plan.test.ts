@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseStackTrace } from "../parse";
-import { classifyFrames, rankSuspects, findEntry, buildObservations, searchStackless, planLog, MAX_SUSPECTS } from "../plan";
+import { classifyFrames, rankSuspects, findEntry, buildObservations, searchStackless, planLog, MAX_SUSPECTS, parseLogCommandArgs } from "../plan";
 import { readRunJson, runDir } from "../run-store";
 import type { LogPlan } from "../plan";
 
@@ -111,5 +111,31 @@ describe("plan", () => {
     const plan = readRunJson<LogPlan>(id, cwd, "plan.json")!;
     expect(plan.suspects.some((s) => s.source !== "frame")).toBe(true);
     expect(plan.entry).toBeNull();
+  });
+});
+
+describe("parseLogCommandArgs", () => {
+  const TRACE = "[ERROR::][host:2026-09-23 14:35:55.692][w][a.B:c:1] 실패\njava.lang.NullPointerException: x\n\tat a.B.c(B.java:4)";
+  test("a bare trace becomes log, verbatim (tabs and newlines kept)", () => {
+    expect(parseLogCommandArgs(TRACE)).toEqual({ log: TRACE });
+  });
+  test("flags are pulled out wherever they sit; the rest stays verbatim", () => {
+    expect(parseLogCommandArgs(`--output=out/r.md --no-judge\n${TRACE}\n--judge`)).toEqual({ log: TRACE, output: "out/r.md", judge: true });
+    expect(parseLogCommandArgs(`--judge ${TRACE}`)).toEqual({ log: TRACE, judge: true });
+  });
+  test("--file alone leaves no log", () => {
+    expect(parseLogCommandArgs("--file=logs/a.log --no-judge")).toEqual({ file: "logs/a.log", judge: false });
+  });
+  test("opencode run quotes an argv with spaces — unwrap it (flog-eval passes flags as one argv)", () => {
+    expect(parseLogCommandArgs('"--file=logs/a.log --output=out/r.md"')).toEqual({ file: "logs/a.log", output: "out/r.md" });
+    const quoted = `"${TRACE.replace(/"/g, '\\"')} because \\"row\\" is null"`;
+    expect(parseLogCommandArgs(`--no-judge ${quoted}`)).toEqual({ log: `${TRACE} because "row" is null`, judge: false });
+  });
+  test("quotes inside an unquoted (TUI) trace are kept", () => {
+    const t = `${TRACE} because "row" is null`;
+    expect(parseLogCommandArgs(t).log).toBe(t);
+  });
+  test("flag-looking text glued to other text is left alone", () => {
+    expect(parseLogCommandArgs("msg=--judge x").log).toBe("msg=--judge x");
   });
 });

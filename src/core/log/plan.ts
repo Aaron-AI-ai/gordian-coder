@@ -143,6 +143,31 @@ export function searchStackless(cwd: string, handler: HandlerInfo): Suspect[] {
   return out;
 }
 
+const COMMAND_FLAG = /(^|\s)(?:--(file|output)=(\S+)|--(no-)?judge)(?=\s|$)/g;
+const QUOTED_ARG = /^"((?:[^"\\]|\\.)*)"$/s;
+
+/** `opencode run` wraps an argv containing spaces as `"…"` with inner quotes
+ * escaped. Unwrap only when the whole string is one such arg — a TUI paste
+ * is raw, and its own quotes (`because "row" is null`) must survive. */
+function unquoteArg(s: string): string {
+  const m = QUOTED_ARG.exec(s.trim());
+  return m ? m[1].replace(/\\"/g, '"') : s;
+}
+
+/** `/f-log` free-form arguments → plan options, in code so the model never
+ * has to re-emit the pasted trace as a tool argument. Flags are whole
+ * whitespace-bounded tokens; everything else is the log, verbatim. */
+export function parseLogCommandArgs(raw: string): PlanOptions {
+  const opts: PlanOptions = {};
+  const rest = unquoteArg(unquoteArg(raw).replace(COMMAND_FLAG, (_m, _ws, key?: string, value?: string, no?: string) => {
+    if (key === "file" || key === "output") opts[key] = value;
+    else opts.judge = !no;
+    return "";
+  })).trim();
+  if (rest) opts.log = rest;
+  return opts;
+}
+
 // Idempotency window: a looping orchestrator re-planning the same log gets
 // the same run back instead of a fresh directory each time.
 const recentPlans = new Map<string, { runId: string; at: number }>();

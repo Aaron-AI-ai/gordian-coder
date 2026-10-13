@@ -85,6 +85,7 @@ describe("loadLogRules", () => {
     const files = all.map((r) => r.file);
     expect(files).toContain("framework_kb.md");
     expect(files).toContain("mapper_dao_xml.md");
+    expect(files).toContain("java_fix_conventions.md");
     expect(files.at(-1)).toBe("log/rules/sub/p.md");
     expect(all.find((r) => r.file === "framework_kb.md")!.content).toContain("Lookup is not required");
   });

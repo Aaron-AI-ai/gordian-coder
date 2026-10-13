@@ -1,6 +1,7 @@
 /**
  * f-log wiring for the OpenCode plugin: tool schemas over the core functions,
- * the two agents + command injected into the config, the idle watchdog, and
+ * the two agents + command injected into the config, the command hook that
+ * plans the run from the raw `/f-log` arguments, the idle watchdog, and
  * the guard-module registration that gives f-log the same loop defenses as
  * f-review (spec §13–14). The logic lives in core/log; nothing here decides.
  */
@@ -8,15 +9,16 @@ import type { Hooks, PluginInput } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import {
   finalizeRun, getLogState, logContext, logGuard, logJudgeContext, LOG_EXPLORERS, LOG_TOOLS,
-  onLogSessionIdle, planLog, runLogTool, submitLog, submitLogJudge, loadLogConfig,
+  onLogSessionIdle, parseLogCommandArgs, planLog, runLogTool, submitLog, submitLogJudge, loadLogConfig,
 } from "../../../core/log";
 import type { GuardState } from "../../../core/guard";
 import type { LogSession } from "../../../core/log/state";
 import type { ToolArg } from "../../../core/review/tools/index";
+import type { CommandBeforeHook } from "../modules";
 import { registerGuardModule } from "../repeat-guard";
 import {
   ANALYST_AGENT_DESCRIPTION, ANALYST_AGENT_NAME, ANALYST_AGENT_PERMISSION, ANALYST_AGENT_PROMPT, ANALYST_AGENT_TOOLS, analystAgentSteps,
-  JUDGE_AGENT_NAME, LOG_COMMAND_DESCRIPTION, LOG_COMMAND_NAME, LOG_COMMAND_TEMPLATE,
+  JUDGE_AGENT_NAME, LOG_COMMAND_DESCRIPTION, LOG_COMMAND_NAME, LOG_COMMAND_TEMPLATE, logCommandFailed, logCommandPlanned,
   LOG_JUDGE_AGENT_DESCRIPTION, LOG_JUDGE_AGENT_PERMISSION, LOG_JUDGE_AGENT_PROMPT, LOG_JUDGE_AGENT_STEPS, LOG_JUDGE_AGENT_TOOLS,
 } from "./prompts";
 
@@ -35,6 +37,7 @@ export function createLogModule(input: PluginInput): {
   tools: Record<string, ReturnType<typeof tool>>;
   event: NonNullable<Hooks["event"]>;
   config: NonNullable<Hooks["config"]>;
+  commandBefore: CommandBeforeHook;
 } {
   const cwd = input.directory;
 
@@ -155,6 +158,17 @@ export function createLogModule(input: PluginInput): {
     }
   };
 
+  // `/f-log <trace>`: plan from the raw arguments here, so the orchestrator
+  // never re-emits the pasted trace as an f_log_plan argument (thousands of
+  // output tokens). The template stays as the fallback for hosts without the hook.
+  const commandBefore: CommandBeforeHook = async ({ command, arguments: raw }, output) => {
+    if (command !== LOG_COMMAND_NAME) return;
+    const part = output.parts.find((p) => p.type === "text");
+    if (!part) return;
+    const planOutput = planLog(parseLogCommandArgs(raw), cwd);
+    part.text = planOutput.startsWith("⚠️") ? logCommandFailed(planOutput) : logCommandPlanned(planOutput);
+  };
+
   const config: NonNullable<Hooks["config"]> = async (cfg) => {
     const steps = analystAgentSteps(loadLogConfig(cwd).maxToolCalls);
     (cfg.agent ??= {})[ANALYST_AGENT_NAME] ??= {
@@ -172,5 +186,6 @@ export function createLogModule(input: PluginInput): {
     tools: { f_log_plan, f_log_context, ...explorers, f_log_submit, f_log_judge_context, f_log_judge, f_log_finalize },
     event,
     config,
+    commandBefore,
   };
 }

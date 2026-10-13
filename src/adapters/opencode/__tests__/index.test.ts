@@ -279,3 +279,12 @@ describe("OpenCode repeat-hook integration", () => {
     expect(getState(sessionID)!.explorationSealed).toBe(true);
   });
 });
+
+describe("OpenCode command hook", () => {
+  test("exposes command.execute.before and routes /f-log through the log module", async () => {
+    const hooks = (await adapterHooks(gitRepo())) as Hooks & Record<string, any>;
+    const out = { parts: [{ type: "text", text: "template" }] };
+    await hooks["command.execute.before"]({ command: "f-log", sessionID: "cmd-s", arguments: "java.lang.IllegalStateException: x\n\tat a.B.c(B.java:1)" }, out);
+    expect(out.parts[0].text).toContain("Do NOT call f_log_plan");
+  });
+});

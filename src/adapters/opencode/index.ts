@@ -6,7 +6,7 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { VERSION } from "../../version";
-import { createModules } from "./modules";
+import { createModules, type CommandBeforeHook } from "./modules";
 import { mergeSystemPrompts } from "./system-merge";
 import {
   recordCall,
@@ -112,6 +112,13 @@ const OpenCodeAdapter: Plugin = async (input) => {
     .filter((t) => t != null);
   const moduleEvents = modules.map((m) => m.event).filter((e) => e != null);
   const moduleConfigs = modules.map((m) => m.config).filter((c) => c != null);
+  const moduleCommandHooks = modules.map((m) => m.commandBefore).filter((h) => h != null);
+  // Spread in, not written in the literal: the pinned SDK's Hooks type lacks this key.
+  const commandHooks = {
+    "command.execute.before": async (...args: Parameters<CommandBeforeHook>) => {
+      for (const h of moduleCommandHooks) await h(...args);
+    },
+  };
 
   const abortSession = async (sessionID: string): Promise<void> => {
     try {
@@ -126,6 +133,8 @@ const OpenCodeAdapter: Plugin = async (input) => {
   };
 
   return {
+    ...commandHooks,
+
     // Register tools from core + feature-module tools
     tool: { ...createOpenCodeTools(), ...moduleTools },
 

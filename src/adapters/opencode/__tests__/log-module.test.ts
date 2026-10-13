@@ -39,3 +39,33 @@ describe("createLogModule", () => {
     expect(new Set(names).size).toBe(names.length); // no tool name collisions across modules
   });
 });
+
+describe("f-log command.execute.before", () => {
+  const m = createLogModule(input);
+  const TRACE = "java.lang.NullPointerException: row is null\n\tat a.Svc.run(Svc.java:2)";
+  const parts = (text: string) => [{ type: "text", text }, { type: "file", url: "file:///x" }];
+
+  test("plans the run in code and swaps the template for a start-at-step-2 prompt", async () => {
+    const out = { parts: parts(`template with ${TRACE} pasted`) };
+    await m.commandBefore!({ command: "f-log", sessionID: "s", arguments: `--no-judge ${TRACE}` }, out);
+    const text = out.parts[0].text!;
+    expect(text).toMatch(/runId: \S+/);
+    expect(text).toContain("judge: off");
+    expect(text).toContain("Do NOT call f_log_plan");
+    expect(text).toContain("f-log-analyst");
+    expect(text).not.toContain(TRACE); // the model never sees (or re-emits) the trace
+    expect(out.parts[1]).toEqual({ type: "file", url: "file:///x" }); // attachments untouched
+  });
+  test("a plan failure becomes a relay-and-stop instruction", async () => {
+    const out = { parts: parts("template") };
+    await m.commandBefore!({ command: "f-log", sessionID: "s", arguments: "no trace here" }, out);
+    expect(out.parts[0].text).toContain("⚠️");
+    expect(out.parts[0].text).toContain("verbatim");
+    expect(out.parts[0].text).not.toContain("f-log-analyst");
+  });
+  test("other commands pass through", async () => {
+    const out = { parts: parts("other") };
+    await m.commandBefore!({ command: "f-review", sessionID: "s", arguments: TRACE }, out);
+    expect(out.parts[0].text).toBe("other");
+  });
+});

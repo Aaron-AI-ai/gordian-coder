@@ -69,6 +69,15 @@ describe("bundled fico rules", () => {
     expect(files(["org.springframework.context.annotation.ConflictingBeanDefinitionException"])).toContain("fico_wiring.md");
     expect(files(["org.springframework.context.annotation.BeanDefinitionOverrideException"])).toContain("fico_wiring.md");
   });
+  test("java_fix_conventions (shared with f-review) fires when a suspect file is Java, and only then", () => {
+    const all = (types: string[], paths: string[]) => matchLogRules(rules, types, paths).map((r) => r.file);
+    expect(all(["java.lang.NullPointerException"], ["src/main/java/a/Svc.java"])).toContain("java_fix_conventions.md");
+    expect(all(["java.lang.NullPointerException"], ["src/main/resources/mapper/A.xml"])).not.toContain("java_fix_conventions.md");
+    expect(all(["java.lang.NullPointerException"], [])).not.toContain("java_fix_conventions.md");
+    const rule = rules.find((r) => r.file === "java_fix_conventions.md")!;
+    expect(rule.content).toContain("@NoArgsConstructor");
+    expect(rule.content).toContain("MessageCode.FWKE0002");
+  });
   test("handler gate: fico_exception_flow fires on a handler errorCode even without a matching exception type (I-4)", () => {
     expect(files(["java.lang.NullPointerException"], [], { errorCode: "1001" })).toContain("fico_exception_flow.md");
     expect(files(["java.lang.NullPointerException"])).not.toContain("fico_exception_flow.md");

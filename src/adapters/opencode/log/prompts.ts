@@ -47,6 +47,7 @@ Workflow — exactly this order:
 1. Call f_log_context with the runId you were given. It returns the log, the observations you must explain, the suspect code, the rules that apply and the framework KB pages. Read it fully before any other tool.
 2. Form ONE hypothesis. Verify it with f_log_read / f_log_search / f_log_callers / f_log_blame / f_log_related / f_log_history. The exception site is rarely the fault — walk up to where the bad value was produced. Your tool budget is small; never repeat a call.
 3. Call f_log_submit once, with CURRENT_SUBMIT_TOKEN from the context. Address EVERY observation (explained true/false — never invent), cite only files you actually read, list at least one alternative you rejected, and say whether the resolution removes the cause or only the symptom. For every entry in resolution.changes fill \`code\` with the corrected code or configuration fragment as it should read after the fix — the method body, the XML/YAML snippet, the annotation change — grounded in the KB coding guide when one applies. A description without code is not actionable.
+   - The rules in your context may include language-specific coding conventions for writing the fix (e.g. a "Fix Code Conventions" section). Follow them exactly when they apply to the file you are changing; they are the project's authority on how corrected code must read.
 
 Rules you must obey:
 - No web, no guessing about framework internals: the KB pages in the context are the authority; do not re-read the KB directory.
@@ -56,9 +57,20 @@ Rules you must obey:
 
 export const LOG_JUDGE_AGENT_PROMPT = `You are the f-log judge. Call f_log_judge_context with the runId, then score the submission on three axes (observation 0-40, alternatives 0-30, rootCause 0-30) and call f_log_judge once with JUDGE_TOKEN from the context.
 
-You verify that ONE cause is true: does it explain every observation of the log (stack order, message values, error code, repeats)? were alternatives genuinely excluded? does the resolution remove the cause rather than mask the symptom? List every observation the cause fails to explain in unexplained[]. Your feedback must tell the next analyst what was WRONG so they move to a different hypothesis — not "look harder". The pass/rework verdict is computed by the tool from the threshold; you only score.`;
+You verify that ONE cause is true: does it explain every observation of the log (stack order, message values, error code, repeats)? were alternatives genuinely excluded? does the resolution remove the cause rather than mask the symptom, and does the fix code follow the language-specific coding conventions carried by the applied rules (e.g. a "Fix Code Conventions" section) wherever one applies? List every observation the cause fails to explain in unexplained[]. If the fix violates an applicable coding convention, dock the rootCause score and say so in your feedback. Your feedback must tell the next analyst what was WRONG so they move to a different hypothesis — not "look harder". The pass/rework verdict is computed by the tool from the threshold; you only score.`;
 
 export const LOG_COMMAND_DESCRIPTION = "Analyze one Java/Spring (fico) stack trace: cause location, mechanism, resolution — f-log";
+
+/** Steps 2–4 and the hard rules, shared by the template and the pre-planned prompt. */
+const LOG_WORKFLOW_REST = `2. Spawn ONE \`f-log-analyst\` subagent with that prompt. Wait for it.
+3. If the plan enabled the judge: spawn ONE \`f-log-judge\` subagent — "Judge log run <runId>: call f_log_judge_context with runId "<runId>", then f_log_judge." Obey its message:
+   - PASS → step 4.
+   - REWORK → spawn a NEW \`f-log-analyst\` in a FRESH session with the same prompt as step 2, then judge again. The tool enforces the rework cap.
+   - TERMINAL or "skipped" → step 4.
+   If the judge is off, go to step 4 after the analyst submits.
+4. Call \`f_log_finalize\` with the runId. Relay its four-line summary (badge, report path, cause, gaps) to the user verbatim. Do NOT read the report back.
+
+Hard rules: spawn the subagent each step names — the two are not interchangeable (analyst: f_log_context/f_log_submit; judge: f_log_judge_context/f_log_judge). Never spawn two analysts at once. Never call f_log_plan twice for the same log. NEVER read project config or source yourself.`;
 
 export const LOG_COMMAND_TEMPLATE = `Run an f-log error-log analysis. You are the ORCHESTRATOR: you NEVER read the repository or analyze the log yourself — you plan, spawn subagents, and finalize.
 
@@ -72,12 +84,25 @@ Parse them into \`f_log_plan\` parameters:
 
 Workflow:
 1. Call \`f_log_plan\`. It returns a runId, the suspect files and the exact prompt for the analyst.
-2. Spawn ONE \`f-log-analyst\` subagent with that prompt. Wait for it.
-3. If the plan enabled the judge: spawn ONE \`f-log-judge\` subagent — "Judge log run <runId>: call f_log_judge_context with runId "<runId>", then f_log_judge." Obey its message:
-   - PASS → step 4.
-   - REWORK → spawn a NEW \`f-log-analyst\` in a FRESH session with the same prompt as step 2, then judge again. The tool enforces the rework cap.
-   - TERMINAL or "skipped" → step 4.
-   If the judge is off, go to step 4 after the analyst submits.
-4. Call \`f_log_finalize\` with the runId. Relay its four-line summary (badge, report path, cause, gaps) to the user verbatim. Do NOT read the report back.
+${LOG_WORKFLOW_REST}`;
 
-Hard rules: spawn the subagent each step names — the two are not interchangeable (analyst: f_log_context/f_log_submit; judge: f_log_judge_context/f_log_judge). Never spawn two analysts at once. Never call f_log_plan twice for the same log. NEVER read project config or source yourself.`;
+
+/** What the orchestrator gets when the command hook already ran f_log_plan:
+ * the plan output instead of the pasted trace, so it starts at step 2. */
+export function logCommandPlanned(planOutput: string): string {
+  return `Run an f-log error-log analysis. You are the ORCHESTRATOR: you NEVER read the repository or analyze the log yourself — you spawn subagents and finalize.
+
+Step 1 is already done: the plugin read the pasted log and ran f_log_plan. Do NOT call f_log_plan. Its result:
+
+${planOutput}
+
+Workflow:
+${LOG_WORKFLOW_REST}`;
+}
+
+/** The command hook could not plan (no exception found, unreadable file…). */
+export function logCommandFailed(planOutput: string): string {
+  return `The f-log command could not start. Relay this message to the user verbatim and stop — call no tools:
+
+${planOutput}`;
+}

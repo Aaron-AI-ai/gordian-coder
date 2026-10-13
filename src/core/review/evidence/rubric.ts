@@ -14,6 +14,7 @@ import { loadConfig } from "../config";
 import FRAMEWORK_DEFAULT from "./knowledge/framework.md" with { type: "text" };
 import FRAMEWORK_KB_RULE from "./rules/framework_kb.md" with { type: "text" };
 import JAVA_RULE from "./rules/java.md" with { type: "text" };
+import JAVA_FIX_RULE from "./rules/java_fix_conventions.md" with { type: "text" };
 import MAPPER_RULE from "./rules/mapper_dao_xml.md" with { type: "text" };
 
 const MAX_BULLETS_PER_CATEGORY = 12;
@@ -169,6 +170,7 @@ function parseRule(raw: string): { globs: string[]; content: string; reference: 
  * ponytail: static imports — adding a bundled rule means adding a line here. */
 export const BUNDLED_RULES: ExtraRule[] = [
   { file: "java.md", ...parseRule(JAVA_RULE) },
+  { file: "java_fix_conventions.md", ...parseRule(JAVA_FIX_RULE) },
   { file: "mapper_dao_xml.md", ...parseRule(MAPPER_RULE) },
 ];
 
