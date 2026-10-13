@@ -19,11 +19,11 @@ import { loadConfig, resolveDeepPasses, resolveMaxIter, resolveMaxToolCalls } fr
 import { buildRubric, loadFrameworkGuide, loadExtraRules, rubricSources } from "../evidence/rubric";
 
 import { renderReviewContext, resolveOutputPath, resolveManifestPath, writeManifest, loadBaseline, defaultLabel, manifestTimestamp } from "../report/output";
-import { runFreshness } from "./run-store";
+import { runFreshness, unfinishedRuns } from "./run-store";
 import { loadRun, runUnits } from "./artifact";
 import { readFileReviewResult } from "./artifact";
 import { judgeFeedbackFor, currentReviewTerminal, reworkCap, reworkCount, reviewReworkStatus } from "./judge";
-import { setState, getState, currentFile, activeStates, type ReviewState } from "./state";
+import { setState, getState, clearState, currentFile, activeStates, type ReviewState } from "./state";
 import { afterRef, MAX_ITER } from "../tools/read";
 
 import { SEGMENT_THRESHOLD, planSegments, targetPath, targetRange } from "./segment";
@@ -231,24 +231,75 @@ function startRunFileReview(
   ].join("\n");
 }
 
+/** Who is calling f_review_context. `fromRunWorker` is true for the bundled
+ * f-reviewer subagent, which only ever reviews one unit of an existing run. */
+export interface StartReviewCaller {
+  fromRunWorker?: boolean;
+}
+
+/** The runId-less calls a run worker makes by mistake, and the fix for each.
+ * A small model was observed opening with `f_review_context {}` and with
+ * `{files:[<its unit>]}` — both dropped the runId, both started a sequential
+ * review that wrote (and archived) the aggregate report folder while the
+ * unit it was spawned for went missing. Returns null when the call is fine. */
+function runWorkerMisfire(args: StartReviewArgs, cwd: string): string | null {
+  const bare = !args.commit && !args.from && !args.to && !args.files?.length;
+  if (bare) {
+    return (
+      `❌ No parameters. This subagent reviews ONE unit of an existing run: call f_review_context ` +
+      `with runId="<the runId from your instructions>" and files=["<the unit id from your instructions>"].`
+    );
+  }
+  if (!args.files?.length) return null;
+  // files without a runId: if an unfinished run lists one of them as a unit,
+  // the runId was dropped — name it instead of starting a sequential review.
+  const wanted = args.files.map((f) => f.replaceAll("\\", "/").replace(/^\.\//, ""));
+  const owners = unfinishedRuns(cwd).filter((run) =>
+    wanted.some((unit) => runUnits(run).includes(unit))
+  );
+  if (!owners.length) return null; // legacy sequential review of explicit files
+  const run = owners[0];
+  const unit = wanted.find((u) => runUnits(run).includes(u))!;
+  return (
+    `❌ runId missing. Run ${run.runId} lists ${unit} as a unit — call f_review_context with ` +
+    `runId="${run.runId}" and files=["${unit}"]` +
+    (owners.length > 1 ? ` (other unfinished runs also list it: ${owners.slice(1).map((r) => r.runId).join(", ")})` : "") +
+    `.`
+  );
+}
+
 /** Collect targets, seed session state, write the manifest. Returns the
  * message the reviewer model sees (target preview, warnings, next step). */
 async function startReviewUnlocked(
   args: StartReviewArgs,
   cwd: string,
-  sessionId: string
+  sessionId: string,
+  caller: StartReviewCaller
 ): Promise<string> {
   const existing = getState(sessionId);
   if (existing?.active) {
-    return (
-      `ℹ️ Duplicate f_review_context ignored; this session is already reviewing ` +
-      `${currentFile(existing) ?? "its current target"}. Continue the existing review and call ` +
-      `f_review_submit with CURRENT_SUBMIT_TOKEN=${existing.submitToken}; progress was preserved.`
-    );
+    // A runId call arriving over a sequential session that has not submitted
+    // anything is the worker's SECOND attempt after a dropped-runId first call:
+    // the stray state has nothing worth keeping, so the run join wins.
+    const stray = !existing.runId && existing.currentIndex === 0 && !Object.keys(existing.findings).length;
+    if (args.runId && stray) {
+      clearState(sessionId);
+    } else {
+      return (
+        `ℹ️ Duplicate f_review_context ignored; this session is already reviewing ` +
+        `${currentFile(existing) ?? "its current target"}. Continue the existing review and call ` +
+        `f_review_submit with CURRENT_SUBMIT_TOKEN=${existing.submitToken}; progress was preserved.`
+      );
+    }
   }
 
   // Parallel-run mode: join an existing run and review one file of it.
   if (args.runId) return startRunFileReview(args.runId, args.files, cwd, sessionId);
+
+  if (caller.fromRunWorker) {
+    const misfire = runWorkerMisfire(args, cwd);
+    if (misfire) return misfire;
+  }
 
   // Commit range takes precedence: `from..to` (to defaults to HEAD) over a
   // single `commit`. Left undefined for explicit-file reviews.
@@ -422,12 +473,13 @@ async function startReviewUnlocked(
 export function startReview(
   args: StartReviewArgs,
   cwd: string,
-  sessionId: string
+  sessionId: string,
+  caller: StartReviewCaller = {}
 ): Promise<string> {
   const previous = contextStarts.get(sessionId) ?? Promise.resolve("");
   const current = previous
     .catch(() => "")
-    .then(() => startReviewUnlocked(args, cwd, sessionId));
+    .then(() => startReviewUnlocked(args, cwd, sessionId, caller));
   contextStarts.set(sessionId, current);
   const cleanup = (): void => {
     if (contextStarts.get(sessionId) === current) contextStarts.delete(sessionId);

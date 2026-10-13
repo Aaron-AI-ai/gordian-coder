@@ -115,7 +115,12 @@ export function createReviewModule(input: PluginInput): {
         ),
     },
     async execute(args, ctx) {
-      return startReview(args, cwd, ctx.sessionID);
+      // The bundled reviewer only ever joins a run; telling core so lets it
+      // refuse the runId-less calls a small model makes instead of starting
+      // a stray sequential review that overwrites the aggregate report.
+      return startReview(args, cwd, ctx.sessionID, {
+        fromRunWorker: ctx.agent === REVIEWER_AGENT_NAME,
+      });
     },
   });
 

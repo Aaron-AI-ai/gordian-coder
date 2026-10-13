@@ -649,6 +649,45 @@ describe("run-mode session (startReview/submitReview with runId)", () => {
     );
   });
 
+  it("refuses an empty f_review_context from a run worker instead of starting a stray sequential review", async () => {
+    // Observed live: a small-model f-reviewer opened with `f_review_context {}`,
+    // which reviewed the latest commit in sequential mode and wrote (and
+    // archived!) the aggregate report folder — while its segment went missing.
+    const d = gitRepo();
+    const out = await startReview({}, d, "rs", { fromRunWorker: true });
+    expect(out).toContain("runId");
+    expect(out).toContain("ONE unit");
+    expect(getState("rs")).toBeUndefined();
+    // The same empty call from the orchestrator / a user keeps its documented
+    // meaning: review the latest commit.
+    expect(await startReview({}, d, "rs")).toContain("Queued");
+  });
+
+  it("refuses files-without-runId from a run worker when an unfinished run lists that unit", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(["a.ts"]), d);
+    const out = await startReview({ files: ["a.ts"] }, d, "rs", { fromRunWorker: true });
+    expect(out).toContain(`runId="${meta.runId}"`);
+    expect(out).toContain('files=["a.ts"]');
+    expect(getState("rs")).toBeUndefined();
+    // No run lists it → the legacy sequential path is still available.
+    const seq = await startReview({ files: ["b.ts"] }, d, "rs2", { fromRunWorker: true });
+    expect(seq).toContain("Queued 1 target(s)");
+    clearState("rs2");
+  });
+
+  it("lets a runId call take over a stray sequential session that has submitted nothing", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(["a.ts"]), d);
+    expect(await startReview({}, d, "rs")).toContain("Queued"); // stray sequential start
+    expect(getState("rs")?.runId).toBeUndefined();
+    const joined = await startReview({ runId: meta.runId, files: ["a.ts"] }, d, "rs");
+    expect(joined).toContain(`Run ${meta.runId}: reviewing a.ts`);
+    expect(joined).not.toContain("Duplicate f_review_context ignored");
+    expect(getState("rs")?.runId).toBe(meta.runId);
+    expect(getState("rs")?.targets).toEqual(["a.ts"]);
+  });
+
   it("legacy run without units still splits a large whole-mode target within ONE session", async () => {
     const d = gitRepo();
     const big = Array.from({ length: 1200 }, (_, i) => `// l${i}`).join("\n") + "\n";
