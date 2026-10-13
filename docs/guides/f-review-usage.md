@@ -50,6 +50,16 @@ OpenCode TUI에서 **리뷰할 파일을 지정**합니다.
 
 - 여러 개는 쉼표로 구분합니다 (공백 없이)
 - 경로는 **프로젝트 루트 기준 상대 경로**입니다
+- 항목마다 **디렉터리**, **`.`(프로젝트 전체)**, **글롭**도 됩니다 — 추적+미추적 파일을 포함하고
+  `.gitignore`는 존중합니다. `*`는 한 단계, `**`는 하위 전체.
+
+```
+/f-review --files=src/main/java/kr/co/koscom/pb/on/stk/ord/online
+/f-review --files=**/src/main/**/*.java --exclude=**/evosuite-cp/**
+/f-review --files=. --exclude=**/test/**
+```
+
+한 run에 최대 100파일이라, 넘치면 plan이 거부하고 범위를 좁히라고 안내합니다.
 - 커밋 범위를 주지 않았으므로 **파일 전체**가 리뷰 대상이 됩니다 (diff가 아님)
 
 ### 자주 쓰는 옵션

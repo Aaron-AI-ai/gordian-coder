@@ -3,7 +3,7 @@
 ## 1. 설치
 
 ```powershell
-tar -xzf gordian-coder-offline-0.2.3-<타임스탬프>.tar.gz
+tar -xzf gordian-coder-offline-0.2.4-<타임스탬프>.tar.gz
 cd offline-package
 
 powershell -ExecutionPolicy Bypass -File .\install.ps1
@@ -22,10 +22,10 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 **설치 후 새 터미널을 열어야** PATH가 적용됩니다.
 
 버전을 확인해 **의도한 버전이 제대로 설치되었는지** 반드시 검증하세요.
-번들 파일명의 버전(`gordian-coder-offline-0.2.3-...`)과 아래 출력이 일치해야 합니다.
+번들 파일명의 버전(`gordian-coder-offline-0.2.4-...`)과 아래 출력이 일치해야 합니다.
 
 ```powershell
-gdc --version        # 예: gdc v0.2.3
+gdc --version        # 예: gdc v0.2.4
 ```
 
 값이 다르거나 명령을 찾지 못하면 이전 설치본의 링크가 남아 있는 경우입니다.
@@ -131,7 +131,7 @@ gdc --deinit-opencode --global            # 등록 해제
 **삭제 불필요.** 새 번들로 설치 스크립트를 다시 실행하면 됩니다.
 
 ```powershell
-tar -xzf gordian-coder-offline-0.2.3-<새 타임스탬프>.tar.gz
+tar -xzf gordian-coder-offline-0.2.4-<새 타임스탬프>.tar.gz
 cd offline-package
 
 $env:SKIP_BUN="1"      # Bun 이미 있음 → 108MB 압축 해제 생략

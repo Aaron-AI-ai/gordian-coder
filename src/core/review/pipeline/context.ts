@@ -209,6 +209,33 @@ function resolveTargetPath(spec: string, cwd: string, ref: string | null): strin
   );
 }
 
+/**
+ * Expand a `--files` entry that names many files — a directory, `.` for the
+ * whole project, or a glob — into the repository files it covers. Returns
+ * null for a plain path so the single-file resolver keeps handling those.
+ *
+ * Candidates come from the same listing resolveTargetPath searches
+ * (tracked + untracked minus .gitignore in a git repo), so a directory and a
+ * file name resolve against one view of the tree. The glob dialect is
+ * Bun.Glob's, the one `exclude` already uses: `*` stays within a segment,
+ * `**` crosses directories.
+ */
+function expandTargetSpec(spec: string, cwd: string, ref: string | null): string[] | null {
+  const isGlob = /[*?[]/.test(spec);
+  const dir = spec.replace(/\/+$/, "");
+  const isDir =
+    !isGlob &&
+    (dir === "" || dir === "." || (existsSync(join(cwd, dir)) && statSync(join(cwd, dir)).isDirectory()));
+  if (!isGlob && !isDir) return null;
+  const files = listFilesAt(cwd, ref).filter((f) => !f.startsWith(`${RUNS_DIR}/`));
+  if (isGlob) {
+    const glob = new Bun.Glob(spec);
+    return files.filter((f) => glob.match(f));
+  }
+  if (dir === "" || dir === ".") return files;
+  return files.filter((f) => f.startsWith(`${dir}/`));
+}
+
 /** Build the deduped, exclude-filtered, sorted target file list. */
 export async function collectTargets(
   input: ReviewInput,
@@ -225,8 +252,17 @@ export async function collectTargets(
   if (input.files) {
     const problems: string[] = [];
     for (const f of input.files) {
+      const spec = normalizeTarget(f, cwd);
+      // A directory or glob stands for many files; an empty expansion is an
+      // error like a missing file, reported together with the others.
+      const expanded = expandTargetSpec(spec, cwd, afterRef(range));
+      if (expanded) {
+        if (!expanded.length) problems.push(`no file matching "${spec}" in this repository`);
+        for (const path of expanded) set.add(path);
+        continue;
+      }
       try {
-        set.add(resolveTargetPath(normalizeTarget(f, cwd), cwd, afterRef(range)));
+        set.add(resolveTargetPath(spec, cwd, afterRef(range)));
       } catch (err) {
         problems.push(err instanceof Error ? err.message : String(err));
       }

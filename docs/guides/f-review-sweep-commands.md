@@ -1,8 +1,31 @@
 # f-review 일괄 실행 명령 모음 (복사용 한 줄)
 
 프로젝트 루트(예: `/Users/koscom/workspace/fico/on-stk-ord`)에서 실행합니다. 모델은 필요에 맞게 바꾸세요.
-`f_review_plan`은 글롭을 받지 않으므로 셸에서 파일 목록을 만들어 `--files=`로 넘기는 방식입니다.
 한 run에 최대 100파일. 파일만 넘기면 whole-file 모드로 돌고, 1000줄 초과 파일은 500줄 unit으로 쪼개져 병렬 리뷰됩니다.
+
+## OpenCode TUI에서 (디렉터리·글롭 직접 지정 — 셸 전개 불필요)
+
+`--files` 항목에 디렉터리, `.`, 글롭을 그대로 쓸 수 있습니다 (추적+미추적, `.gitignore` 존중).
+
+```
+/f-review --files=on-stk-ord-online/src/main
+```
+
+```
+/f-review --files=**/src/main/**/*.java --exclude=**/evosuite-cp/**
+```
+
+```
+/f-review --files=. --exclude=**/test/**,**/evosuite-cp/**
+```
+
+터미널에서도 같은 형태가 가장 짧고, 오케스트레이터가 긴 경로 목록을 다시 타이핑할 일이 없어 안전합니다:
+
+```bash
+cd /Users/koscom/workspace/fico/on-stk-ord && opencode run --command f-review -m openrouter/qwen/qwen3.8-27b -- "--files=on-stk-ord-online/src/main"
+```
+
+아래의 `$(git ls-files …)` 변형은 글롭 지원 이전 방식이며, 100파일 초과 시 청크 루프에는 여전히 필요합니다.
 
 ## 모듈 단위 (권장)
 

@@ -147,6 +147,62 @@ describe("collectTargets (files-only, no git)", () => {
     expect(targets).toEqual(["src/a.ts", "src/b.ts"]); // deduped against the relative form
   });
 
+  it("expands a directory entry to every file under it", async () => {
+    const d = withFiles(tmp(), ["src/main/A.java", "src/main/sub/B.java", "src/test/T.java", "README.md"]);
+    expect(await collectTargets({ files: ["src/main"] }, d)).toEqual([
+      "src/main/A.java",
+      "src/main/sub/B.java",
+    ]);
+    // Trailing slash and "./" prefix are the same directory.
+    expect(await collectTargets({ files: ["./src/main/"] }, d)).toEqual([
+      "src/main/A.java",
+      "src/main/sub/B.java",
+    ]);
+  });
+
+  it("expands a glob entry, with ** crossing directories", async () => {
+    const d = withFiles(tmp(), ["a/src/main/A.java", "b/src/main/x/B.java", "b/src/test/T.java", "a/src/main/notes.md"]);
+    expect(await collectTargets({ files: ["**/src/main/**/*.java"] }, d)).toEqual([
+      "a/src/main/A.java",
+      "b/src/main/x/B.java",
+    ]);
+    expect(await collectTargets({ files: ["*/src/main/*.java"] }, d)).toEqual(["a/src/main/A.java"]);
+  });
+
+  it("'.' means the whole project, still minus default and configured excludes", async () => {
+    const d = withFiles(tmp(), ["src/A.java", "src/A.test.java", ".github/ci.yml", "build/A.class"]);
+    writeFileSync(join(d, ".f-review.json"), JSON.stringify({ exclude: ["**/*.test.java"] }));
+    expect(await collectTargets({ files: ["."] }, d)).toEqual(["src/A.java"]);
+  });
+
+  it("mixes directories, globs and plain files, deduped", async () => {
+    const d = withFiles(tmp(), ["src/A.java", "src/B.java", "lib/C.java"]);
+    expect(await collectTargets({ files: ["src", "**/C.java", "src/A.java"] }, d)).toEqual([
+      "lib/C.java",
+      "src/A.java",
+      "src/B.java",
+    ]);
+  });
+
+  it("reports a directory or glob that matches nothing, alongside other bad entries", async () => {
+    const d = withFiles(tmp(), ["src/A.java"]);
+    await expect(collectTargets({ files: ["**/*.kt", "src"] }, d)).rejects.toThrow(/\*\*\/\*\.kt/);
+    await expect(collectTargets({ files: ["empty-dir-that-does-not-exist/"] }, d)).rejects.toThrow(
+      /no file matching/
+    );
+  });
+
+  it("directory and glob expansion honours .gitignore in a git repo", async () => {
+    const d = gitRepo();
+    withFiles(d, ["src/A.java", "src/gen/G.java", "src/Untracked.java"]);
+    writeFileSync(join(d, ".gitignore"), "src/gen/\n");
+    Bun.spawnSync(["git", "add", "src/A.java", ".gitignore"], { cwd: d });
+    Bun.spawnSync(["git", "commit", "-qm", "init"], { cwd: d });
+    // Tracked and untracked files both count; ignored ones never do.
+    expect(await collectTargets({ files: ["src"] }, d)).toEqual(["src/A.java", "src/Untracked.java"]);
+    expect(await collectTargets({ files: ["src/**/*.java"] }, d)).toEqual(["src/A.java", "src/Untracked.java"]);
+  });
+
   it("rejects a target that is not in this repository", async () => {
     // Previously an absolute path outside cwd was carried through untouched,
     // and every later read missed — the reviewer then reported the file as

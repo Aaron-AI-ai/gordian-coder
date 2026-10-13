@@ -262,7 +262,9 @@ Free-form arguments: $ARGUMENTS
 Parse the arguments into \`f_review_plan\` parameters (all optional):
 - a bare ref (\`HEAD\`, \`<sha>\`) or range (\`A..B\`) → \`commit\`
 - \`--from=<ref>\` / \`--to=<ref>\` → \`from\` / \`to\`
-- \`--files=a.ts,b.ts\` → \`files\`
+- \`--files=a.ts,b.ts\` → \`files\` (each entry may also be a directory, \`.\` for the
+  whole project, or a glob such as \`**/src/main/**/*.java\` — pass it through
+  verbatim; the tool expands it)
 - \`--whole\` → \`whole\` (review full file content instead of just the diff;
   files-only reviews without a commit default to whole-file automatically)
 - \`--exclude=glob,glob\` → \`exclude\`
