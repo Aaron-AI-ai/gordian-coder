@@ -311,23 +311,41 @@ export function changeExcerpt(
   }
   if (!hiddenLines.length) return base;
 
-  const windows = findingWindows(hiddenLines, totalLines).map(({ start, end }) =>
-    renderFileContent(file, content, start, end, end - start + 1, JUDGE_CHANGE_MAX_BYTES)
-  );
-  const excerpt = [
-    base,
-    base
-      ? `### Excerpts around finding lines the capped excerpt above does not show`
-      : `### ${file} is ${totalLines} lines — too large to show whole; excerpts around every finding line`,
-    `(judge these findings against the windows below, not against absence:\n` +
-      `code outside these ranges was not shown to you and is not a coverage gap)`,
-    ...windows,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  const assemble = (withBase: string, lines: number[]): { text: string; count: number } => {
+    const windows = findingWindows(lines, totalLines).map(({ start, end }) =>
+      renderFileContent(file, content, start, end, end - start + 1, JUDGE_CHANGE_MAX_BYTES)
+    );
+    const text = [
+      withBase,
+      withBase
+        ? `### Excerpts around finding lines the capped excerpt above does not show`
+        : `### ${file} is ${totalLines} lines — too large to show whole; excerpts around every finding line`,
+      `(judge these findings against the windows below, not against absence:\n` +
+        `code outside these ranges was not shown to you and is not a coverage gap)`,
+      ...windows,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    return { text, count: windows.length };
+  };
+
+  let { text: excerpt, count } = assemble(base, hiddenLines);
+  if (byteLen(excerpt) > JUDGE_CHANGE_MAX_BYTES && base && shown) {
+    // The base fit on its own but not beside the windows — a 500-line segment
+    // renders to ~23 KB and leaves no room for even one. Same rule as a file
+    // too large for the base: drop it and let windows around EVERY anchored
+    // finding own the budget. Unanchored findings would then be judged
+    // against nothing, so they keep the fail-closed path below.
+    const anchored = findings
+      .map((finding) => finding.line)
+      .filter((line): line is number => line !== undefined);
+    if (anchored.length === findings.length) {
+      ({ text: excerpt, count } = assemble("", anchored));
+    }
+  }
   if (byteLen(excerpt) > JUDGE_CHANGE_MAX_BYTES) {
     return contextOverflow(
-      `${windows.length} merged finding window(s) plus the base exceed ${JUDGE_CHANGE_MAX_BYTES} bytes`
+      `${count} merged finding window(s) plus the base exceed ${JUDGE_CHANGE_MAX_BYTES} bytes`
     );
   }
   return excerpt;

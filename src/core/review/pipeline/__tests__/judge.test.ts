@@ -948,6 +948,49 @@ describe("segment units", () => {
     expect(out).toContain('file="big.ts#881-1200"');
   });
 
+  it("falls back to windows-only when a segment base plus an out-of-window finding window overflows", async () => {
+    // Observed live: a 500-line Java segment renders to ~23 KB, so adding one
+    // window for a finding anchored outside the segment pushed the excerpt
+    // over JUDGE_CHANGE_MAX_BYTES and the unit went terminal INCOMPLETE. The
+    // whole-file path already answers this with "whole or nothing": drop the
+    // base and let the windows own the budget.
+    // 40-char lines: a 500-line segment renders to ~23 KB — under the 24 KB
+    // base budget on its own, over it with one 51-line window added.
+    const d = gitRepo();
+    writeFileSync(
+      join(d, "mid.ts"),
+      Array.from({ length: 1200 }, (_, i) => {
+        const tail = ` // line ${i + 1}`;
+        return "x".repeat(40 - tail.length) + tail;
+      }).join("\n") + "\n"
+    );
+    const meta = await createRun(
+      baseMeta({ targets: ["mid.ts"], whole: true, range: null, units: ["mid.ts#1-500", "mid.ts#441-940", "mid.ts#881-1200"] }),
+      d
+    );
+    const review: FileReviewResult = {
+      ...reviewResult("mid.ts"),
+      target: "mid.ts#441-940",
+      findings: [
+        { ...reviewResult("mid.ts").findings[0], line: 600 }, // inside the window
+        { ...reviewResult("mid.ts").findings[0], line: 1100, rule: "r-outside" }, // surfaced by inFileRelated
+      ],
+    };
+    await writeFileReview(meta.runId, review, "# s2", d);
+    // Without the fallback the planner isolated the out-of-window finding in
+    // a part of its own and that part went terminal; with it, two windows fit
+    // in one prompt and no base is shown.
+    const out = judgeContext(meta.runId, "mid.ts#441-940", d);
+    expect(out).not.toContain("Judge context INCOMPLETE");
+    expect(out).toMatch(/\/\/ line 600\b/);
+    expect(out).toMatch(/\/\/ line 1100\b/);
+    expect(out).toContain("excerpts around every finding line"); // windows instead of the base
+    expect(out).not.toContain("LINE_RANGE: 441-940"); // the segment base itself is gone
+    expect(out).toContain('file="mid.ts#441-940"');
+    expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(JUDGE_CONTEXT_MAX_BYTES);
+    expect(loadJudgment(meta.runId, "mid.ts#441-940", d).terminal).toBeUndefined();
+  });
+
   it("a clean segment too wide for the base falls back to the coverage part addressed to the unit", async () => {
     // 500 lines × ~130 bytes ≈ 65 KB > JUDGE_CHANGE_MAX_BYTES: the segment base
     // cannot be shown whole, and a zero-finding review has no anchors, so the
