@@ -88,6 +88,22 @@ describe("tool registration", () => {
     expect(template).toContain("FIX PASS");
   });
 
+  it("command template defers the batch size and unit list to the plan", () => {
+    // The plan pins batchSize from config and lists segment units; a second
+    // hardcoded "5" or "per file" in the template would contradict it.
+    const { mod } = moduleFor(gitRepo());
+    const cfg: { agent: Record<string, unknown>; command: Record<string, { template: string }> } = {
+      agent: {},
+      command: {},
+    };
+    mod.config(cfg as never);
+    const template = cfg.command["f-review"]!.template;
+    expect(template).not.toContain("At most 5 subagents");
+    expect(template).toContain("the batch limit the plan states");
+    expect(template).toContain("ONE f-reviewer subagent per unit");
+    expect(template).toContain("per missing unit");
+  });
+
   it("gives every agent a permission map matching its own tools", () => {
     // `permission` is the boundary OpenCode enforces; `tools` is legacy
     // compatibility. f-fixer was registered with the JUDGE's permission map,
@@ -611,8 +627,10 @@ describe("part 파라미터", () => {
     // finalize 복구 절도 "파일당 하나"로 못박고 있었다. 분할된 파일의 복구는
     // part마다 하나가 필요하고, finalize 자신이 그렇게 지시한다.
     expect(flat).toContain("one per PART for a file finalize lists with parts");
-    // 리뷰어에는 part 개념이 없다 — 세그먼트는 한 세션 안의 일이다. 손대지 않는다.
-    expect(flat).toContain("ONE f-reviewer subagent per file;");
+    // 리뷰어에는 part 개념이 없다 — 세그먼트는 plan이 unit으로 나열하고, unit마다
+    // 서브에이전트 하나다. "per file"로 되돌아가면 분할 파일의 조각이 사라진다.
+    expect(flat).toContain("ONE f-reviewer subagent per unit listed by the plan");
+    expect(flat).not.toContain("ONE f-reviewer subagent per file;");
     // "파일을 다 띄웠으면 finalize"는 part 0만 띄우고 마무리하라는 말로도 읽힌다.
     expect(flat).not.toContain("When every file has been dispatched, call");
     expect(flat).toContain("every part of it included");

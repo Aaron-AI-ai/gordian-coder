@@ -15,11 +15,11 @@ import { type Finding } from "../contract";
 import { buildDiffMap } from "./context";
 import { afterRef, readFileAt, renderFileContent } from "../tools/read";
 import { loadExtraRules, loadFrameworkGuide, renderExtraRules } from "../evidence/rubric";
-import { readFcqFile, renderFcqEvidence } from "../evidence/fcq";
-import { loadRun, type RunMeta } from "./artifact";
+import { readFcqFile, renderFcqEvidence, violationsForTarget } from "../evidence/fcq";
+import { loadRun, resultUnit, type RunMeta } from "./artifact";
 import { runDir, type PersistedFileReviewResult } from "./artifact";
 import { planJudgeParts, type JudgePartPlan } from "./judge-parts";
-import { fileDeclarations } from "./segment";
+import { fileDeclarations, targetPath, targetRange } from "./segment";
 import {
   DEFAULT_JUDGE_THRESHOLD,
   artifactIdentity,
@@ -211,15 +211,18 @@ export function findingWindows(lines: number[], total: number): { start: number;
  * allowing a misleading PASS. */
 export function changeExcerpt(
   meta: RunMeta,
-  file: string,
+  unit: string,
   cwd: string,
   findings: Finding[]
 ): string | JudgeContextOverflow {
+  const file = targetPath(unit);
+  const range = targetRange(unit);
   const ref = afterRef(meta.range);
   const content = readFileAt(cwd, ref, file);
   const totalLines = content === null ? 0 : content.replace(/\n$/, "").split("\n").length;
   let base = "";
-  let visibleTo = 0;
+  // Lines the base shows; null when it shows none (diff base, or no base).
+  let shown: { start: number; end: number } | null = null;
   let needsWindows = false;
 
   if (meta.range && !meta.whole) {
@@ -236,18 +239,23 @@ export function changeExcerpt(
     if (content === null) {
       base = `Error: file not found: ${file}. The reviewed source is unavailable.`;
     } else {
+      // A segment unit's base is its own window, numbered with real line
+      // numbers; a file unit's base is the whole file. Either is shown whole or
+      // not at all (see below).
+      const span = range ?? { start: 1, end: totalLines };
+      const spanLines = span.end - span.start + 1;
       const rendered = renderFileContent(
         file,
         content,
-        1,
-        totalLines,
-        JUDGE_FILE_MAX_LINES,
+        span.start,
+        span.end,
+        Math.min(spanLines, JUDGE_FILE_MAX_LINES),
         JUDGE_CHANGE_MAX_BYTES
       );
       // The reader caps characters; the budget is bytes. A multi-byte source
       // can pass its cap and still overrun, so measure the cut here too.
       const whole =
-        totalLines <= JUDGE_FILE_MAX_LINES &&
+        spanLines <= JUDGE_FILE_MAX_LINES &&
         !rendered.includes("IS_TRUNCATED: true") &&
         byteLen(rendered) <= JUDGE_CHANGE_MAX_BYTES;
       // Whole or nothing. A partial base is a prefix the finding windows below
@@ -255,7 +263,7 @@ export function changeExcerpt(
       // that fits into a terminal INCOMPLETE. Without it the windows own the
       // whole change budget and the header says what is visible.
       base = whole ? rendered : "";
-      visibleTo = whole ? totalLines : 0;
+      shown = whole ? span : null;
       needsWindows = !whole;
     }
   }
@@ -267,32 +275,40 @@ export function changeExcerpt(
   if (byteLen(base) > JUDGE_CHANGE_MAX_BYTES) {
     return contextOverflow(`the base change excerpt exceeds ${JUDGE_CHANGE_MAX_BYTES} bytes`);
   }
-  if (!needsWindows) return base;
+  // A segment base is complete for ITS window, but a finding anchored outside
+  // it (a declaration inFileRelated surfaced from elsewhere in the file) still
+  // needs its own window — otherwise the judge refutes it against absence. A
+  // truncated diff has no reliable line coverage, so there every anchored
+  // finding receives a window; an intact diff base returns as-is.
+  const outside = (line: number): boolean => !shown || line < shown.start || line > shown.end;
+  const hiddenLines =
+    shown || needsWindows
+      ? findings
+          .map((finding) => finding.line)
+          .filter((line): line is number => line !== undefined && outside(line))
+      : [];
+  if (!needsWindows && !hiddenLines.length) return base;
   if (content === null) {
     return contextOverflow("the capped change excerpt requires finding windows but source is unavailable");
   }
 
-  // Once any part of the change is hidden, a clean review has no anchors from
-  // which to recover the omitted code, and an unanchored finding cannot be
-  // checked against a targeted window. Letting either case continue would let
-  // a judge see only the prefix and still award PASS/complete coverage.
-  if (!findings.length) {
-    return contextOverflow(
-      "the change excerpt is truncated and the zero-finding review has no anchors for the omitted code"
-    );
+  if (needsWindows) {
+    // Once any part of the change is hidden, a clean review has no anchors from
+    // which to recover the omitted code, and an unanchored finding cannot be
+    // checked against a targeted window. Letting either case continue would let
+    // a judge see only the prefix and still award PASS/complete coverage.
+    if (!findings.length) {
+      return contextOverflow(
+        "the change excerpt is truncated and the zero-finding review has no anchors for the omitted code"
+      );
+    }
+    const unanchored = findings.filter((finding) => finding.line === undefined).length;
+    if (unanchored) {
+      return contextOverflow(
+        `the change excerpt is truncated and ${unanchored} finding(s) have no line anchor`
+      );
+    }
   }
-  const unanchored = findings.filter((finding) => finding.line === undefined).length;
-  if (unanchored) {
-    return contextOverflow(
-      `the change excerpt is truncated and ${unanchored} finding(s) have no line anchor`
-    );
-  }
-
-  // A truncated diff has no reliable line coverage, so every anchored finding
-  // receives a source window. A capped whole-file base needs only later lines.
-  const hiddenLines = findings
-    .map((finding) => finding.line)
-    .filter((line): line is number => line !== undefined && line > visibleTo);
   if (!hiddenLines.length) return base;
 
   const windows = findingWindows(hiddenLines, totalLines).map(({ start, end }) =>
@@ -411,7 +427,11 @@ export function buildJudgePrompt(
     );
   }
 
-  const excerpt = changeExcerpt(meta, result.file, cwd, scoped);
+  // The unit is what the verdict is filed under and what the judge must send
+  // back; the real path is only for reading source and rules.
+  const unit = resultUnit(result);
+  const range = targetRange(unit);
+  const excerpt = changeExcerpt(meta, unit, cwd, scoped);
   if (isContextOverflow(excerpt)) return excerpt;
 
   const round = judgment.attempts.length + 1;
@@ -420,12 +440,16 @@ export function buildJudgePrompt(
   // given — `meta.fcqFix` included. Without the flag it read "give the fix for
   // CRITICAL/MAJOR hits" while the reviewer had been told a separate pass owns
   // every fix, and scored the reviewer against an instruction it never got.
+  // Scoped to the unit's window, exactly as the reviewer saw it.
   const fcq =
     meta.fcq?.status === "ok"
-      ? renderFcqEvidence(readFcqFile(runDir(meta.runId, cwd), result.file), meta.fcqFix)
+      ? renderFcqEvidence(
+          violationsForTarget(readFcqFile(runDir(meta.runId, cwd), result.file), unit),
+          meta.fcqFix
+        )
       : "";
   const prompt = [
-    `You are judging the review of ${result.file} (run ${meta.runId}, judge round ${round})` +
+    `You are judging the review of ${result.file}${range ? ` lines ${range.start}-${range.end}` : ""} (run ${meta.runId}, judge round ${round})` +
       (scope ? ` — part ${scope.number + 1}/${scope.total}.` : `.`),
     ...(scope
       ? [
@@ -464,14 +488,14 @@ export function buildJudgePrompt(
     ...(scope
       ? [
           `Judge every finding by its index AS NUMBERED ABOVE, then call f_review_judge`,
-          `with runId="${meta.runId}", file="${result.file}", part=${scope.number}, your`,
+          `with runId="${meta.runId}", file="${unit}", part=${scope.number}, your`,
           `findingJudgments, coverageGaps=[] (another part scores coverage), score, and`,
           `feedback. Feedback must be concrete, numbered instructions the next reviewer`,
           `can follow (required when the score is below the threshold).`,
         ]
       : [
           `Judge every finding by its index, list coverage gaps, then call f_review_judge`,
-          `with runId="${meta.runId}", file="${result.file}", your findingJudgments, coverageGaps,`,
+          `with runId="${meta.runId}", file="${unit}", your findingJudgments, coverageGaps,`,
           `score, and feedback. Feedback must be concrete, numbered instructions the`,
           `next reviewer can follow (required when the score is below the threshold).`,
         ]),
@@ -603,13 +627,21 @@ function declarationOutline(
   file: string,
   content: string,
   totalLines: number,
-  budget: number
+  budget: number,
+  /** The unit's window. A segment unit lists only the declarations inside
+   * it: the other segments are other units' reviews, and listing their
+   * symbols here reads as areas THIS reviewer skipped. */
+  lo = 1,
+  hi = totalLines
 ): string | null {
-  const declared = [...fileDeclarations(content)].sort((a, b) => a[1] - b[1]);
+  const declared = [...fileDeclarations(content)]
+    .filter(([, line]) => line >= lo && line <= hi)
+    .sort((a, b) => a[1] - b[1]);
   if (!declared.length) return null;
+  const scope = lo === 1 && hi === totalLines ? "this file" : `lines ${lo}-${hi} of this file`;
   const text = [
-    `File: ${file} (Total lines: ${totalLines})`,
-    `DECLARATION OUTLINE — every symbol this file declares, and its line.`,
+    `File: ${file} (Total lines: ${totalLines}${lo === 1 && hi === totalLines ? "" : `; this unit: lines ${lo}-${hi}`})`,
+    `DECLARATION OUTLINE — every symbol ${scope} declares, and its line.`,
     ...declared.map(([name, line]) => `L${line}: ${name}`),
   ].join("\n");
   return byteLen(text) <= budget ? text : null;
@@ -632,22 +664,26 @@ function coverageOutline(
   file: string,
   content: string,
   totalLines: number,
-  budget: number
+  budget: number,
+  /** The unit's window: a segment's own lines, or the whole file. `shownTo`
+   * counts lines from `lo`. */
+  lo = 1,
+  hi = totalLines
 ): CoverageView {
   // An explicit end line with a matching line cap and no character cap: the
   // renderer then truncates nothing, so its header describes what is really there.
   const render = (lines: number): string =>
-    renderFileContent(file, content, 1, lines, lines, Number.POSITIVE_INFINITY);
+    renderFileContent(file, content, lo, lo + lines - 1, lines, Number.POSITIVE_INFINITY);
 
-  let shownTo = totalLines;
+  let shownTo = hi - lo + 1;
   let text = render(shownTo);
   if (byteLen(text) <= budget) return { text, shownTo, kind: "whole" };
 
-  const outline = declarationOutline(file, content, totalLines, budget);
+  const outline = declarationOutline(file, content, totalLines, budget, lo, hi);
   if (outline) {
     return {
       text: outline,
-      shownTo: totalLines,
+      shownTo: hi - lo + 1,
       kind: "outline",
       declared: outline.split("\n").length - 2,
     };
@@ -682,6 +718,12 @@ function coveragePrompt(
     return contextOverflow(`source unavailable for the coverage part of ${result.file}`);
   }
   const totalLines = content.replace(/\n$/, "").split("\n").length;
+  // Coverage is judged over the unit's own window: a segment's lines, or the
+  // whole file. The verdict is filed under the unit, so the call names it.
+  const unit = resultUnit(result);
+  const range = targetRange(unit);
+  const lo = range?.start ?? 1;
+  const hi = range?.end ?? totalLines;
   const summary = result.findings.length
     ? result.findings.map((finding, index) =>
         `  ${index}. L${finding.line ?? "?"} [${finding.severity}] ${finding.rule}`.slice(
@@ -694,7 +736,7 @@ function coveragePrompt(
 
   const assemble = (heading: string[], outline: string): string =>
     [
-      `You are judging the review of ${result.file} (run ${meta.runId})` +
+      `You are judging the review of ${result.file}${range ? ` lines ${lo}-${hi}` : ""} (run ${meta.runId})` +
         (total > 1 ? ` — part ${part + 1}/${total}: COVERAGE ONLY.` : ` — COVERAGE ONLY.`),
       `Score threshold: ${threshold}.`,
       ``,
@@ -715,7 +757,7 @@ function coveragePrompt(
       `### What the review reported (index, line, severity, rule)`,
       ...summary,
       ``,
-      `Call f_review_judge with runId="${meta.runId}", file="${result.file}", part=${part},`,
+      `Call f_review_judge with runId="${meta.runId}", file="${unit}", part=${part},`,
       `findingJudgments=[] (this part judges no findings), your coverageGaps, your`,
       `coverage score, and feedback naming what a next reviewer must examine.`,
     ].join("\n");
@@ -730,7 +772,9 @@ function coveragePrompt(
 
   const wholeHeading = diff
     ? [`### The change under review (diff)`]
-    : [`### The file under review (${totalLines} lines)`];
+    : range
+      ? [`### The file under review (lines ${lo}-${hi} of ${totalLines} — this unit's segment)`]
+      : [`### The file under review (${totalLines} lines)`];
   // Coverage is the one criterion that can be answered wrongly by omission, so
   // a partial outline must say so — otherwise the judge reports every unshown
   // line as an unexamined area the reviewer skipped.
@@ -743,21 +787,30 @@ function coveragePrompt(
           `gap — judge coverage only over the diff below.`,
         ]
       : [
-          `### The file under review — lines 1-${shownTo} of ${of}`,
-          `Lines ${shownTo + 1}-${of} were NOT shown to you and are outside what`,
+          `### The file under review — lines ${lo}-${lo + shownTo - 1} of ${range ? `${lo}-${hi}` : of}`,
+          `Lines ${lo + shownTo}-${lo + of - 1} were NOT shown to you and are outside what`,
           `you can judge. Do not score them as examined, and do not report them as`,
           `coverage gaps — judge coverage only over the lines below.`,
         ];
 
-  const outlineHeading = [
-    `### The file under review — ${totalLines} lines, STRUCTURE ONLY`,
-    `The file is too large to show whole, so below is every symbol it declares`,
-    `with the line it starts on — no bodies. Judge coverage over that structure:`,
-    `which declared areas the review never looked at. Do NOT report a`,
-    `declaration as a gap merely because you cannot see its body.`,
-  ];
+  const outlineHeading = range
+    ? [
+        `### The file under review — lines ${lo}-${hi} of ${totalLines}, STRUCTURE ONLY`,
+        `This unit's segment is too large to show whole, so below is every symbol`,
+        `it declares with the line it starts on — no bodies. Judge coverage over`,
+        `that structure: which declared areas the review never looked at. Lines`,
+        `outside ${lo}-${hi} belong to other units and are NOT coverage gaps here.`,
+        `Do NOT report a declaration as a gap merely because you cannot see its body.`,
+      ]
+    : [
+        `### The file under review — ${totalLines} lines, STRUCTURE ONLY`,
+        `The file is too large to show whole, so below is every symbol it declares`,
+        `with the line it starts on — no bodies. Judge coverage over that structure:`,
+        `which declared areas the review never looked at. Do NOT report a`,
+        `declaration as a gap merely because you cannot see its body.`,
+      ];
 
-  const of = diff ? diff.replace(/\n$/, "").split("\n").length : totalLines;
+  const of = diff ? diff.replace(/\n$/, "").split("\n").length : hi - lo + 1;
   // Everything except the outline, measured with the longest heading variant,
   // so what is left over is a budget the assembled prompt cannot exceed.
   const budget = Math.min(
@@ -776,7 +829,7 @@ function coveragePrompt(
 
   const view = diff
     ? diffOutline(diff, of, budget)
-    : coverageOutline(result.file, content, totalLines, budget);
+    : coverageOutline(result.file, content, totalLines, budget, lo, hi);
   const heading =
     view.kind === "whole"
       ? wholeHeading
@@ -793,7 +846,7 @@ function coveragePrompt(
     view.kind === "whole"
       ? undefined
       : view.kind === "outline"
-        ? { view: "outline", shown: view.declared ?? 0, total: totalLines }
+        ? { view: "outline", shown: view.declared ?? 0, total: hi - lo + 1 }
         : { view: diff ? "diff" : "lines", shown: view.shownTo, total: of };
   return truncated ? { prompt, truncated } : { prompt };
 }

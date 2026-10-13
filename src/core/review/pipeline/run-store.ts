@@ -19,16 +19,17 @@ import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, 
 import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 
+import { DEFAULT_BATCH_SIZE } from "../config";
 import { buildRubric, loadExtraRules, loadFrameworkGuide } from "../evidence/rubric";
 import { readRunJudgments } from "./judge-store";
 import { loadAllFixes } from "./fixer";
-import { RUNS_DIR, loadRun, type RunMeta, FileReviewResultSchema, readFileReviewResult, reviewArtifactHash, reviewSlug, runDir, type FileReviewResult, type PersistedFileReviewResult } from "./artifact";
+import { RUNS_DIR, loadRun, type RunMeta, FileReviewResultSchema, readFileReviewResult, resultUnit, reviewArtifactHash, reviewSlug, runDir, runUnits, type FileReviewResult, type PersistedFileReviewResult } from "./artifact";
 
 /** Hard cap on targets per run — refuse larger fan-outs (split the range instead). */
 export const MAX_RUN_TARGETS = 100;
 
-/** Spawn-batch guidance for the orchestrator: at most this many subagents at once. */
-export const RUN_BATCH_SIZE = 5;
+/** Default spawn-batch size; a run pins its effective value in `RunMeta.batchSize`. */
+export const RUN_BATCH_SIZE = DEFAULT_BATCH_SIZE;
 
 /** How many terminal run directories pruneRuns keeps (newest first). */
 export const RUNS_KEEP = 10;
@@ -80,8 +81,13 @@ export function finalizeFingerprint(
       meta,
       currentCriteriaIdentity,
       currentSourceIdentity,
+      // Keyed by unit under the historical `file` name: for an unsplit run the
+      // unit IS the file, so the fingerprint is byte-identical to what every
+      // pre-upgrade finalize.json recorded and runIsTerminal keeps honouring
+      // them. A new key name would have flipped every finished run to
+      // "unfinished" until its TTL.
       results: results
-        .map((result) => ({ file: result.file, hash: reviewArtifactHash(result) }))
+        .map((result) => ({ file: resultUnit(result), hash: reviewArtifactHash(result) }))
         .sort((a, b) => a.file.localeCompare(b.file)),
       // Include the full validated judgment semantics, not only caller-owned
       // submissionHash/revision fields. Score/verdict/check changes must never
@@ -140,12 +146,13 @@ export async function writeFileReview(
   md: string,
   cwd: string
 ): Promise<string> {
-  const previous = readFileReviewResult(runId, result.file, cwd);
+  const unit = resultUnit(result);
+  const previous = readFileReviewResult(runId, unit, cwd);
   // A corrupt/deleted review artifact must not reset to revision 1 and match a
   // stale verdict. Valid judgment records retain the greatest revision that
   // has ever escaped this process, so advance beyond both sources.
   const judgedRevision = readRunJudgments(runId, cwd)
-    .filter((judgment) => judgment.file === result.file)
+    .filter((judgment) => judgment.file === unit)
     .flatMap((judgment) => [
       ...judgment.attempts.map((attempt) => attempt.reviewRevision),
       ...judgment.invalidSubmissions.map((entry) => entry.reviewRevision),
@@ -158,7 +165,7 @@ export async function writeFileReview(
     // advance this value.
     revision: Math.max(previous?.revision ?? 0, judgedRevision) + 1,
   });
-  const base = join(runDir(runId, cwd), "reviews", reviewSlug(normalized.file));
+  const base = join(runDir(runId, cwd), "reviews", reviewSlug(resultUnit(normalized)));
   await Bun.write(`${base}.json`, JSON.stringify(normalized, null, 2));
   await Bun.write(`${base}.md`, md);
   return `${base}.md`;
@@ -177,7 +184,7 @@ export function readRunResults(runId: string, cwd: string): PersistedFileReviewR
       );
       // The filename is part of the persistence contract. Without this check a
       // copied/renamed artifact could falsely satisfy another target's coverage.
-      if (parsed.success && f === `${reviewSlug(parsed.data.file)}.json`) out.push(parsed.data);
+      if (parsed.success && f === `${reviewSlug(resultUnit(parsed.data))}.json`) out.push(parsed.data);
     } catch {
       /* skip unreadable or partially-written state */
     }
@@ -185,15 +192,16 @@ export function readRunResults(runId: string, cwd: string): PersistedFileReviewR
   return out;
 }
 
-/** Expected-vs-written coverage for a run. */
+/** Expected-vs-written coverage for a run, in dispatch units. */
 export function runCoverage(
   meta: RunMeta,
   results: FileReviewResult[]
 ): { reviewed: string[]; missing: string[] } {
-  const written = new Set(results.map((r) => r.file));
+  const written = new Set(results.map(resultUnit));
+  const units = runUnits(meta);
   return {
-    reviewed: meta.targets.filter((t) => written.has(t)),
-    missing: meta.targets.filter((t) => !written.has(t)),
+    reviewed: units.filter((u) => written.has(u)),
+    missing: units.filter((u) => !written.has(u)),
   };
 }
 

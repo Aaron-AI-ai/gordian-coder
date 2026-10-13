@@ -32,6 +32,12 @@ export const RUNS_DIR = "fcq/f-review/runs";
 export const FileReviewResultObjectSchema = z
   .object({
     file: z.string().min(1).max(500),
+    // Dispatch unit this artifact answers for: the file itself, or one segment
+    // `path#start-end` of it. Absent on artifacts written before segments were
+    // dispatched separately — read those as the file unit. Not defaulted by the
+    // transform on purpose: `reviewArtifactHash` covers the parsed object, and
+    // injecting a field would unmatch every judgment recorded for a legacy artifact.
+    target: z.string().min(1).max(600).optional(),
     assessed: z.array(z.enum(REQUIRED_CATEGORIES)),
     findings: z.array(FindingSchema),
     explorationCalls: z.number().int().nonnegative(),
@@ -74,6 +80,17 @@ export function reviewArtifactHash(result: PersistedFileReviewResult): string {
   return Bun.hash(JSON.stringify(result)).toString();
 }
 
+/** The unit an artifact answers for — its segment id, or the file itself. */
+export function resultUnit(result: { file: string; target?: string }): string {
+  return result.target ?? result.file;
+}
+
+/** The dispatch units of a run. A run planned before units existed lists
+ * none: every target is then its own unit, exactly as before. */
+export function runUnits(meta: Pick<RunMeta, "targets" | "units">): string[] {
+  return meta.units ?? meta.targets;
+}
+
 export function runDir(runId: string, cwd: string): string {
   return join(cwd, RUNS_DIR, runId);
 }
@@ -86,17 +103,17 @@ export function reviewSlug(file: string): string {
   return `${readable}--${Bun.hash(file).toString(36)}`;
 }
 
-/** Load one exact review artifact, rejecting corrupt and wrong-file state. */
+/** Load one exact review artifact by unit, rejecting corrupt and wrong-unit state. */
 export function readFileReviewResult(
   runId: string,
-  file: string,
+  unit: string,
   cwd: string
 ): PersistedFileReviewResult | null {
-  const p = join(runDir(runId, cwd), "reviews", `${reviewSlug(file)}.json`);
+  const p = join(runDir(runId, cwd), "reviews", `${reviewSlug(unit)}.json`);
   if (!existsSync(p)) return null;
   try {
     const parsed = FileReviewResultSchema.safeParse(JSON.parse(readFileSync(p, "utf8")));
-    return parsed.success && parsed.data.file === file ? parsed.data : null;
+    return parsed.success && resultUnit(parsed.data) === unit ? parsed.data : null;
   } catch {
     return null;
   }
@@ -105,7 +122,14 @@ export function readFileReviewResult(
 export interface RunMeta {
   runId: string;
   createdAt: string; // ISO timestamp
-  targets: string[]; // expected real file paths (coverage baseline)
+  targets: string[]; // expected real file paths (fcq/fixer scope, source identity, report context)
+  /** Dispatch units: every target, with a whole-file target over
+   * SEGMENT_THRESHOLD lines expanded to its segment ids. Computed once at
+   * plan time so every reviewer, judge, and finalize sees the same list.
+   * Absent on runs planned before segments were dispatched separately. */
+  units?: string[];
+  /** Subagents in flight at once, pinned from config at plan time. */
+  batchSize?: number;
   range: string | null; // git diff range shared by every subagent
   whole: boolean;
   label: string; // report filename stem
@@ -149,6 +173,8 @@ export const RunMetaSchema: z.ZodType<RunMeta> = z.object({
   runId: z.string().regex(/^[\w.-]+$/),
   createdAt: z.string(),
   targets: z.array(z.string()),
+  units: z.array(z.string()).optional(),
+  batchSize: z.number().int().min(1).optional(),
   range: z.string().nullable(),
   whole: z.boolean(),
   label: z.string(),

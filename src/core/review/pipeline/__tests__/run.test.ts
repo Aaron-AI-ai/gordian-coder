@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { finalizeRun, planReview } from "../run";
-import { MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, UNFINISHED_RUN_TTL_MS, RUN_BATCH_SIZE, createRun, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, writeFileReview } from "../run-store";
-import { loadRun, type RunMeta } from "../artifact";
+import { dirname, join } from "node:path";
+import { finalizeRun, planReview, planUnits } from "../run";
+import { fcqShardPath } from "../../evidence/fcq";
+import { MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, UNFINISHED_RUN_TTL_MS, RUN_BATCH_SIZE, createRun, finalizeFingerprint, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, writeFileReview } from "../run-store";
+import { loadRun, readFileReviewResult, resultUnit, reviewArtifactHash, runUnits, type RunMeta } from "../artifact";
 import { RUNS_DIR, reviewSlug, runDir, type FileReviewResult } from "../artifact";
 import { submitReview, guardExploration, onSessionIdle, MAX_RESUMES } from "../loop";
 import { startReview } from "../start";
@@ -155,6 +156,82 @@ describe("run store primitives", () => {
     bad.findings[0].file = "other.ts";
     expect(writeFileReview(meta.runId, bad, "# bad", d)).rejects.toThrow("does not match");
     expect(readRunResults(meta.runId, d)).toEqual([]);
+  });
+
+  it("runUnits falls back to targets for a legacy run.json without units", async () => {
+    const d = dir();
+    const meta = await createRun(baseMeta(["a.ts", "b.ts"]), d);
+    expect(runUnits(meta)).toEqual(["a.ts", "b.ts"]);
+    const split = await createRun(
+      { ...baseMeta(["a.ts"]), units: ["a.ts#1-500", "a.ts#441-900"], batchSize: 7 },
+      d
+    );
+    expect(loadRun(split.runId, d)?.units).toEqual(["a.ts#1-500", "a.ts#441-900"]);
+    expect(loadRun(split.runId, d)?.batchSize).toBe(7);
+    expect(runUnits(loadRun(split.runId, d)!)).toEqual(["a.ts#1-500", "a.ts#441-900"]);
+  });
+
+  it("two units of one file write distinct artifacts that never overwrite each other", async () => {
+    const d = dir();
+    const meta = await createRun(
+      { ...baseMeta(["big.ts"]), whole: true, units: ["big.ts#1-500", "big.ts#441-900"] },
+      d
+    );
+    await writeFileReview(meta.runId, result("big.ts", { target: "big.ts#1-500" }), "# s1", d);
+    await writeFileReview(
+      meta.runId,
+      result("big.ts", { target: "big.ts#441-900", findings: [] }),
+      "# s2",
+      d
+    );
+    const results = readRunResults(meta.runId, d);
+    expect(results.map(resultUnit).sort()).toEqual(["big.ts#1-500", "big.ts#441-900"]);
+    expect(results.every((r) => r.file === "big.ts")).toBe(true);
+    expect(readFileReviewResult(meta.runId, "big.ts#1-500", d)?.findings).toHaveLength(1);
+    expect(readFileReviewResult(meta.runId, "big.ts#441-900", d)?.findings).toHaveLength(0);
+    // The bare file is not a unit of this run: nothing is filed under it.
+    expect(readFileReviewResult(meta.runId, "big.ts", d)).toBeNull();
+    expect(runCoverage(meta, results)).toEqual({
+      reviewed: ["big.ts#1-500", "big.ts#441-900"],
+      missing: [],
+    });
+  });
+
+  it("a file-unit artifact keeps the legacy filename and a legacy artifact reads back as its own unit", async () => {
+    const d = dir();
+    const meta = await createRun(baseMeta(["a.ts"]), d);
+    await writeFileReview(meta.runId, result("a.ts"), "# a", d);
+    const p = join(runDir(meta.runId, d), "reviews", `${reviewSlug("a.ts")}.json`);
+    expect(existsSync(p)).toBe(true);
+    // Simulate an artifact written before `target` existed.
+    const legacy = JSON.parse(readFileSync(p, "utf8"));
+    delete legacy.target;
+    writeFileSync(p, JSON.stringify(legacy));
+    const back = readFileReviewResult(meta.runId, "a.ts", d);
+    expect(back?.target).toBeUndefined();
+    expect(resultUnit(back!)).toBe("a.ts");
+    expect(runCoverage(meta, readRunResults(meta.runId, d)).missing).toEqual([]);
+  });
+
+  it("finalize fingerprint of an unsplit run is unchanged by the unit keying (old caches stay valid)", async () => {
+    // A finished run's finalize.json carries this fingerprint; runIsTerminal
+    // compares against it to prune and to keep the unfinished-run cap honest.
+    // Renaming the key would mark every pre-upgrade finished run unfinished.
+    const d = dir();
+    const meta = await createRun(baseMeta(["a.ts"]), d);
+    await writeFileReview(meta.runId, result("a.ts"), "# a", d);
+    const results = readRunResults(meta.runId, d);
+    const legacy = Bun.hash(
+      JSON.stringify({
+        meta,
+        currentCriteriaIdentity: "c",
+        currentSourceIdentity: "s",
+        results: results.map((r) => ({ file: r.file, hash: reviewArtifactHash(r) })),
+        judgments: [],
+        fixes: [],
+      })
+    ).toString();
+    expect(finalizeFingerprint(meta, results, [], "c", "s", [])).toBe(legacy);
   });
 
   it("runCoverage reports reviewed vs missing", async () => {
@@ -364,6 +441,56 @@ describe("planReview", () => {
     expect(msg2).not.toContain("whole-file");
   });
 
+  it("expands a whole-file run into segment units, largest first, and pins batchSize", async () => {
+    const d = gitRepo();
+    const big = Array.from({ length: 1200 }, (_, i) => `// l${i}`).join("\n") + "\n";
+    writeFileSync(join(d, "big.ts"), big);
+    writeFileSync(join(d, ".f-review.json"), JSON.stringify({ batchSize: 8 }));
+    const msg = await planReview({ files: ["a.ts", "big.ts"] }, d); // files-only ⇒ whole-file
+    const runId = /Run created: (\S+)/.exec(msg)![1];
+    const meta = loadRun(runId, d)!;
+    expect(meta.targets).toEqual(["a.ts", "big.ts"]);
+    expect(meta.batchSize).toBe(8);
+    expect(meta.units).toEqual(["big.ts#1-500", "big.ts#441-940", "big.ts#881-1200", "a.ts"]);
+    expect(msg).toContain("2 file(s) → 4 unit(s)");
+    expect(msg).toContain("Units (spawn in this order");
+    expect(msg).toContain("- big.ts#1-500 (segment 1/3 of big.ts, 1200 lines)");
+    expect(msg).toContain("- big.ts#881-1200 (segment 3/3 of big.ts)");
+    expect(msg).toContain("at most 8 subagents");
+    expect(msg).toContain('files=["<unit id exactly as listed above');
+    expect(msg).toContain("ONE subagent per missing unit");
+  });
+
+  it("keeps units equal to targets, in target order, for a diff-mode run", async () => {
+    const d = gitRepo();
+    const msg = await planReview({}, d);
+    const runId = /Run created: (\S+)/.exec(msg)![1];
+    const meta = loadRun(runId, d)!;
+    expect(meta.units).toEqual(["a.ts", "b.ts"]);
+    expect(runUnits(meta)).toEqual(meta.targets);
+    expect(msg).not.toContain("unit(s)");
+    expect(msg).toContain("2 file(s)");
+  });
+
+  it("planUnits sorts whole-file units by line count, ties by path then start", () => {
+    const d = dir();
+    writeFileSync(join(d, "s.ts"), "x\n".repeat(300));
+    writeFileSync(join(d, "m.ts"), "x\n".repeat(700));
+    writeFileSync(join(d, "big.ts"), "x\n".repeat(2500));
+    expect(planUnits(["s.ts", "big.ts", "m.ts"], true, null, d)).toEqual([
+      "m.ts",
+      "big.ts#1-500",
+      "big.ts#441-940",
+      "big.ts#881-1380",
+      "big.ts#1321-1820",
+      "big.ts#1761-2260",
+      // 300-line tie between the last segment and s.ts: path ascending wins.
+      "big.ts#2201-2500",
+      "s.ts",
+    ]);
+    expect(planUnits(["s.ts", "big.ts", "m.ts"], false, null, d)).toEqual(["s.ts", "big.ts", "m.ts"]);
+  });
+
   it("tells the orchestrator to wait for the fix pass before finalizing", async () => {
     // Without this the orchestrator finalizes when judging is done, and a fix
     // still in flight misses the report entirely.
@@ -479,7 +606,50 @@ describe("run-mode session (startReview/submitReview with runId)", () => {
     expect(existsSync(join(d, "fcq/report/f-review"))).toBe(false);
   });
 
-  it("splits a large whole-mode target into segments within ONE session", async () => {
+  it("joins one segment unit of a split file and writes a unit-keyed artifact", async () => {
+    const d = gitRepo();
+    const big = Array.from({ length: 1200 }, (_, i) => `// l${i}`).join("\n") + "\n";
+    writeFileSync(join(d, "big.ts"), big);
+    const msg = await planReview({ files: ["big.ts"] }, d);
+    const runId = /Run created: (\S+)/.exec(msg)![1];
+
+    const joined = await startReview({ runId, files: ["big.ts#441-940"] }, d, "rs");
+    expect(joined).toContain(`Run ${runId}: reviewing big.ts#441-940 (lines 441-940 of big.ts`);
+    expect(getState("rs")?.targets).toEqual(["big.ts#441-940"]);
+
+    guardExploration(getState("rs")!, "file_read", "");
+    const done = await submitReview(fullSubmit("big.ts", { line: 450 }), "rs");
+    expect(done).toContain("✅ big.ts#441-940 reviewed");
+    const results = readRunResults(runId, d);
+    expect(results).toHaveLength(1);
+    expect(results[0].file).toBe("big.ts");
+    expect(results[0].target).toBe("big.ts#441-940");
+    expect(
+      existsSync(join(runDir(runId, d), "reviews", `${reviewSlug("big.ts#441-940")}.json`))
+    ).toBe(true);
+  });
+
+  it("bare path of a split file returns the unit list instead of a session", async () => {
+    const d = gitRepo();
+    writeFileSync(
+      join(d, "big.ts"),
+      Array.from({ length: 1200 }, (_, i) => `// l${i}`).join("\n") + "\n"
+    );
+    const msg = await planReview({ files: ["big.ts"] }, d);
+    const runId = /Run created: (\S+)/.exec(msg)![1];
+
+    const out = await startReview({ runId, files: ["big.ts"] }, d, "rs");
+    expect(out).toContain("big.ts is reviewed in 3 units");
+    expect(out).toContain("big.ts#1-500, big.ts#441-940, big.ts#881-1200");
+    expect(out).toContain("exactly ONE of these ids");
+    expect(getState("rs")).toBeUndefined();
+    // A unit that is not in the plan is still refused.
+    expect(await startReview({ runId, files: ["big.ts#1-999"] }, d, "rs")).toContain(
+      "not a unit of run"
+    );
+  });
+
+  it("legacy run without units still splits a large whole-mode target within ONE session", async () => {
     const d = gitRepo();
     const big = Array.from({ length: 1200 }, (_, i) => `// l${i}`).join("\n") + "\n";
     writeFileSync(join(d, "big.ts"), big);
@@ -504,7 +674,7 @@ describe("run-mode session (startReview/submitReview with runId)", () => {
     expect(results[0].findings.length).toBe(segments); // one per segment
   });
 
-  it("collapses one issue found by every overlapping segment into a single row", async () => {
+  it("legacy run: collapses one issue found by every overlapping segment into a single row", async () => {
     const d = gitRepo();
     const big = Array.from({ length: 1400 }, (_, i) => `// l${i}`).join("\n") + "\n";
     writeFileSync(join(d, "big.ts"), big);
@@ -574,6 +744,149 @@ describe("finalizeRun", () => {
     expect(md).toContain("- Rubric: ");
     expect(md).toContain("### Files");
     expect(md).toContain("- a.ts");
+  });
+
+  it("merges segment units of one file into one report section and dedupes the overlap", async () => {
+    const d = gitRepo();
+    const meta = await createRun(
+      {
+        ...baseMeta(["big.ts", "a.ts"]),
+        whole: true,
+        range: null,
+        units: ["big.ts#1-500", "big.ts#441-940", "a.ts"],
+      },
+      d
+    );
+    const f = (line: number, rule: string, message = "issue") => ({
+      category: "correctness" as const,
+      severity: "major" as const,
+      file: "big.ts",
+      line,
+      rule,
+      message,
+      suggestion: "fix",
+    });
+    await writeFileReview(
+      meta.runId,
+      result("big.ts", { target: "big.ts#1-500", findings: [f(10, "r-early"), f(450, "dup", "phrasing A")] }),
+      "# s1",
+      d
+    );
+    await writeFileReview(
+      meta.runId,
+      result("big.ts", { target: "big.ts#441-940", findings: [f(450, "dup", "phrasing B"), f(900, "r-late")] }),
+      "# s2",
+      d
+    );
+    await writeFileReview(meta.runId, result("a.ts", { findings: [] }), "# a", d);
+
+    const msg = await finalizeRun(meta.runId, d);
+    expect(msg).toContain("✅ Run complete — 3 unit(s) across 2 file(s), 3 issue(s)");
+    const path = /Report: (.+)$/.exec(msg)![1];
+    const md = readFileSync(join(d, path), "utf8");
+    expect(md.match(/^## big\.ts$/gm)).toHaveLength(1); // one section, not one per segment
+    expect(md).toContain("## a.ts");
+    expect((md.match(/\| dup \|/g) ?? []).length).toBe(1); // overlap duplicate collapsed
+    expect(md.indexOf("r-early")).toBeLessThan(md.indexOf("r-late")); // segment order kept
+    expect(md).toContain("- big.ts (2 segments)");
+  });
+
+  it("names the missing and partial units, not their files", async () => {
+    const d = gitRepo();
+    const meta = await createRun(
+      {
+        ...baseMeta(["big.ts"]),
+        whole: true,
+        range: null,
+        units: ["big.ts#1-500", "big.ts#441-940", "big.ts#881-1200"],
+      },
+      d
+    );
+    await writeFileReview(meta.runId, result("big.ts", { target: "big.ts#1-500" }), "# s1", d);
+    await writeFileReview(
+      meta.runId,
+      result("big.ts", { target: "big.ts#881-1200", partial: true, coverageComplete: false }),
+      "# s3",
+      d
+    );
+
+    const msg = await finalizeRun(meta.runId, d);
+    expect(msg).toContain("⚠️ INCOMPLETE — 2/3");
+    expect(msg).toContain("missing: big.ts#441-940");
+    expect(msg).not.toContain("missing: big.ts.");
+    expect(msg).toContain("per missing unit");
+
+    await writeFileReview(meta.runId, result("big.ts", { target: "big.ts#441-940" }), "# s2", d);
+    const again = await finalizeRun(meta.runId, d);
+    expect(again).toContain("1 partial review(s)");
+    expect(again).toContain("Run terminated — INCOMPLETE: 3/3");
+  });
+
+  it("overlap duplicate collapses before the fcq merge pairs it with one fcq row", async () => {
+    const d = gitRepo();
+    const meta = await createRun(
+      {
+        ...baseMeta(["big.ts"]),
+        whole: true,
+        range: null,
+        units: ["big.ts#1-500", "big.ts#441-940"],
+        fcq: { status: "ok", command: "fcq", durationMs: 1, exitCode: 0 },
+      },
+      d
+    );
+    // One fcq violation on the overlap line, in the shard layout readFcqFile reads.
+    // (No summary.json on purpose: finalize then reports the run quality-incomplete,
+    // but the fcq rows still merge into the report, which is what this test checks.)
+    const shard = fcqShardPath(runDir(meta.runId, d), "big.ts");
+    mkdirSync(dirname(shard), { recursive: true });
+    writeFileSync(
+      shard,
+      JSON.stringify([
+        {
+          analyzer: "pmd",
+          ruleId: "LineLength",
+          description: "line too long",
+          category: "code-style",
+          severity: "MINOR",
+          line: 450,
+          message: "too long",
+        },
+      ])
+    );
+    const follow = (message: string) => ({
+      category: "maintainability" as const,
+      severity: "minor" as const,
+      file: "big.ts",
+      line: 450,
+      rule: "LineLength follow-up",
+      message,
+      asIs: "x",
+      toBe: "y",
+    });
+    // Each segment also carries its own unrelated finding: both surviving proves
+    // the two artifacts were MERGED rather than one overwriting the other (in
+    // either readdir order), which would also leave a single line-450 row.
+    await writeFileReview(
+      meta.runId,
+      result("big.ts", { target: "big.ts#1-500", findings: [{ ...follow("A"), line: 10, rule: "r-early" }, follow("A")] }),
+      "# s1",
+      d
+    );
+    await writeFileReview(
+      meta.runId,
+      result("big.ts", { target: "big.ts#441-940", findings: [follow("B"), { ...follow("B"), line: 900, rule: "r-late" }] }),
+      "# s2",
+      d
+    );
+
+    const msg = await finalizeRun(meta.runId, d);
+    const path = /Report: (.+)$/.exec(msg)![1];
+    const md = readFileSync(join(d, path), "utf8");
+    expect(md).toContain("r-early");
+    expect(md).toContain("r-late");
+    // Exactly one row for line 450: the two reviewer copies collapsed, then paired with the fcq row.
+    expect((md.match(/\| 450 \|/g) ?? []).length).toBe(1);
+    expect(md).toContain("fcq:pmd/LineLength"); // the fcq identity won the merged row
   });
 
   it("flags missing files as INCOMPLETE with a single-retry instruction", async () => {

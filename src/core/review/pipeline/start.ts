@@ -20,13 +20,13 @@ import { buildRubric, loadFrameworkGuide, loadExtraRules, rubricSources } from "
 
 import { renderReviewContext, resolveOutputPath, resolveManifestPath, writeManifest, loadBaseline, defaultLabel, manifestTimestamp } from "../report/output";
 import { runFreshness } from "./run-store";
-import { loadRun } from "./artifact";
+import { loadRun, runUnits } from "./artifact";
 import { readFileReviewResult } from "./artifact";
 import { judgeFeedbackFor, currentReviewTerminal, reworkCap, reworkCount, reviewReworkStatus } from "./judge";
 import { setState, getState, currentFile, activeStates, type ReviewState } from "./state";
 import { afterRef, MAX_ITER } from "../tools/read";
 
-import { SEGMENT_THRESHOLD, planSegments, targetRange } from "./segment";
+import { SEGMENT_THRESHOLD, planSegments, targetPath, targetRange } from "./segment";
 import { dbg, setReviewDebug } from "../debug";
 import { VERSION } from "../../../version";
 import { readFcqFile } from "../evidence/fcq";
@@ -89,15 +89,33 @@ function startRunFileReview(
     );
   }
 
-  // Defense: a run subagent reviews exactly one file, and only one that the
+  // Defense: a run subagent reviews exactly one UNIT, and only one that the
   // plan actually queued — it cannot widen the fan-out on its own.
   if (files?.length !== 1) {
     return `Run mode reviews exactly ONE file: call f_review_context with runId and files=["<one target>"].`;
   }
-  const file = files[0].replaceAll("\\", "/").replace(/^\.\//, "");
-  if (!meta.targets.includes(file)) {
-    return `❌ ${file} is not a target of run ${runId}. Targets: ${meta.targets.join(", ")}`;
+  const unit = files[0].replaceAll("\\", "/").replace(/^\.\//, "");
+  const units = runUnits(meta);
+  if (!units.includes(unit)) {
+    // The bare path of a file the plan split: hand back the exact ids rather
+    // than a refusal — a small model that dropped the `#start-end` suffix
+    // recovers from this message, not from "not a target".
+    const siblings = units.filter((u) => targetRange(u) && targetPath(u) === unit);
+    if (siblings.length) {
+      return (
+        `❌ ${unit} is reviewed in ${siblings.length} units in run ${runId}. Call f_review_context with ` +
+        `exactly ONE of these ids in \`files\`: ${siblings.join(", ")}`
+      );
+    }
+    // A segment id of a known file that the plan never listed (wrong range)
+    // is "not a unit"; an unknown file stays "not a target" as before.
+    return meta.targets.includes(targetPath(unit))
+      ? `❌ ${unit} is not a unit of run ${runId}. Units: ${units.join(", ")}`
+      : `❌ ${unit} is not a target of run ${runId}. Targets: ${meta.targets.join(", ")}`;
   }
+  // Judge/artifact state is keyed by unit; the real path is only needed where
+  // source is read (diff map, fcq shard).
+  const file = unit;
   const existingReview = readFileReviewResult(runId, file, cwd);
   if (existingReview) {
     const status = meta.judge ? reviewReworkStatus(runId, file, cwd) : "complete";
@@ -132,8 +150,12 @@ function startRunFileReview(
 
   setReviewDebug(loadConfig(cwd).debug === true);
   const ref = afterRef(meta.range);
-  const reviewTargets = meta.whole ? planSegments(cwd, ref, file) : [file];
-  dbg("run", `join runId=${runId} file=${file} targets=${reviewTargets.length}`);
+  // Plans that list units already split large files; this session reviews its
+  // one unit. A legacy run.json (no `units`) keeps the in-session split so an
+  // in-flight run survives a plugin upgrade unchanged.
+  const reviewTargets =
+    meta.units === undefined && meta.whole ? planSegments(cwd, ref, unit) : [unit];
+  dbg("run", `join runId=${runId} unit=${unit} targets=${reviewTargets.length}`);
 
   const state: ReviewState = {
     active: true,
@@ -144,7 +166,7 @@ function startRunFileReview(
     categories: [...REQUIRED_CATEGORIES],
     diffRange: meta.range,
     ref,
-    diffMap: buildDiffMap(meta.range, [file], cwd),
+    diffMap: buildDiffMap(meta.range, [targetPath(unit)], cwd),
     wholeFile: meta.whole,
     systemRule: buildRubric(cwd),
     frameworkRules: loadFrameworkGuide(cwd),
@@ -183,7 +205,8 @@ function startRunFileReview(
     deepPassDone: {},
     resumes: 0,
     runId,
-    fcqViolations: meta.fcq?.status === "ok" ? readFcqFile(runDir(runId, cwd), file) : undefined,
+    fcqViolations:
+      meta.fcq?.status === "ok" ? readFcqFile(runDir(runId, cwd), targetPath(unit)) : undefined,
     fcqFix: meta.fcqFix,
   };
   setState(sessionId, state);
@@ -196,8 +219,10 @@ function startRunFileReview(
     state.deepPasses > 1
       ? ` Each target goes through ${state.deepPasses} review rounds — after each submit, follow the returned round instruction and resubmit.`
       : "";
+  const range = targetRange(unit);
+  const where = range ? `lines ${range.start}-${range.end} of ${targetPath(unit)}; ` : "";
   return [
-    `Run ${runId}: reviewing ${file} (${meta.range ? `commit diff ${meta.range}` : "explicit files"}${meta.whole ? " · whole-file" : ""}).${seg}${rounds}`,
+    `Run ${runId}: reviewing ${unit} (${where}${meta.range ? `commit diff ${meta.range}` : "explicit files"}${meta.whole ? " · whole-file" : ""}).${seg}${rounds}`,
     `Tool-call budget: 1/${state.maxToolCalls} used (context); reserve the final two calls for f_review_submit/recovery.`,
     `The review checklist is injected into your instructions. Use ONLY the review tools`,
     `(related_code / git_history / file_read / code_search) for deeper context — never the`,
