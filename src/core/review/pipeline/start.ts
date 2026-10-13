@@ -20,7 +20,7 @@ import { buildRubric, loadFrameworkGuide, loadExtraRules, rubricSources } from "
 
 import { renderReviewContext, resolveOutputPath, resolveManifestPath, writeManifest, loadBaseline, defaultLabel, manifestTimestamp } from "../report/output";
 import { runFreshness, unfinishedRuns } from "./run-store";
-import { loadRun, runUnits } from "./artifact";
+import { loadRun, runUnits, type RunMeta } from "./artifact";
 import { readFileReviewResult } from "./artifact";
 import { judgeFeedbackFor, currentReviewTerminal, reworkCap, reworkCount, reviewReworkStatus } from "./judge";
 import { setState, getState, clearState, currentFile, activeStates, type ReviewState } from "./state";
@@ -253,16 +253,23 @@ function runWorkerMisfire(args: StartReviewArgs, cwd: string): string | null {
   if (!args.files?.length) return null;
   // files without a runId: if an unfinished run lists one of them as a unit,
   // the runId was dropped — name it instead of starting a sequential review.
+  // A unit id or a target FILE both count: a worker spawned for a segment that
+  // drops the runId usually sends the bare path, which equals no unit.
   const wanted = args.files.map((f) => f.replaceAll("\\", "/").replace(/^\.\//, ""));
-  const owners = unfinishedRuns(cwd).filter((run) =>
-    wanted.some((unit) => runUnits(run).includes(unit))
-  );
+  const claims = (run: RunMeta): string | undefined =>
+    wanted.find((w) => runUnits(run).includes(w) || run.targets.includes(w));
+  const owners = unfinishedRuns(cwd).filter((run) => claims(run));
   if (!owners.length) return null; // legacy sequential review of explicit files
   const run = owners[0];
-  const unit = wanted.find((u) => runUnits(run).includes(u))!;
+  const hit = claims(run)!;
+  const units = runUnits(run).filter((u) => u === hit || targetPath(u) === hit);
+  const ask =
+    units.length === 1
+      ? `files=["${units[0]}"]`
+      : `files=["<ONE of these>"] — the file is split into ${units.length} units: ${units.join(", ")}`;
   return (
-    `❌ runId missing. Run ${run.runId} lists ${unit} as a unit — call f_review_context with ` +
-    `runId="${run.runId}" and files=["${unit}"]` +
+    `❌ runId missing. Run ${run.runId} lists ${hit} — call f_review_context with ` +
+    `runId="${run.runId}" and ${ask}` +
     (owners.length > 1 ? ` (other unfinished runs also list it: ${owners.slice(1).map((r) => r.runId).join(", ")})` : "") +
     `.`
   );

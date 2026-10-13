@@ -676,6 +676,22 @@ describe("run-mode session (startReview/submitReview with runId)", () => {
     clearState("rs2");
   });
 
+  it("refuses files-without-runId for a SPLIT file too, naming the run and its segment units", async () => {
+    // A worker spawned for `big.ts#441-940` that drops the runId and sends the
+    // bare path must not fall through to a sequential whole-file review: the
+    // path is a target of the run even though no unit equals it.
+    const d = gitRepo();
+    const meta = await createRun(
+      { ...baseMeta(["big.ts"]), whole: true, units: ["big.ts#1-500", "big.ts#441-940"] },
+      d
+    );
+    writeFileSync(join(d, "big.ts"), "x\n".repeat(900));
+    const out = await startReview({ files: ["big.ts"] }, d, "rs", { fromRunWorker: true });
+    expect(out).toContain(`runId="${meta.runId}"`);
+    expect(out).toContain("big.ts#1-500, big.ts#441-940");
+    expect(getState("rs")).toBeUndefined();
+  });
+
   it("lets a runId call take over a stray sequential session that has submitted nothing", async () => {
     const d = gitRepo();
     const meta = await createRun(baseMeta(["a.ts"]), d);
