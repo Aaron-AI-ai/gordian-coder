@@ -7,6 +7,7 @@
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, extname, isAbsolute, join } from "node:path";
 import { readFileAt, renderFileContent } from "../review/tools/read";
+import { localTimestamp } from "../time";
 import { loadLogConfig, type LogConfig } from "./config";
 import { bestSubmission } from "./judge";
 import { parseStackTrace } from "./parse";
@@ -98,7 +99,7 @@ export function renderLogReport(i: FinalizeInput, gaps: Gaps, badge: Badge, lang
   const root = parsed.chain.at(-1);
   const out: string[] = [];
 
-  out.push(`# f-log ${i.plan.runId} — **${badge}**`, `${now.toISOString().slice(0, 19).replace("T", " ")} UTC · ${i.cwd.split(/[\\/]/).at(-1)}`, "");
+  out.push(`# f-log ${i.plan.runId} — **${badge}**`, `${localTimestamp(now)} · ${i.cwd.split(/[\\/]/).at(-1)}`, "");
   out.push(t.summary, empty ? `_${t.none}_` : `**${s.cause.summary}** (${t.confidence} ${s.confidence})`);
   if (s.envCause) out.push(`- ${t.env}`);
   if (s.resolution.kind === "mitigation" && !empty) out.push(`- ${t.mitigation}`);

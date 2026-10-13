@@ -20,6 +20,7 @@ import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 
 import { DEFAULT_BATCH_SIZE } from "../config";
+import { localTimeStamp } from "../../time";
 import { buildRubric, loadExtraRules, loadFrameworkGuide } from "../evidence/rubric";
 import { readRunJudgments } from "./judge-store";
 import { loadAllFixes } from "./fixer";
@@ -107,8 +108,9 @@ export async function createRun(
   meta: Omit<RunMeta, "runId" | "createdAt">,
   cwd: string
 ): Promise<RunMeta> {
-  const t = new Date().toISOString().slice(11, 19).replace(/:/g, "");
-  const stem = `${meta.label}-${t}`;
+  // Local clock: the run id is what people read in the report filename and
+  // the plan output, so `c9a2a26-134037` should be the time on their wall.
+  const stem = `${meta.label}-${localTimeStamp()}`;
   // Claim a unique run with an exclusive-create lock. `existsSync` followed by
   // Bun.write is a TOCTOU race when several orchestrator processes plan in the
   // same second; the lock makes only one process own each candidate.

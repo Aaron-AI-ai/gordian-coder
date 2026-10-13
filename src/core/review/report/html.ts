@@ -19,6 +19,7 @@
  */
 
 import { SEVERITIES, splitFix, verdict, type Finding, type Severity } from "../contract";
+import { localTimestamp } from "../../time";
 import TEMPLATE_HTML from "./report.template.html" with { type: "text" };
 
 // bun-types types every *.html import as an HTMLBundle (its fullstack server);
@@ -301,7 +302,7 @@ export function renderHtmlReport(
   const cleanFiles = files.filter((f) => findings[f].length === 0).length;
   const rate = files.length ? Math.round((cleanFiles / files.length) * 1000) / 10 : 100;
   const top = topSeverity(all);
-  const stamp = `${now.toISOString().slice(0, 19).replace("T", " ")} UTC`;
+  const stamp = localTimestamp(now);
 
   // Rows are click targets that jump to the findings tab, filtered.
   const categoryRows = categories.length

@@ -5,6 +5,7 @@
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { localFileStamp } from "../time";
 import { loadLogConfig } from "./config";
 
 export interface RunMeta {
@@ -33,10 +34,8 @@ export interface LogJudgments {
 }
 
 export function newRunId(now: Date = new Date()): string {
-  const s = now.toISOString();
-  const stamp = `${s.slice(0, 10).replace(/-/g, "")}-${s.slice(11, 19).replace(/:/g, "")}`;
   const rand = Math.floor(Math.random() * 0x10000).toString(16).padStart(4, "0");
-  return `${stamp}-${rand}`;
+  return `${localFileStamp(now)}-${rand}`;
 }
 
 export function runDir(runId: string, cwd: string): string {

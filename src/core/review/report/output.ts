@@ -14,6 +14,7 @@
 import { existsSync, statSync, readdirSync, readFileSync, renameSync } from "node:fs";
 import { join, isAbsolute, dirname, basename } from "node:path";
 import { loadConfig } from "../config";
+import { localFileStamp, localTimestamp } from "../../time";
 import { SEVERITIES, splitFix, verdict, type Finding, type Severity } from "../contract";
 import { renderHtmlReport } from "./html";
 
@@ -24,20 +25,22 @@ function isDirSync(p: string): boolean {
   return existsSync(p) && statSync(p).isDirectory();
 }
 
-/** yyyymmdd-hhmmss (UTC), for report filenames. */
+/** yyyymmdd-hhmmss in the PC's time zone, for report filenames. */
 function stamp(d: Date): string {
-  const s = d.toISOString();
-  return `${s.slice(0, 10).replace(/-/g, "")}-${s.slice(11, 19).replace(/:/g, "")}`;
+  return localFileStamp(d);
 }
 
-/** Human-readable UTC timestamp recorded in the manifest body. */
+/** Human-readable local timestamp (with offset and zone) recorded in the
+ * manifest body and the report's Review Context. */
 export function manifestTimestamp(d: Date = new Date()): string {
-  return `${d.toISOString().slice(0, 19).replace("T", " ")} UTC`;
+  return localTimestamp(d);
 }
 
-/** Filesystem-safe label used when no commit sha is available. */
+/** Filesystem-safe label used when no commit sha is available:
+ * `yyyy-mm-dd_hh-mm-ss`, local. */
 export function defaultLabel(d: Date = new Date()): string {
-  return d.toISOString().replace(/[:.]/g, "-").replace("T", "_").slice(0, 19);
+  const s = localFileStamp(d); // yyyymmdd-hhmmss
+  return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}_${s.slice(9, 11)}-${s.slice(11, 13)}-${s.slice(13, 15)}`;
 }
 
 export function resolveOutputPath(

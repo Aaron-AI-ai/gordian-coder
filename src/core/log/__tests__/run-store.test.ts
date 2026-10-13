@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { localFileStamp } from "../../time";
 import {
   newRunId, runDir, runExists, writeRunText, writeRunJson, readRunText, readRunJson,
   loadJudgments, saveJudgments, submissionCount, mergeCallLog,
@@ -12,8 +13,10 @@ describe("run-store", () => {
   const cwd = mkdtempSync(join(tmpdir(), "f-log-run-"));
 
   test("run id is stamp + 4 hex, run dir under the configured runsDir", () => {
-    const id = newRunId(new Date("2026-09-16T01:45:12Z"));
-    expect(id).toMatch(/^20260916-014512-[0-9a-f]{4}$/);
+    const when = new Date("2026-09-16T01:45:12Z");
+    const id = newRunId(when);
+    // Local-clock stamp (what a person reads), plus 4 hex.
+    expect(id).toMatch(new RegExp(`^${localFileStamp(when)}-[0-9a-f]{4}$`));
     expect(runDir(id, cwd)).toBe(join(cwd, ".fico/f-log/runs/", id));
     expect(runExists(id, cwd)).toBe(false);
   });

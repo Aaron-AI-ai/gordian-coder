@@ -10,6 +10,9 @@ import {
   renderManifest,
   defaultLabel,
   manifestTimestamp,
+} from "../output";
+import { localFileStamp, localTimestamp } from "../../../time";
+import {
   baselineKey,
   parseReportKeys,
   loadBaseline,
@@ -37,17 +40,18 @@ const finding = (over: Partial<Finding> = {}): Finding => ({
   ...over,
 });
 
-const DATE = new Date("2026-07-27T09:30:05Z"); // stamp → 20260727-093005
+const DATE = new Date("2026-07-27T09:30:05Z");
+const STAMP = localFileStamp(DATE); // yyyymmdd-hhmmss in the PC's zone (20260727-093005 under UTC)
 
 describe("resolveOutputPath", () => {
   it("defaults to fcq/report/f-review/ with dated auto filename", () => {
     expect(resolveOutputPath(undefined, "L", tmp(), DATE)).toBe(
-      "fcq/report/f-review/review-L-20260727-093005.md"
+      `fcq/report/f-review/review-L-${STAMP}.md`
     );
   });
 
   it("treats a trailing-slash param as a directory", () => {
-    expect(resolveOutputPath("reports/", "L", tmp(), DATE)).toBe("reports/review-L-20260727-093005.md");
+    expect(resolveOutputPath("reports/", "L", tmp(), DATE)).toBe(`reports/review-L-${STAMP}.md`);
   });
 
   it("uses an explicit filename as-is (no date appended)", () => {
@@ -57,7 +61,7 @@ describe("resolveOutputPath", () => {
   it("reads output from config when no param", () => {
     const d = tmp();
     writeFileSync(join(d, ".f-review.json"), JSON.stringify({ output: "docs/rv/" }));
-    expect(resolveOutputPath(undefined, "L", d, DATE)).toBe("docs/rv/review-L-20260727-093005.md");
+    expect(resolveOutputPath(undefined, "L", d, DATE)).toBe(`docs/rv/review-L-${STAMP}.md`);
   });
 
   it("param overrides config", () => {
@@ -69,13 +73,13 @@ describe("resolveOutputPath", () => {
   it("detects an existing directory without trailing slash", () => {
     const d = tmp();
     mkdirSync(join(d, "reports"));
-    expect(resolveOutputPath("reports", "L", d, DATE)).toBe("reports/review-L-20260727-093005.md");
+    expect(resolveOutputPath("reports", "L", d, DATE)).toBe(`reports/review-L-${STAMP}.md`);
   });
 
   it("keeps an absolute directory path absolute (not re-rooted under cwd)", () => {
     const d = tmp();
     const abs = join(d, "out") + "/";
-    expect(resolveOutputPath(abs, "L", d, DATE)).toBe(join(abs, "review-L-20260727-093005.md"));
+    expect(resolveOutputPath(abs, "L", d, DATE)).toBe(join(abs, `review-L-${STAMP}.md`));
   });
 });
 
@@ -87,10 +91,13 @@ describe("resolveManifestPath", () => {
 
 describe("defaultLabel", () => {
   it("is filesystem-safe (no colons or dots)", () => {
-    const l = defaultLabel(new Date("2026-06-30T12:34:56.789Z"));
+    const when = new Date("2026-06-30T12:34:56.789Z");
+    const l = defaultLabel(when);
     expect(l).not.toContain(":");
     expect(l).not.toContain(".");
-    expect(l).toBe("2026-06-30_12-34-56");
+    // yyyy-mm-dd_hh-mm-ss in the PC's zone (2026-06-30_12-34-56 under UTC).
+    const s = localFileStamp(when);
+    expect(l).toBe(`${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}_${s.slice(9, 11)}-${s.slice(11, 13)}-${s.slice(13, 15)}`);
   });
 });
 
@@ -236,7 +243,10 @@ describe("renderManifest", () => {
       excludes: [],
       generatedAt: manifestTimestamp(DATE),
     });
-    expect(md).toContain("Generated: 2026-07-27 09:30:05 UTC");
+    // Local time with offset and zone, e.g. "2026-07-27 18:30:05 +09:00 (Asia/Seoul)".
+    expect(md).toContain(`Generated: ${localTimestamp(DATE)}`);
+    expect(md).not.toContain(" UTC");
+    expect(md).toMatch(/Generated: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2} \(/);
   });
 });
 
@@ -255,7 +265,7 @@ describe("writeReport", () => {
     await writeReport(join(dir, "review-B-20260727-093005.md"), { "b.ts": [finding()] }, "B", d, "en", undefined, undefined, DATE);
     expect(existsSync(join(d, dir, "review-A-20260726-080000.md"))).toBe(false); // moved out
     expect(existsSync(join(d, dir, "review-B-20260727-093005.md"))).toBe(true); // fresh only
-    expect(existsSync(join(d, `${dir}.20260727-093005`, "review-A-20260726-080000.md"))).toBe(true); // archived
+    expect(existsSync(join(d, `${dir}.${STAMP}`, "review-A-20260726-080000.md"))).toBe(true); // archived
   });
 
   it("same-second rewrite picks a fresh backup suffix instead of crashing", async () => {
@@ -266,8 +276,8 @@ describe("writeReport", () => {
       await writeReport(join(dir, `review-${l}.md`), { "a.ts": [finding()] }, l, d, "en", undefined, undefined, DATE);
     }
     expect(existsSync(join(d, dir, "review-C.md"))).toBe(true);
-    expect(existsSync(join(d, `${dir}.20260727-093005`))).toBe(true);
-    expect(existsSync(join(d, `${dir}.20260727-093005-2`))).toBe(true);
+    expect(existsSync(join(d, `${dir}.${STAMP}`))).toBe(true);
+    expect(existsSync(join(d, `${dir}.${STAMP}-2`))).toBe(true);
   });
 
   it("appends the appendix after the report body when given", async () => {
