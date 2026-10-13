@@ -13,6 +13,7 @@ import {
   verdict,
   dedupeFindings,
   findingSource,
+  dedentCode,
   type Finding,
 } from "../contract";
 
@@ -111,6 +112,40 @@ describe("FindingSchema", () => {
     expect(FindingSchema.safeParse(finding({ source: "fcq" })).success).toBe(true);
     expect(FindingSchema.safeParse(finding({ source: "merged" })).success).toBe(true);
     expect(FindingSchema.safeParse(finding({ source: "robot" as never })).success).toBe(false);
+  });
+});
+
+describe("dedentCode", () => {
+  it("re-aligns a snippet whose first line lost its indentation (the common model output)", () => {
+    // Copied from column 8 of a Java method: the model (or a trim) stripped
+    // the first line's indent, the rest kept theirs — `}` ends up deeper
+    // than the `if` it closes.
+    const s = "if (x == null) {\n            return;\n        }";
+    expect(dedentCode(s)).toBe("if (x == null) {\n    return;\n}");
+  });
+
+  it("dedents a uniformly indented snippet by its common indent", () => {
+    const s = "        try {\n            foo();\n        } catch (Exception e) {\n            log.warn(e);\n        }";
+    expect(dedentCode(s)).toBe("try {\n    foo();\n} catch (Exception e) {\n    log.warn(e);\n}");
+  });
+
+  it("ignores blank lines when measuring, keeps them, and drops leading/trailing blank lines", () => {
+    const s = "\n    a();\n\n    b();\n\n";
+    expect(dedentCode(s)).toBe("a();\n\nb();");
+  });
+
+  it("leaves a flat snippet alone and handles a single line", () => {
+    expect(dedentCode("a();\nb();")).toBe("a();\nb();");
+    expect(dedentCode("   return x;  ")).toBe("return x;");
+  });
+
+  it("treats tabs like any other leading whitespace", () => {
+    expect(dedentCode("\t\tif (a) {\n\t\t\tb();\n\t\t}")).toBe("if (a) {\n\tb();\n}");
+  });
+
+  it("never pushes a line past column 0 when the rest is shallower than the first", () => {
+    // First line kept its indent but a later line is shallower: plain dedent.
+    expect(dedentCode("    foo();\nbar();")).toBe("    foo();\nbar();");
   });
 });
 

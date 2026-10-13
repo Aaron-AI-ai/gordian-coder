@@ -66,6 +66,17 @@ describe("renderHtmlReport — source separation", () => {
     expect(html).toContain("fcq 2"); // the merged row counts on the static side
   });
 
+  it("re-aligns AS-IS/TO-BE code in the fix boxes", () => {
+    const html = renderHtmlReport(
+      { "a.java": [finding({ file: "a.java", asIs: "if (x) {\n            y();\n        }", toBe: "```java\n        z();\n```" })] },
+      "L",
+      "en"
+    );
+    expect(html).toContain("if (x) {\n    y();\n}</span>");
+    expect(html).toContain("z();</span>");
+    expect(html).not.toContain("```");
+  });
+
   it("uses localized labels", () => {
     const ko = renderHtmlReport(mixed, "L", "ko");
     expect(ko).toContain("AI 리뷰 (1)");

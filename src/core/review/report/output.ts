@@ -15,7 +15,7 @@ import { existsSync, statSync, readdirSync, readFileSync, renameSync } from "nod
 import { join, isAbsolute, dirname, basename } from "node:path";
 import { loadConfig } from "../config";
 import { localFileStamp, localTimestamp } from "../../time";
-import { SEVERITIES, findingSource, splitFix, verdict, type Finding, type FindingSource, type Severity } from "../contract";
+import { SEVERITIES, dedentCode, findingSource, splitFix, verdict, type Finding, type FindingSource, type Severity } from "../contract";
 import { renderHtmlReport } from "./html";
 
 const DEFAULT_REPORT_DIR = "fcq/report/f-review/";
@@ -151,9 +151,18 @@ function isBlockSuggestion(s: string | undefined): s is string {
  * requirement as something to paste. That prose lives in `message` now, so the
  * exception is gone and a one-line fix reads like the code it is. */
 function fenced(code: string, lang: string): string {
-  const t = code.trim();
-  if (/^```/.test(t)) return t;
-  return `\`\`\`${lang}\n${t}\n\`\`\``;
+  // A fence the model wrote is unwrapped, not kept: its lines are dropped
+  // and the code is re-fenced here so the dedent below applies to every
+  // snippet alike and no double fence ever renders as literal backticks.
+  // Its language tag, when it gave one, is kept — the model saw the code.
+  const tagged = /^\s*```(\w+)/m.exec(code)?.[1];
+  const body = dedentCode(
+    code
+      .split("\n")
+      .filter((line) => !/^\s*```/.test(line))
+      .join("\n")
+  );
+  return `\`\`\`${tagged ?? lang}\n${body}\n\`\`\``;
 }
 
 /** Language tag for the fence, from the reviewed file's extension. */

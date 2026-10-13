@@ -130,6 +130,28 @@ describe("renderReport", () => {
     expect(parseReportKeys(md).has(baselineKey("a.ts", "ai-rule"))).toBe(true);
   });
 
+  it("re-aligns AS-IS/TO-BE code whose first line lost its indentation", () => {
+    const md = renderReport({
+      "a.java": [
+        finding({
+          file: "a.java",
+          asIs: "if (x == null) {\n            return;\n        }",
+          toBe: "        if (x == null) {\n            throw new IllegalArgumentException();\n        }",
+        }),
+      ],
+    });
+    expect(md).toContain("```java\nif (x == null) {\n    return;\n}\n```");
+    expect(md).toContain("```java\nif (x == null) {\n    throw new IllegalArgumentException();\n}\n```");
+  });
+
+  it("unwraps a model-written fence, dedents, and fences once", () => {
+    const md = renderReport({
+      "a.java": [finding({ file: "a.java", toBe: "```java\n    foo();\n    bar();\n```" })],
+    });
+    expect(md).toContain("```java\nfoo();\nbar();\n```");
+    expect(md.match(/```/g)).toHaveLength(2); // one fence pair, not two
+  });
+
   it("shows _No issues._ for a clean file", () => {
     const md = renderReport({ "src/clean.ts": [] });
     expect(md).toContain("## src/clean.ts");

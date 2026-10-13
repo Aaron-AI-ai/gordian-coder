@@ -18,7 +18,7 @@
  * the machine-readable artifact that loadBaseline parses back.
  */
 
-import { SEVERITIES, findingSource, splitFix, verdict, type Finding, type FindingSource, type Severity } from "../contract";
+import { SEVERITIES, dedentCode, findingSource, splitFix, verdict, type Finding, type FindingSource, type Severity } from "../contract";
 import { localTimestamp } from "../../time";
 import TEMPLATE_HTML from "./report.template.html" with { type: "text" };
 
@@ -259,11 +259,14 @@ function appendixHtml(md: string): string {
  * suggestion often mixes prose with a fenced block, so this strips the markers
  * wherever they appear rather than only unwrapping a wholly-fenced value. */
 function unfence(s: string): string {
-  return s
-    .split("\n")
-    .filter((line) => !/^\s*```/.test(line))
-    .join("\n")
-    .trim();
+  // dedentCode, not trim(): a trim strips only the first line's indent and
+  // leaves `}` deeper than its `if` — the mis-aligned boxes readers reported.
+  return dedentCode(
+    s
+      .split("\n")
+      .filter((line) => !/^\s*```/.test(line))
+      .join("\n")
+  );
 }
 
 /** One finding as a list item, shared by the by-file and by-rule tabs. `head`

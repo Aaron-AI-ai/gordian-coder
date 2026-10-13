@@ -92,6 +92,46 @@ export function splitFix(f: {
   return { ...(head ? { asIs: head } : {}), ...(tail ? { toBe: tail } : {}) };
 }
 
+/**
+ * Normalise the indentation of a code snippet for display.
+ *
+ * Models copy AS-IS/TO-BE from the middle of a file, and the first line
+ * routinely arrives with its leading whitespace gone (a trim somewhere, or
+ * the model starting at the first token) while the rest keeps the original
+ * depth — so `}` renders deeper than the `if` it closes. Two cases:
+ *
+ *  - first line indented → ordinary dedent by the common indent of all lines;
+ *  - first line at column 0 → dedent lines 2..n by THEIR common indent. For
+ *    a block the closing brace sits at the first line's original depth, so
+ *    that minimum is exactly what the first line lost.
+ *
+ * Blank lines are kept but never measured; leading/trailing blank lines and
+ * trailing whitespace on each line are dropped. A line is never pushed past
+ * column 0. Fence lines are not handled here — callers strip them first.
+ */
+export function dedentCode(code: string): string {
+  const lines = code.replace(/\r\n?/g, "\n").split("\n").map((l) => l.replace(/\s+$/, ""));
+  while (lines.length && !lines[0].trim()) lines.shift();
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  if (!lines.length) return "";
+  const indent = (l: string): number => l.length - l.trimStart().length;
+  const measured = (ls: string[]): number =>
+    Math.min(...ls.filter((l) => l.trim()).map(indent), Number.POSITIVE_INFINITY);
+  const first = indent(lines[0]);
+  // Which lines share one dedent amount: all of them, or everything after a
+  // first line that has already lost its indent.
+  const from = first > 0 ? 0 : 1;
+  const amount = measured(lines.slice(from));
+  if (!Number.isFinite(amount) || amount === 0) return lines.join("\n");
+  return lines
+    .map((l, i) => {
+      if (i === 0 && from === 0) return l.slice(amount);
+      if (i === 0) return l;
+      return l.trim() ? l.slice(amount) : "";
+    })
+    .join("\n");
+}
+
 /** True when a finding carries any fix text at all. */
 export function hasFix(f: { asIs?: string; toBe?: string; suggestion?: string }): boolean {
   const { asIs, toBe } = splitFix(f);
