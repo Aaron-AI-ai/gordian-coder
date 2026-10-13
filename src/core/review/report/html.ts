@@ -18,7 +18,7 @@
  * the machine-readable artifact that loadBaseline parses back.
  */
 
-import { SEVERITIES, splitFix, verdict, type Finding, type Severity } from "../contract";
+import { SEVERITIES, findingSource, splitFix, verdict, type Finding, type FindingSource, type Severity } from "../contract";
 import { localTimestamp } from "../../time";
 import TEMPLATE_HTML from "./report.template.html" with { type: "text" };
 
@@ -92,7 +92,13 @@ interface HtmlLabels {
   verdictPass: (s: string) => string;
   verdictFail: (n: number, s: string) => string;
   generated: string;
+  source: string; // toolbar label for the source filter
+  aiGroup: string; // heading of the reviewer's own findings inside a file block
+  fcqGroup: string; // heading of the static-analysis findings inside a file block
 }
+
+/** Badge text per source — names, not prose, so shared across languages. */
+const SOURCE_BADGE: Record<FindingSource, string> = { ai: "AI", fcq: "fcq", merged: "fcq+AI" };
 
 const LABELS: Record<string, HtmlLabels> = {
   ko: {
@@ -127,6 +133,9 @@ const LABELS: Record<string, HtmlLabels> = {
     verdictPass: (s) => `판정: 통과 — 기준(${s} 이상) 위반 없음`,
     verdictFail: (n, s) => `판정: 실패 — ${s} 이상 ${n}건`,
     generated: "생성",
+    source: "출처",
+    aiGroup: "AI 리뷰",
+    fcqGroup: "정적 분석",
   },
   en: {
     title: "Code Review Report",
@@ -160,6 +169,9 @@ const LABELS: Record<string, HtmlLabels> = {
     verdictPass: (s) => `Verdict: PASS — nothing at or above ${s}`,
     verdictFail: (n, s) => `Verdict: FAIL — ${n} finding(s) at or above ${s}`,
     generated: "Generated",
+    source: "Source",
+    aiGroup: "AI review",
+    fcqGroup: "Static analysis",
   },
   ja: {
     title: "コードレビューレポート",
@@ -193,6 +205,9 @@ const LABELS: Record<string, HtmlLabels> = {
     verdictPass: (s) => `判定: 合格 — ${s} 以上の違反なし`,
     verdictFail: (n, s) => `判定: 不合格 — ${s} 以上 ${n}件`,
     generated: "生成",
+    source: "出処",
+    aiGroup: "AIレビュー",
+    fcqGroup: "静的解析",
   },
 };
 
@@ -257,10 +272,12 @@ function findingItem(f: Finding, head: string, old: boolean, L: HtmlLabels): str
   // Two boxes, not one: the corrected code is what a reader acts on, so it
   // gets its own labelled block instead of trailing the offending code.
   const fix = splitFix(f);
+  const src = findingSource(f);
   return [
-    `<li data-sev="${f.severity}" data-cat="${esc(f.category)}" data-q="${q(head, f.rule, f.message, fix.asIs && unfence(fix.asIs), fix.toBe && unfence(fix.toBe), f.category)}">`,
+    `<li data-sev="${f.severity}" data-cat="${esc(f.category)}" data-src="${src}" data-q="${q(head, f.rule, f.message, fix.asIs && unfence(fix.asIs), fix.toBe && unfence(fix.toBe), f.category)}">`,
     `<code>${esc(head)}</code>`,
     `<span class="sev ${f.severity}">${f.severity}</span>`,
+    `<span class="badge src ${src}">${SOURCE_BADGE[src]}</span>`,
     `<code>${esc(f.category)}</code>`,
     old ? `<span class="badge old">${esc(L.existing)}</span>` : "",
     `<b>${esc(f.rule)}</b> &mdash; ${esc(f.message)}`,
@@ -298,6 +315,7 @@ export function renderHtmlReport(
   const isOld = (file: string, f: Finding) => !!baselineKeys?.has(baselineKeyOf(file, f.rule));
 
   const sevCount = (s: Severity) => all.filter((f) => f.severity === s).length;
+  const aiCount = all.filter((f) => findingSource(f) === "ai").length;
   const categories = [...new Set(all.map((f) => f.category))].sort();
   const cleanFiles = files.filter((f) => findings[f].length === 0).length;
   const rate = files.length ? Math.round((cleanFiles / files.length) * 1000) / 10 : 100;
@@ -335,11 +353,22 @@ export function renderHtmlReport(
       .map((file) => {
         const items = findings[file];
         const fTop = topSeverity(items)!;
+        // The reviewer's own findings first, then what static analysis found
+        // (a merged row is an fcq hit at heart). One divider, not two nested
+        // blocks: the reader sees both groups at a glance without another click.
+        const ai = items.filter((f) => findingSource(f) === "ai");
+        const stat = items.filter((f) => findingSource(f) !== "ai");
+        const item = (f: Finding) => findingItem(f, f.line ? `L${f.line}` : "-", isOld(file, f), L);
+        const split = ai.length > 0 && stat.length > 0;
         return [
           `<details class="vblk">`,
-          `<summary><code>${esc(file)}</code> <span class="desc">(${items.length})</span> <span class="sev ${fTop}">${fTop}</span></summary>`,
+          `<summary><code>${esc(file)}</code> <span class="desc">(${items.length})</span> <span class="sev ${fTop}">${fTop}</span>` +
+            (split ? ` <span class="srcsum">${esc(L.aiGroup)} (${ai.length}) &middot; ${esc(L.fcqGroup)} (${stat.length})</span>` : "") +
+            `</summary>`,
           `<ul>`,
-          ...items.map((f) => findingItem(f, f.line ? `L${f.line}` : "-", isOld(file, f), L)),
+          ...ai.map(item),
+          ...(split ? [`<li class="srcdiv">${esc(L.fcqGroup)} (${stat.length})</li>`] : []),
+          ...stat.map(item),
           `</ul>`,
           `</details>`,
         ].join("\n    ");
@@ -405,7 +434,7 @@ export function renderHtmlReport(
     STATS: [
       `<div class="stat rate"><div class="n">${rate}%</div><div class="l">${esc(L.cleanFiles)} &middot; ${cleanFiles}/${files.length}</div></div>`,
       `<div class="stat"><div class="n">${files.length}</div><div class="l">${esc(L.files)} &middot; ${esc(L.withFindings)} ${files.length - cleanFiles}</div></div>`,
-      `<div class="stat${all.length ? " bad" : ""}"><div class="n">${all.length}</div><div class="l">${esc(L.findings)} &middot; ${esc(L.maxSeverity)} ${top ?? esc(L.none)}</div></div>`,
+      `<div class="stat${all.length ? " bad" : ""}"><div class="n">${all.length}</div><div class="l">${esc(L.findings)} &middot; AI ${aiCount} &middot; fcq ${all.length - aiCount} &middot; ${esc(L.maxSeverity)} ${top ?? esc(L.none)}</div></div>`,
     ].join("\n      "),
     SPECTRUM_LABEL: esc(L.spectrum),
     SPECTRUM_EMPTY: all.length ? "" : " empty",
@@ -432,6 +461,14 @@ export function renderHtmlReport(
     SEVERITY_BUTTONS: [
       `<button class="fbtn active" data-sev="">${esc(L.all)}</button>`,
       ...SEV_ORDER.map((s) => `<button class="fbtn" data-sev="${s}">${s}</button>`),
+    ].join("\n          "),
+    SOURCE_LABEL: esc(L.source),
+    // Two buttons, not three: a merged row matches both, so "fcq+AI" needs no
+    // button of its own — it shows under either filter.
+    SOURCE_BUTTONS: [
+      `<button class="fbtn active" data-src="">${esc(L.all)}</button>`,
+      `<button class="fbtn" data-src="ai">${SOURCE_BADGE.ai}</button>`,
+      `<button class="fbtn" data-src="fcq">${SOURCE_BADGE.fcq}</button>`,
     ].join("\n          "),
     SEARCH_LABEL: esc(L.search),
     CATEGORY_HEAD: [

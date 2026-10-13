@@ -48,9 +48,22 @@ export const FindingSchema = z.object({
   asIs: capped(3000).optional(), // the offending code as it stands
   toBe: capped(4000).optional(), // the corrected code — never truncated to fit AS-IS
   suggestion: capped(7000).optional(), // legacy single field: "AS-IS: … TO-BE: …"
+  // Where the finding came from, so the report can keep static analysis and
+  // the reviewer's own judgement apart: "fcq" rows come straight from the
+  // analyzer, "merged" rows are an fcq hit the reviewer followed up on the
+  // same line. Reviewer submissions carry no tag — absent means AI.
+  source: z.enum(["ai", "fcq", "merged"]).optional(),
 });
 
 export type Finding = z.infer<typeof FindingSchema>;
+export type FindingSource = NonNullable<Finding["source"]>;
+
+/** The source of a finding. Untagged rows are AI, except the `fcq:` rule
+ * prefix every fcq row has carried since before the tag existed — so a
+ * report built from older artifacts still sorts them correctly. */
+export function findingSource(f: Pick<Finding, "rule" | "source">): FindingSource {
+  return f.source ?? (f.rule.startsWith("fcq:") ? "fcq" : "ai");
+}
 
 /**
  * The fix of a finding, however it was supplied.

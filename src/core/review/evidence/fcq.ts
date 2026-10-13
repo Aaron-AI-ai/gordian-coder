@@ -472,6 +472,7 @@ export function fcqFindings(file: string, violations: FcqFileViolation[]): Findi
       rule: `fcq:${v.analyzer}/${v.ruleId}`,
       message: v.message || v.description,
       ...(asIs ? { asIs } : {}),
+      source: "fcq" as const,
     };
   });
 }
@@ -511,6 +512,7 @@ export function mergeFcqFindings(llm: Finding[], fcq: Finding[]): Finding[] {
       ...(mine.asIs || theirs.asIs ? { asIs: mine.asIs ?? theirs.asIs } : {}),
       ...(mine.toBe || theirs.toBe ? { toBe: mine.toBe ?? theirs.toBe } : {}),
       suggestion: undefined,
+      source: "merged" as const,
     };
   });
   return [...rest, ...merged];

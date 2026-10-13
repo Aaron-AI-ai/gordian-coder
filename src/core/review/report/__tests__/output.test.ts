@@ -110,6 +110,26 @@ describe("renderReport", () => {
     expect(md).toContain("hardcoded token");
   });
 
+  it("adds a trailing source column telling AI findings from fcq and merged rows", () => {
+    const md = renderReport({
+      "a.ts": [
+        finding({ rule: "ai-rule" }),
+        finding({ rule: "fcq:pmd/R1", source: "fcq", line: 5 }),
+        finding({ rule: "fcq:pmd/R2", source: "merged", line: 7 }),
+      ],
+    });
+    expect(md).toContain("| severity | category | line | rule | message | suggestion | source |");
+    expect(md).toMatch(/\| ai-rule \| hardcoded token \| - \| AI \|/);
+    expect(md).toMatch(/\| fcq:pmd\/R1 \| hardcoded token \| - \| fcq \|/);
+    expect(md).toMatch(/\| fcq:pmd\/R2 \| hardcoded token \| - \| fcq\+AI \|/);
+    // Korean header carries the same column.
+    expect(renderReport({ "a.ts": [finding()] }, "", "ko")).toContain("| 심각도 | 분류 | 라인 | 규칙 | 내용 | 제안 | 출처 |");
+    // The baseline parser still finds every rule: the new column is appended,
+    // so the rule stays in the fifth cell of both old and new reports.
+    expect(parseReportKeys(md).has(baselineKey("a.ts", "fcq:pmd/R2"))).toBe(true);
+    expect(parseReportKeys(md).has(baselineKey("a.ts", "ai-rule"))).toBe(true);
+  });
+
   it("shows _No issues._ for a clean file", () => {
     const md = renderReport({ "src/clean.ts": [] });
     expect(md).toContain("## src/clean.ts");

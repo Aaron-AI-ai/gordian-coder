@@ -12,6 +12,7 @@ import {
   scriptMismatch,
   verdict,
   dedupeFindings,
+  findingSource,
   type Finding,
 } from "../contract";
 
@@ -104,6 +105,21 @@ describe("splitFix", () => {
 describe("FindingSchema", () => {
   it("accepts a valid finding", () => {
     expect(FindingSchema.safeParse(finding()).success).toBe(true);
+  });
+
+  it("accepts an optional source tag and rejects an unknown one", () => {
+    expect(FindingSchema.safeParse(finding({ source: "fcq" })).success).toBe(true);
+    expect(FindingSchema.safeParse(finding({ source: "merged" })).success).toBe(true);
+    expect(FindingSchema.safeParse(finding({ source: "robot" as never })).success).toBe(false);
+  });
+});
+
+describe("findingSource", () => {
+  it("reads the explicit tag, else infers fcq from the rule prefix, else AI", () => {
+    expect(findingSource(finding())).toBe("ai");
+    expect(findingSource(finding({ rule: "fcq:pmd/LineLength" }))).toBe("fcq"); // legacy untagged fcq row
+    expect(findingSource(finding({ rule: "fcq:pmd/LineLength", source: "merged" }))).toBe("merged");
+    expect(findingSource(finding({ rule: "mentions fcq: in prose" }))).toBe("ai"); // prefix only, not substring
   });
 
   it("rejects an unknown category", () => {

@@ -94,6 +94,13 @@ td code, code { font-family:var(--mono); background:#f1efe8; padding:1px 6px; bo
 /* badges */
 .badge { display:inline-block; padding:2px 9px; border-radius:6px; font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.04em; color:#fff; white-space:nowrap; }
 .badge.old { background:var(--graphite); }
+/* Source of a finding: the reviewer (AI), the fcq analyzer, or an fcq hit the reviewer followed up (merged). */
+.badge.src.ai { background:#2d6cdf; }
+.badge.src.fcq { background:#8a6d3b; }
+.badge.src.merged { background:linear-gradient(90deg,#8a6d3b 50%,#2d6cdf 50%); }
+.srcsum { font-family:var(--mono); font-size:11px; color:var(--graphite); margin-left:6px; }
+details.vblk li.srcdiv { margin:14px 0 4px; padding-top:8px; border-top:1px dashed var(--line); font-family:var(--mono); font-size:11px; color:var(--graphite); }
+details.vblk li.srcdiv::before { content:''; margin:0; }
 .sev { display:inline-block; padding:1px 8px; border-radius:6px; font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.03em; border:1px solid currentColor; white-space:nowrap; }
 .sev.nit{color:var(--nit);} .sev.minor{color:var(--minor);}
 .sev.major{color:var(--major);} .sev.blocker{color:var(--blocker);}
@@ -185,6 +192,10 @@ details.vblk li::before { content:'\25B8'; color:var(--graphite); margin-right:7
           <span class="lbl">{{SEVERITY_LABEL}}</span>
           {{SEVERITY_BUTTONS}}
         </div>
+        <div class="seg-group" data-group="src">
+          <span class="lbl">{{SOURCE_LABEL}}</span>
+          {{SOURCE_BUTTONS}}
+        </div>
         <input id="q" type="search" placeholder="{{SEARCH_LABEL}}" aria-label="{{SEARCH_LABEL}}">
       </div>
     </div>
@@ -215,7 +226,9 @@ details.vblk li::before { content:'\25B8'; color:var(--graphite); margin-right:7
 <button id="totop" hidden aria-label="top">&#8593;</button>
 <script>
 (function(){
-  var state={cat:'',sev:'',q:''};
+  var state={cat:'',sev:'',src:'',q:''};
+  /* A merged row (fcq hit + reviewer follow-up) belongs to both sources. */
+  function srcMatch(d){ return !state.src||d.src===state.src||d.src==='merged'; }
   var curTab='cat';
   function setActive(el){
     var sibs=el.parentNode.querySelectorAll('.chip,.fbtn');
@@ -228,6 +241,7 @@ details.vblk li::before { content:'\25B8'; color:var(--graphite); margin-right:7
     if(curTab!=='cat'){ parts.push('tab='+curTab); }
     if(state.cat){ parts.push('cat='+encodeURIComponent(state.cat)); }
     if(state.sev){ parts.push('sev='+state.sev); }
+    if(state.src){ parts.push('src='+state.src); }
     if(state.q){ parts.push('q='+encodeURIComponent(state.q)); }
     try{ history.replaceState(null,'','#'+parts.join('&')); }catch(e){ /* file:// restrictions */ }
   }
@@ -240,13 +254,16 @@ details.vblk li::before { content:'\25B8'; color:var(--graphite); margin-right:7
       var vis=0;
       for(var k=0;k<items.length;k++){
         var d=items[k].dataset;
-        var m=(!state.sev||d.sev===state.sev)&&(!state.cat||d.cat===state.cat)
+        var m=(!state.sev||d.sev===state.sev)&&(!state.cat||d.cat===state.cat)&&srcMatch(d)
           &&(!state.q||(d.q||'').indexOf(state.q)>=0);
         items[k].classList.toggle('fhide',!m);
         if(m){ vis++; }
       }
       blks[b].hidden=vis===0;
     }
+    /* The static-analysis divider has nothing to head when only AI rows show. */
+    var divs=document.querySelectorAll('.srcdiv');
+    for(var v=0;v<divs.length;v++){ divs[v].hidden=state.src==='ai'; }
     var notes=document.querySelectorAll('[data-empty]');
     for(var j=0;j<notes.length;j++){
       var all=document.querySelectorAll('.'+notes[j].getAttribute('data-empty')), any=false;
@@ -292,6 +309,7 @@ details.vblk li::before { content:'\25B8'; color:var(--graphite); margin-right:7
     if(!t){ return; }
     if(t.hasAttribute('data-cat')){ state.cat=t.getAttribute('data-cat'); }
     if(t.hasAttribute('data-sev')){ state.sev=t.getAttribute('data-sev'); }
+    if(t.hasAttribute('data-src')){ state.src=t.getAttribute('data-src'); }
     setActive(t); apply();
   });
   document.addEventListener('keydown',function(e){
@@ -332,6 +350,7 @@ details.vblk li::before { content:'\25B8'; color:var(--graphite); margin-right:7
   if(tab0!=='viol'&&tab0!=='files'){ tab0='cat'; }
   if(state.cat){ activate('.chip','data-cat',state.cat); }
   if(state.sev){ activate('.fbtn[data-sev]','data-sev',state.sev); }
+  if(state.src){ activate('.fbtn[data-src]','data-src',state.src); }
   if(state.q&&qbox){ qbox.value=state.q; }
   apply();
   showTab(tab0);

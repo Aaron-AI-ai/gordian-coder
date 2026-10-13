@@ -15,7 +15,7 @@ import { existsSync, statSync, readdirSync, readFileSync, renameSync } from "nod
 import { join, isAbsolute, dirname, basename } from "node:path";
 import { loadConfig } from "../config";
 import { localFileStamp, localTimestamp } from "../../time";
-import { SEVERITIES, splitFix, verdict, type Finding, type Severity } from "../contract";
+import { SEVERITIES, findingSource, splitFix, verdict, type Finding, type FindingSource, type Severity } from "../contract";
 import { renderHtmlReport } from "./html";
 
 const DEFAULT_REPORT_DIR = "fcq/report/f-review/";
@@ -84,14 +84,19 @@ interface ReportLabels {
   detailsTitle: string; // heading of the section holding those suggestions
   asIs: string; // label above the offending code
   toBe: string; // label above the corrected code
+  source: Record<FindingSource, string>; // trailing column: who found it
 }
+
+/** Source labels are shared across languages — "AI"/"fcq" are names, not prose. */
+const SOURCE_LABELS: Record<FindingSource, string> = { ai: "AI", fcq: "fcq", merged: "fcq+AI" };
 
 const LABELS: Record<string, ReportLabels> = {
   ko: {
     title: "# 코드 리뷰 리포트",
     findings: (n) => `**${n}건 발견**`,
     noIssues: "_이슈 없음._",
-    header: "| 심각도 | 분류 | 라인 | 규칙 | 내용 | 제안 |",
+    header: "| 심각도 | 분류 | 라인 | 규칙 | 내용 | 제안 | 출처 |",
+    source: SOURCE_LABELS,
     existing: "기존",
     seeBelow: "↓ 아래 참조",
     detailsTitle: "제안 상세",
@@ -102,7 +107,8 @@ const LABELS: Record<string, ReportLabels> = {
     title: "# Code Review Report",
     findings: (n) => `**${n} finding(s)**`,
     noIssues: "_No issues._",
-    header: "| severity | category | line | rule | message | suggestion |",
+    header: "| severity | category | line | rule | message | suggestion | source |",
+    source: SOURCE_LABELS,
     existing: "existing",
     seeBelow: "↓ see below",
     detailsTitle: "Suggestions",
@@ -113,7 +119,8 @@ const LABELS: Record<string, ReportLabels> = {
     title: "# コードレビューレポート",
     findings: (n) => `**${n}件検出**`,
     noIssues: "_問題なし。_",
-    header: "| 深刻度 | 分類 | 行 | ルール | 内容 | 提案 |",
+    header: "| 深刻度 | 分類 | 行 | ルール | 内容 | 提案 | 出処 |",
+    source: SOURCE_LABELS,
     existing: "既存",
     seeBelow: "↓ 下記参照",
     detailsTitle: "提案の詳細",
@@ -270,7 +277,9 @@ export function renderReport(
       continue;
     }
     lines.push(L.header);
-    lines.push("| --- | --- | --- | --- | --- | --- |");
+    // The source column is LAST on purpose: parseReportKeys reads the rule
+    // from the fifth cell of every report ever written, old or new.
+    lines.push("| --- | --- | --- | --- | --- | --- | --- |");
     const blocks: Finding[] = [];
     for (const x of fs) {
       const old = baseline?.has(baselineKey(file, x.rule)) ? `**[${L.existing}]** ` : "";
@@ -280,7 +289,7 @@ export function renderReport(
       if (fix.asIs || fix.toBe) blocks.push(x);
       const suggestion = fix.asIs || fix.toBe ? L.seeBelow : "-";
       lines.push(
-        `| ${x.severity} | ${x.category} | ${x.line ?? "-"} | ${cell(x.rule)} | ${old}${cell(x.message)} | ${suggestion} |`
+        `| ${x.severity} | ${x.category} | ${x.line ?? "-"} | ${cell(x.rule)} | ${old}${cell(x.message)} | ${suggestion} | ${L.source[findingSource(x)]} |`
       );
     }
     lines.push("");

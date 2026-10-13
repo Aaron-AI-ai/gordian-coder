@@ -258,6 +258,19 @@ describe("evidence / findings rendering", () => {
     expect(out.find((f) => f.rule === "fcq:arch/R3")!.message).toBe("m3"); // unanchored: untouched
   });
 
+  it("tags fcq rows and merged rows with their source so the report can tell them from AI findings", () => {
+    const fcq = fcqFindings("f.java", rows);
+    expect(fcq.every((f) => f.source === "fcq")).toBe(true);
+    const llm = [
+      { category: "security" as const, severity: "major" as const, file: "f.java", line: 600, rule: "inj (fcq R2)", message: "user input reaches ${}", asIs: "${a}", toBe: "#{a}" },
+      { category: "tests" as const, severity: "minor" as const, file: "f.java", line: 999, rule: "t", message: "no test" },
+    ];
+    const out = mergeFcqFindings(llm, fcq);
+    expect(out.find((f) => f.rule === "fcq:sql/R2")!.source).toBe("merged"); // fcq row + reviewer follow-up
+    expect(out.find((f) => f.rule === "fcq:pmd/R1")!.source).toBe("fcq"); // untouched fcq row
+    expect(out.find((f) => f.rule === "t")!.source).toBeUndefined(); // plain AI finding carries no tag
+  });
+
   it("renders a failed section and an ok section", () => {
     expect(renderFcqSection({ status: "failed", command: "fcq x", durationMs: 5, reason: "boom" }, null)).toContain("FAILED** — boom");
     expect(renderFcqSection(undefined, null)).toBe("");
