@@ -18,9 +18,10 @@ export interface BugCase {
   id: string;
   kind: "bug";
   file: string;
-  category: string;
+  category: string | string[];
   min_severity: string;
-  line_range: [number, number];
+  line_range?: [number, number];
+  anchor?: string;
   keywords_any: string[];
   kb_ref?: string;
   commit: string;
@@ -68,9 +69,10 @@ async function loadCases(target: string, selector?: string): Promise<EvalCase[]>
       cases.push({
         id, kind: "bug",
         file: y.file as string,
-        category: y.category as string,
+        category: y.category as string | string[],
         min_severity: y.min_severity as string,
-        line_range: y.line_range as [number, number],
+        line_range: y.line_range as [number, number] | undefined,
+        anchor: y.anchor as string | undefined,
         keywords_any: (y.keywords_any ?? []) as string[],
         kb_ref: y.kb_ref as string | undefined,
         commit: y.commit as string,
@@ -102,23 +104,37 @@ export function parseFileFindings(md: string, file: string): FindingRow[] {
   return rows;
 }
 
-export function scoreBugCase(c: BugCase, rows: FindingRow[]): boolean {
+/** 정답의 줄 범위를 구한다. anchor가 있으면 소스에서 그 문자열이 든 줄을 찾는다(정확히 1줄이어야 함). */
+export function resolveLineRange(c: BugCase, source: string): [number, number] {
+  if (!c.anchor) {
+    if (!c.line_range) throw new Error(`${c.id}: needs anchor or line_range`);
+    return c.line_range;
+  }
+  const hits = source.split("\n").flatMap((l, i) => (l.includes(c.anchor!) ? [i + 1] : []));
+  if (hits.length !== 1) throw new Error(`${c.id}: anchor "${c.anchor}" matched ${hits.length} lines (need exactly 1)`);
+  return [hits[0], hits[0]];
+}
+
+export function scoreBugCase(c: BugCase, rows: FindingRow[], range?: [number, number]): boolean {
+  const [lo, hi] = range ?? resolveLineRange(c, "");
+  const cats = Array.isArray(c.category) ? c.category : [c.category];
   return rows.some((r) =>
-    r.category === c.category &&
+    cats.includes(r.category) &&
     SEVERITY_RANK[r.severity] <= SEVERITY_RANK[c.min_severity] &&
     r.line !== null &&
-    r.line >= c.line_range[0] - LINE_TOLERANCE && r.line <= c.line_range[1] + LINE_TOLERANCE &&
+    r.line >= lo - LINE_TOLERANCE && r.line <= hi + LINE_TOLERANCE &&
     c.keywords_any.some((k) => (r.message + " " + r.suggestion).toLowerCase().includes(k.toLowerCase()))
   );
 }
 
+/** 대조군은 minor 이상 finding이 없어야 통과. `tests` 카테고리는 샘플 코드에 테스트가 없어서 항상 뜨는 노이즈라 제외한다. */
 export function scoreControlCase(rows: FindingRow[]): boolean {
-  return !rows.some((r) => SEVERITY_RANK[r.severity] <= SEVERITY_RANK.minor);
+  return !rows.some((r) => r.category !== "tests" && SEVERITY_RANK[r.severity] <= SEVERITY_RANK.minor);
 }
 
 function runFReview(target: string, c: EvalCase, mode: "whole" | "diff", report: string, model?: string): void {
   rmSync(join(target, report), { force: true });
-  mkdirSync(join(target, ".fico/report/f-review"), { recursive: true });
+  mkdirSync(join(target, ".fico/report/freview-eval"), { recursive: true });
   const reviewArgs = mode === "whole" ? `--files=${c.file} --whole` : c.commit;
   const cmd = ["opencode", "run", "--command", "f-review", ...(model ? ["-m", model] : []), "--", `${reviewArgs} --output=${report}`];
   console.log(`\n$ ${cmd.join(" ")}`);
@@ -147,13 +163,24 @@ async function main(): Promise<void> {
   const rows: string[] = [];
   let failed = 0;
   for (const c of cases) {
-    const report = `.fico/report/f-review/${c.id}-${mode}.md`;
+    const report = `.fico/report/freview-eval/${c.id}-${mode}.md`;
     if (!noRun) runFReview(target, c, mode, report, model);
     const full = join(target, report);
     if (!existsSync(full)) { rows.push(`| ${c.id} | – | 리포트 없음 |`); failed++; continue; }
     const md = await Bun.file(full).text();
     const findings = parseFileFindings(md, c.file);
-    const pass = c.kind === "bug" ? scoreBugCase(c, findings) : scoreControlCase(findings);
+    let pass: boolean;
+    if (c.kind === "bug") {
+      try {
+        const src = await Bun.file(join(target, c.file)).text();
+        pass = scoreBugCase(c, findings, resolveLineRange(c, src));
+      } catch (e) {
+        console.error((e as Error).message);
+        pass = false;
+      }
+    } else {
+      pass = scoreControlCase(findings);
+    }
     if (!pass) failed++;
     rows.push(`| ${c.id} | ${pass ? "PASS" : "FAIL"} | ${report} |`);
   }
