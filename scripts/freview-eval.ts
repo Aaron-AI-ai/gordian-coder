@@ -21,7 +21,7 @@ export interface BugCase {
   category: string | string[];
   min_severity: string;
   line_range?: [number, number];
-  anchor?: string;
+  anchor?: string | string[]; // 결함이 여러 줄에 걸쳐 드러나면 목록으로 — 어느 줄 근처든 인정
   keywords_any: string[];
   kb_ref?: string;
   commit: string;
@@ -72,7 +72,7 @@ async function loadCases(target: string, selector?: string): Promise<EvalCase[]>
         category: y.category as string | string[],
         min_severity: y.min_severity as string,
         line_range: y.line_range as [number, number] | undefined,
-        anchor: y.anchor as string | undefined,
+        anchor: y.anchor as string | string[] | undefined,
         keywords_any: (y.keywords_any ?? []) as string[],
         kb_ref: y.kb_ref as string | undefined,
         commit: y.commit as string,
@@ -104,25 +104,35 @@ export function parseFileFindings(md: string, file: string): FindingRow[] {
   return rows;
 }
 
-/** 정답의 줄 범위를 구한다. anchor가 있으면 소스에서 그 문자열이 든 줄을 찾는다(정확히 1줄이어야 함). */
-export function resolveLineRange(c: BugCase, source: string): [number, number] {
-  if (!c.anchor) {
+/** 정답의 줄 범위들을 구한다. anchor(문자열 또는 목록)마다 소스에서 그 문자열이 든 줄을 찾는다(각각 정확히 1줄이어야 함). */
+export function resolveLineRanges(c: BugCase, source: string): [number, number][] {
+  if (!c.anchor || (Array.isArray(c.anchor) && c.anchor.length === 0)) {
     if (!c.line_range) throw new Error(`${c.id}: needs anchor or line_range`);
-    return c.line_range;
+    return [c.line_range];
   }
-  const hits = source.split("\n").flatMap((l, i) => (l.includes(c.anchor!) ? [i + 1] : []));
-  if (hits.length !== 1) throw new Error(`${c.id}: anchor "${c.anchor}" matched ${hits.length} lines (need exactly 1)`);
-  return [hits[0], hits[0]];
+  const lines = source.split("\n");
+  return (Array.isArray(c.anchor) ? c.anchor : [c.anchor]).map((a) => {
+    const hits = lines.flatMap((l, i) => (l.includes(a) ? [i + 1] : []));
+    if (hits.length !== 1) throw new Error(`${c.id}: anchor "${a}" matched ${hits.length} lines (need exactly 1)`);
+    return [hits[0], hits[0]] as [number, number];
+  });
 }
 
-export function scoreBugCase(c: BugCase, rows: FindingRow[], range?: [number, number]): boolean {
-  const [lo, hi] = range ?? resolveLineRange(c, "");
+/** 첫 번째 정답 줄 범위 (anchor가 하나인 케이스용). */
+export function resolveLineRange(c: BugCase, source: string): [number, number] {
+  return resolveLineRanges(c, source)[0];
+}
+
+export function scoreBugCase(c: BugCase, rows: FindingRow[], range?: [number, number] | [number, number][]): boolean {
+  const ranges: [number, number][] = range
+    ? Array.isArray(range[0]) ? (range as [number, number][]) : [range as [number, number]]
+    : resolveLineRanges(c, "");
   const cats = Array.isArray(c.category) ? c.category : [c.category];
   return rows.some((r) =>
     cats.includes(r.category) &&
     SEVERITY_RANK[r.severity] <= SEVERITY_RANK[c.min_severity] &&
     r.line !== null &&
-    r.line >= lo - LINE_TOLERANCE && r.line <= hi + LINE_TOLERANCE &&
+    ranges.some(([lo, hi]) => r.line! >= lo - LINE_TOLERANCE && r.line! <= hi + LINE_TOLERANCE) &&
     c.keywords_any.some((k) => (r.message + " " + r.suggestion).toLowerCase().includes(k.toLowerCase()))
   );
 }
@@ -173,7 +183,7 @@ async function main(): Promise<void> {
     if (c.kind === "bug") {
       try {
         const src = await Bun.file(join(target, c.file)).text();
-        pass = scoreBugCase(c, findings, resolveLineRange(c, src));
+        pass = scoreBugCase(c, findings, resolveLineRanges(c, src));
       } catch (e) {
         console.error((e as Error).message);
         pass = false;

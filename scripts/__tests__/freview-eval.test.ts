@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { matchesCaseSelector, parseFileFindings, resolveLineRange, scoreBugCase, scoreControlCase } from "../freview-eval";
+import { matchesCaseSelector, parseFileFindings, resolveLineRange, resolveLineRanges, scoreBugCase, scoreControlCase } from "../freview-eval";
 
 describe("matchesCaseSelector", () => {
   test("no selector matches everything", () => {
@@ -135,5 +135,30 @@ describe("scoreControlCase ignores the tests category", () => {
   });
   test("a minor finding in any other category still fails", () => {
     expect(scoreControlCase([{ severity: "minor", category: "maintainability", line: 1, rule: "x", message: "", suggestion: "" }])).toBe(false);
+  });
+});
+
+describe("anchor lists (a defect that legitimately shows up on several lines)", () => {
+  const base = {
+    id: "case-x", kind: "bug" as const, file: "A.java",
+    category: "correctness", min_severity: "major", keywords_any: ["volatile"], commit: "case-x",
+  };
+  const src = ["class A {", "  private static A instance;", "", "  static A get() {", "    if (instance == null) {", "      instance = new A();", "    }", "    return instance;", "  }", "}"].join("\n");
+  const row = (line: number) => ({ severity: "major", category: "correctness", line, rule: "r", message: "volatile 누락", suggestion: "" });
+
+  test("resolves every anchor to its own line", () => {
+    expect(resolveLineRanges({ ...base, anchor: ["private static A instance;", "instance = new A();"] }, src)).toEqual([[2, 2], [6, 6]]);
+  });
+  test("a single string anchor still resolves to one range", () => {
+    expect(resolveLineRanges({ ...base, anchor: "instance = new A();" }, src)).toEqual([[6, 6]]);
+  });
+  test("each anchor in the list must match exactly one line", () => {
+    expect(() => resolveLineRanges({ ...base, anchor: ["private static A instance;", "nope"] }, src)).toThrow(/matched 0 lines/);
+  });
+  test("a finding near ANY anchor passes; one far from all fails", () => {
+    const ranges = resolveLineRanges({ ...base, anchor: ["private static A instance;", "instance = new A();"] }, src);
+    expect(scoreBugCase(base, [row(2)], ranges)).toBe(true);
+    expect(scoreBugCase(base, [row(6)], ranges)).toBe(true);
+    expect(scoreBugCase(base, [row(12)], ranges)).toBe(false);
   });
 });
