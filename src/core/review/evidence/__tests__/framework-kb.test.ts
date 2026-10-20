@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { clearKbCache, frameworkKbDocs, resolveKbDoc, KB_DOC_MAX_CHARS } from "../framework-kb";
+import { clearKbCache, frameworkKbDocs, kbSearch, resolveKbDoc, KB_DOC_MAX_CHARS } from "../framework-kb";
 
 const tmps: string[] = [];
 afterEach(() => {
@@ -128,5 +128,60 @@ describe("frameworkKbDocs", () => {
   it("ignores an empty page", () => {
     const d = project({ ".fico/kb/fico-fwk-core/utils/DateUtils.md": "   \n" });
     expect(frameworkKbDocs(d, ["kr.co.openlabs.fico.framework.utils.DateUtils"])).toEqual([]);
+  });
+});
+
+describe("kbSearch", () => {
+  const ext = (title: string, description: string, tags: string[], body: string) =>
+    `---\ntitle: ${title}\ndescription: ${description}\ntags:\n${tags.map((t) => `- ${t}`).join("\n")}\n---\n\n${body}`;
+
+  it("finds a house replacement by the generic facility's name", () => {
+    const d = project({
+      ".fico/kb/framework-site-ext/annotation/ExtTransactional.md": ext(
+        "ExtTransactional",
+        "ext 데이터베이스용 트랜잭션 어노테이션",
+        ["transaction", "spring"],
+        "일반적인 트랜잭션 설정 대신 ExtTransactional을 적용합니다."
+      ),
+      ".fico/kb/fico-fwk-core/utils/DateUtils.md": ext("DateUtils", "날짜 유틸", ["date"], "yyyyMMdd"),
+    });
+    const out = kbSearch(d, "Transactional extTransactionManager");
+    expect(out).toContain(".fico/kb/framework-site-ext/annotation/ExtTransactional.md");
+    expect(out).toContain("일반적인 트랜잭션 설정 대신");
+    expect(out).not.toContain("DateUtils.md");
+  });
+
+  it("matches camelCase words and Korean description terms", () => {
+    const d = project({
+      ".fico/kb/fico-fwk-core/internal/RetryableRestTemplate.md": ext(
+        "RetryableRestTemplate",
+        "재시도 정책을 가진 RestTemplate",
+        ["rest"],
+        "본문"
+      ),
+    });
+    expect(kbSearch(d, "rest template")).toContain("RetryableRestTemplate.md");
+    expect(kbSearch(d, "재시도")).toContain("RetryableRestTemplate.md");
+  });
+
+  it("says so when nothing matches or no KB is configured", () => {
+    const d = project({ ".fico/kb/fico-fwk-core/utils/DateUtils.md": ext("DateUtils", "날짜", [], "x") });
+    expect(kbSearch(d, "zzzunknown")).toContain("No KB documents match");
+    const bare = mkdtempSync(join(tmpdir(), "f-kb-bare-"));
+    tmps.push(bare);
+    expect(kbSearch(bare, "anything")).toContain("No framework KB is configured");
+  });
+
+  it("returns full text for the top hits only and caps each page", () => {
+    const big = "가".repeat(KB_DOC_MAX_CHARS * 2);
+    const d = project({
+      ".fico/kb/fico-fwk-core/a/Foo1.md": ext("Foo1", "foo", [], big),
+      ".fico/kb/fico-fwk-core/a/Foo2.md": ext("Foo2", "foo", [], "b"),
+      ".fico/kb/fico-fwk-core/a/Foo3.md": ext("Foo3", "foo", [], "c-body-unique"),
+    });
+    const out = kbSearch(d, "foo");
+    expect(out).toContain("(doc truncated)");
+    expect(out).toContain("Foo3.md"); // listed
+    expect(out).not.toContain("c-body-unique"); // beyond the full-text hits
   });
 });

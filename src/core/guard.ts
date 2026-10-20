@@ -42,6 +42,7 @@ export const MISS_PREFIXES: readonly string[] = [
   "Error: file not found", // file_read
   "Error: diff not found", // file_read_diff
   "No related code candidates", // related_code
+  "No KB documents match", // kb_search
   "No git history found", // git_history
   "No blame available", // git_blame (f-log)
   "No callers found", // find_callers (f-log)

@@ -188,3 +188,112 @@ export function frameworkKbDocs(cwd: string, specifiers: string[]): KbDoc[] {
   }
   return docs;
 }
+
+// ── kb_search ────────────────────────────────────────────────────
+
+/** Pages listed per search, and how many of those are returned in full. */
+const KB_SEARCH_LISTED = 5;
+const KB_SEARCH_FULL = 2;
+/** Stems of navigation pages that describe no class. */
+const KB_NAV_STEMS = new Set(["index", "home"]);
+
+interface KbEntry {
+  path: string;
+  stem: string;
+  title: string;
+  description: string;
+  tags: string;
+  fqcn: string;
+  body: string;
+}
+
+/** `title`, `description`, `fqcn` and the `tags` list from a page's frontmatter
+ * — the only structure the generated pages reliably carry. */
+function readEntry(path: string): KbEntry | null {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? "";
+  const scalar = (key: string) => new RegExp(`^${key}:\\s*(.+)$`, "m").exec(front)?.[1]?.trim() ?? "";
+  const tags = [...front.matchAll(/^\s*-\s+(.+)$/gm)].map((m) => m[1]).join(" ");
+  return {
+    path,
+    stem: path.split(sep).at(-1)!.slice(0, -3).toLowerCase(),
+    title: scalar("title").toLowerCase(),
+    description: scalar("description").toLowerCase(),
+    tags: tags.toLowerCase(),
+    fqcn: scalar("fqcn").toLowerCase(),
+    body: text.toLowerCase(),
+  };
+}
+
+/** Lowercased words of a query, camelCase split ("extTransactionManager" →
+ * ext, transaction, manager) so a code identifier finds a prose page. */
+function queryWords(query: string): string[] {
+  const words = query
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((w) => w.length >= 2);
+  return [...new Set(words)];
+}
+
+/**
+ * Search the configured framework KB directories and return the best pages.
+ *
+ * Injection (frameworkKbDocs) only reaches a page when the reviewed file
+ * IMPORTS the class it documents. A violation of the form "used the generic
+ * Spring/JDK facility where the house wrapper is required" has no such import,
+ * so the reviewer needs a way to ask "is there a framework class for this?".
+ * The KB sits outside git, so code_search/file_find cannot reach it.
+ *
+ * Ranking is plain term overlap — filename, then title/fqcn, tags, description,
+ * body — which is enough for a few hundred pages and has no setup. The top
+ * pages are returned in full (each capped), the rest as path + summary.
+ */
+export function kbSearch(cwd: string, query: string): string {
+  const dirs = [...new Set(kbPatterns(cwd).map((p) => p.dir))]
+    .map((dir) => join(cwd, dir))
+    .filter((dir) => existsSync(dir));
+  if (dirs.length === 0) return "No framework KB is configured for this project.";
+
+  const words = queryWords(query);
+  if (words.length === 0) return "No KB documents match: give at least one keyword.";
+
+  const seen = new Set<string>();
+  const scored: { entry: KbEntry; score: number }[] = [];
+  for (const dir of dirs) {
+    for (const [stem, path] of docIndex(dir)) {
+      if (KB_NAV_STEMS.has(stem) || seen.has(path)) continue;
+      seen.add(path);
+      const entry = readEntry(path);
+      if (!entry) continue;
+      let score = 0;
+      for (const w of words) {
+        if (entry.stem.includes(w)) score += 5;
+        if (entry.title.includes(w) || entry.fqcn.includes(w)) score += 4;
+        if (entry.tags.includes(w)) score += 3;
+        if (entry.description.includes(w)) score += 2;
+        if (entry.body.includes(w)) score += 1;
+      }
+      if (score > 0) scored.push({ entry, score });
+    }
+  }
+  if (scored.length === 0) return `No KB documents match "${query}". Do NOT retry variations; move on.`;
+
+  scored.sort((a, b) => b.score - a.score || a.entry.path.localeCompare(b.entry.path));
+  const rel = (p: string) => relative(cwd, p).split(sep).join(posix.sep);
+  return scored
+    .slice(0, KB_SEARCH_LISTED)
+    .map(({ entry }, i) => {
+      const head = `==== ${rel(entry.path)} — ${entry.title || entry.stem}: ${entry.description}`;
+      if (i >= KB_SEARCH_FULL) return head;
+      const text = readFileSync(entry.path, "utf8");
+      const body = text.length > KB_DOC_MAX_CHARS ? `${text.slice(0, KB_DOC_MAX_CHARS)}\n… (doc truncated)` : text;
+      return `${head}\n${body}`;
+    })
+    .join("\n\n");
+}

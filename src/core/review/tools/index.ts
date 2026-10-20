@@ -25,6 +25,7 @@ import {
 import { currentFilePath, type ReviewState } from "../pipeline/state";
 import { codeSearch, fileFind, fileRead, fileReadDiff } from "./read";
 import { gitHistory, renderRelatedCode } from "./related";
+import { kbSearch } from "../evidence/framework-kb";
 
 /** One argument, in the least-common-denominator shape both adapters render.
  * Bounds are advisory for MCP (its schema has none) and enforced by zod. */
@@ -157,6 +158,15 @@ export const REVIEW_TOOLS: ReviewToolSpec[] = [
       if (!file) return null;
       return gitHistory(st.cwd, file, num(a, "max_commits"), bool(a, "include_patch") ?? false, st.ref);
     },
+  },
+  {
+    name: "kb_search",
+    description:
+      "Search the in-house framework knowledge base (it lives outside git, so code_search cannot see it). Use it when the file relies on a general Spring/JDK facility — transactions, REST calls, messaging, scheduling, caching, crypto, date/number/string helpers — to learn whether the framework has its own class that must be used instead. Pass the facility or identifier name; returns the best-matching pages.",
+    args: {
+      query: { type: "string", description: "Keywords or identifiers, e.g. 'Transactional' or 'RestTemplate'", required: true },
+    },
+    run: (st, a) => kbSearch(st.cwd, str(a, "query")!),
   },
 ];
 

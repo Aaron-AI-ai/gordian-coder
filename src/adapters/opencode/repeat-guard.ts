@@ -370,7 +370,7 @@ registerGuardModule({
   name: "review",
   lookup: getState,
   submitTool: "f_review_submit",
-  explorers: new Set(["file_read", "file_read_diff", "file_find", "code_search", "related_code", "git_history"]),
+  explorers: new Set(["file_read", "file_read_diff", "file_find", "code_search", "related_code", "git_history", "kb_search"]),
   idempotentPatterns: {
     f_review_submit: /Stale\/duplicate f_review_submit ignored|No active review/,
     f_review_judge: /already recorded|Judge INCOMPLETE|already hit the judge rework cap/,
@@ -384,5 +384,6 @@ registerGuardModule({
   lookupArgFields: {
     code_search: "search_text",
     file_find: "query_name",
+    kb_search: "query",
   },
 });

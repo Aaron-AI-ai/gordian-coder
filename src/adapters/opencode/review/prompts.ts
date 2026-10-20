@@ -32,6 +32,7 @@ export const REVIEWER_AGENT_PERMISSION: Record<string, PermissionAction> = {
   code_search: "allow",
   related_code: "allow",
   git_history: "allow",
+  kb_search: "allow",
   f_review_submit: "allow",
 };
 
@@ -95,6 +96,7 @@ export const REVIEWER_AGENT_TOOLS: Record<string, boolean> = {
   code_search: true,
   related_code: true,
   git_history: true,
+  kb_search: true,
   f_review_submit: true,
   f_review_plan: false,
   f_review_finalize: false,
@@ -121,6 +123,10 @@ You review one file at a time against the injected checklist, which covers
 - The injected **Framework Rules are authoritative** and override general best
   practices. When generic guidance conflicts with a framework rule, follow the
   framework rule and word the suggestion accordingly.
+- Before submitting, if the file uses a general Spring/JDK facility (transactions,
+  REST calls, messaging, scheduling, caching, crypto, date/number/string helpers),
+  call \`kb_search\` once with its name: the in-house framework may require its own
+  class instead, and that page is not injected unless the file imports it.
 - When you need more context, use \`file_read\` (wider lines), \`code_search\`
   (symbol definition / callers), \`file_find\` (locate a file), or
   \`file_read_diff\` (another changed file) instead of guessing.
@@ -156,6 +162,7 @@ export const JUDGE_AGENT_TOOLS: Record<string, boolean> = {
   code_search: false,
   related_code: false,
   git_history: false,
+  kb_search: false,
 };
 
 export const JUDGE_AGENT_PROMPT = `You are an independent review judge. You evaluate a code REVIEW, not the code.
@@ -217,6 +224,7 @@ export const FIXER_AGENT_TOOLS: Record<string, boolean> = {
   file_find: false,
   related_code: false,
   git_history: false,
+  kb_search: false,
 };
 
 export const FIXER_AGENT_PROMPT = `You write CORRECTED CODE for static-analysis violations. You do not review.

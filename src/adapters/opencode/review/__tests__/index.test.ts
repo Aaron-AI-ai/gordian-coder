@@ -160,6 +160,7 @@ describe("tool registration", () => {
         "file_read",
         "file_read_diff",
         "git_history",
+        "kb_search",
         "related_code",
       ].sort()
     );
@@ -174,6 +175,7 @@ describe("session guard", () => {
     "code_search",
     "related_code",
     "git_history",
+    "kb_search",
   ] as const;
 
   it("refuses every exploration tool without an active review", async () => {
@@ -459,6 +461,7 @@ describe("agent/command config injection", () => {
         "file_read",
         "file_read_diff",
         "git_history",
+        "kb_search",
         "related_code",
       ].sort()
     );

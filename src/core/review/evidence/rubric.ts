@@ -193,6 +193,12 @@ const KB_INJECTION_NOTICE = [
   'already injected under "## Framework knowledge base" in the review evidence.',
   "Do not `file_read` or `code_search` the KB directory — you would spend a tool",
   "call re-fetching what you have already been given.",
+  "",
+  "**Where no import points at the KB**, use `kb_search`: when the file uses a general",
+  "Spring/JDK facility (transactions, REST calls, messaging, scheduling, caching,",
+  "crypto, date/number/string helpers), call `kb_search` once with that facility's",
+  "name BEFORE submitting. If the framework documents its own class for it, using the",
+  "generic one instead is a `framework` finding backed by that page.",
 ].join("\n");
 
 /** The framework-KB rule: `.f-review.json` `frameworkKbFile` (a project md,

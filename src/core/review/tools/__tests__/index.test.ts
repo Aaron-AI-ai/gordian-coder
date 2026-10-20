@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { REVIEW_TOOLS, runReviewTool } from "../index";
 import type { ReviewState } from "../../pipeline/state";
 
-const NAMES = ["file_read", "file_read_diff", "file_find", "code_search", "related_code", "git_history"];
+const NAMES = ["file_read", "file_read_diff", "file_find", "code_search", "related_code", "git_history", "kb_search"];
 
 describe("REVIEW_TOOLS", () => {
   it("declares every exploration tool exactly once", () => {
