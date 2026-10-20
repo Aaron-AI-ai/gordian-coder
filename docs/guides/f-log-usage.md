@@ -18,7 +18,8 @@ OpenCode에서 대상 프로젝트를 연 뒤:
 
 ```json
 {
-  "review": { "frameworkKb": { "kr.co.openlabs.fico.framework.*": ".fico/kb/fico_framework/fico-fwk-core/" }, "language": "ko", "maxToolCalls": 20 },
+  "frameworkKb": { "kr.co.openlabs.fico.framework.*": ".fico/kb/fico_framework/fico-fwk-core/" },
+  "review": { "language": "ko", "maxToolCalls": 20 },
   "log": {
     "output": ".fico/report/f-log/",
     "runsDir": ".fico/f-log/runs/",
@@ -32,6 +33,8 @@ OpenCode에서 대상 프로젝트를 연 뒤:
 ```
 
 `log` 섹션이 없으면 위 값이 기본이다. `frameworkKb`·`language`·`maxToolCalls`·`maxIter`는 `review`의 값을 그대로 쓴다.
+
+`frameworkKb`는 f-review·f-log가 공유하므로 위처럼 최상단에 두는 것을 권장한다. 기존처럼 `review.frameworkKb`에 둬도 동작하며, 둘 다 있으면 `review` 쪽이 우선한다.
 
 ## 산출물
 

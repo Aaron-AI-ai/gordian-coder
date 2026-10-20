@@ -155,6 +155,13 @@ describe("loadConfig sections", () => {
     expect(loadConfig(d).language).toBe("ko");
   });
 
+  it("reads a top-level frameworkKb shared by every feature, review section still winning", () => {
+    const kb = { "kr.co.openlabs.fico.framework.*": ".fico/kb/fico_framework/fico-fwk-core/" };
+    expect(loadConfig(proj(".fico/config/fico_ai.json", { frameworkKb: kb, review: { language: "ko" } })).frameworkKb).toEqual(kb);
+    const both = proj(".fico/config/fico_ai.json", { frameworkKb: { "a.*": "top/" }, review: { frameworkKb: kb } });
+    expect(loadConfig(both).frameworkKb).toEqual(kb);
+  });
+
   it("ignores a non-object `review` value instead of dropping the file", () => {
     const d = proj(".fico/config/fico_ai.json", { language: "ko", review: "nope" });
     expect(loadConfig(d).language).toBe("ko");
