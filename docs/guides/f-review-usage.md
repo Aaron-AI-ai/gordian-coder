@@ -199,6 +199,7 @@ f-review 설정은 **`review` 키 아래**에 넣습니다. `review` 섹션의 �
 | `fcqFix`       | boolean  | `false`                | f-fixer 패스 추가 (MINOR 포함 전 위반에 TO-BE 작성)             |
 | `rulesDir`     | string   | `review/rules`         | 프로젝트 규칙 디렉터리                                        |
 | `frameworkKb`  | object   | 없음                     | import 접두사 → KB 디렉터리 맵. `framework_kb` 규칙의 기본 표를 대체 |
+| `kbSearch`     | string   | `"keyword"`            | `kb_search` 도구의 순위 방식. `keyword`(부분 문자열 일치) / `bm25`(단어 단위 + 희귀도 가중). 사전 검색은 항상 `keyword` |
 | `wikiKb`       | object   | 없음                     | git wiki → KB 미러링 (`gdc kb-sync`)                   |
 
 
