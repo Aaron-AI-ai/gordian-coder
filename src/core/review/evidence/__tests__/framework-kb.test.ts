@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { clearKbCache, frameworkKbDocs, kbSearch, resolveKbDoc, KB_DOC_MAX_CHARS } from "../framework-kb";
+import { clearKbCache, frameworkKbDocs, kbClues, kbPrefetch, kbSearch, resolveKbDoc, KB_DOC_MAX_CHARS } from "../framework-kb";
 
 const tmps: string[] = [];
 afterEach(() => {
@@ -183,5 +183,50 @@ describe("kbSearch", () => {
     expect(out).toContain("(doc truncated)");
     expect(out).toContain("Foo3.md"); // listed
     expect(out).not.toContain("c-body-unique"); // beyond the full-text hits
+  });
+});
+
+describe("kbClues / kbPrefetch", () => {
+  const page = (title: string, description: string, body: string) =>
+    `---\ntitle: ${title}\ndescription: ${description}\ntags:\n- x\n---\n\n${body}`;
+
+  it("reads framework imports, annotations, constructed types and code-like literals off the source", () => {
+    const clues = kbClues([
+      "import kr.co.openlabs.fico.framework.model.CommonRequest;",
+      "import org.springframework.stereotype.Service;",
+      '@PostMapping("/acnt") @Transactional("extTransactionManager")',
+      'throw CommonException.create("FWKE0001", "계좌번호"); new RestTemplate();',
+    ].join("\n"));
+    expect(clues).toEqual(expect.arrayContaining(["CommonRequest", "PostMapping", "Transactional", "extTransactionManager", "FWKE0001", "RestTemplate"]));
+    expect(clues).not.toContain("Service");
+    expect(clues).not.toContain("계좌번호");
+  });
+
+  it("finds the page for a literal error code and the house class behind a generic one", () => {
+    const d = project({
+      ".fico/kb/fico-fwk-extension/constant/MessageCode.md": page("MessageCode", "표준 코드", "FWKE0001 = 필수 입력"),
+      ".fico/kb/framework-site-ext/annotation/ExtTransactional.md": page("ExtTransactional", "ext 트랜잭션", "Transactional 대신 사용"),
+      ".fico/kb/fico-fwk-core/utils/DateUtils.md": page("DateUtils", "날짜", "x"),
+    });
+    const docs = kbPrefetch(d, 'throw CommonException.create("FWKE0001", "x");\n@Transactional("extTransactionManager")', new Set());
+    const paths = docs.map((x) => x.path);
+    expect(paths.some((p) => p.endsWith("MessageCode.md"))).toBe(true);
+    expect(paths.some((p) => p.endsWith("ExtTransactional.md"))).toBe(true);
+    expect(paths.some((p) => p.endsWith("DateUtils.md"))).toBe(false);
+  });
+
+  it("skips pages already injected by import and returns nothing for plain code", () => {
+    const d = project({ ".fico/kb/fico-fwk-extension/constant/MessageCode.md": page("MessageCode", "표준 코드", "FWKE0001") });
+    const have = new Set([".fico/kb/fico-fwk-extension/constant/MessageCode.md"]);
+    expect(kbPrefetch(d, 'x("FWKE0001")', have)).toEqual([]);
+    expect(kbPrefetch(d, "class A { int x = 1; }", new Set())).toEqual([]);
+  });
+
+  it("caps the extra pages", () => {
+    const files: Record<string, string> = {};
+    for (let i = 1; i <= 6; i++) files[`.fico/kb/fico-fwk-core/a/Widget${i}.md`] = page(`Widget${i}`, "w", "x");
+    const d = project(files);
+    const src = Array.from({ length: 6 }, (_, i) => `new Widget${i + 1}();`).join("\n");
+    expect(kbPrefetch(d, src, new Set()).length).toBeLessThanOrEqual(3);
   });
 });

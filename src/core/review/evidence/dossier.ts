@@ -19,12 +19,12 @@ import {
   type RelatedFile,
 } from "../tools/related";
 import { fileImports, isExternalImport, unresolvedImports } from "../imports";
-import { frameworkKbDocs, type KbDoc } from "./framework-kb";
+import { frameworkKbDocs, kbPrefetch, type KbDoc } from "./framework-kb";
 
 // Raised for the injected import sources and KB pages below. The budget buys
 // back more than it costs: each fact the reviewer would otherwise fetch costs a
 // tool call, a turn, AND a whole-file read to find a few lines.
-const AUTO_EVIDENCE_MAX_CHARS = 24_000;
+const AUTO_EVIDENCE_MAX_CHARS = 30_000;
 
 /** Imported project files whose source is injected, ranked most-related first. */
 const IMPORT_SOURCE_MAX_FILES = 6;
@@ -40,7 +40,7 @@ const IMPORT_SOURCE_MAX_CHARS = 3_000;
 const IMPORT_SOURCE_SECTION_MAX_CHARS = 12_000;
 
 /** Section budget for framework KB pages. */
-const KB_SECTION_MAX_CHARS = 8_000;
+const KB_SECTION_MAX_CHARS = 18_000;
 
 /** Fill a section up to `maxChars`, whole entries only — half a source file is
  * worse than one fewer file. Returns what fits plus a note about what did not. */
@@ -158,8 +158,15 @@ export function reviewEvidence(
   // KB lookup runs over EVERY import, not only the unresolved ones: a framework
   // class can have both repository source and a KB page, and the page is what
   // states its correct usage — which is the whole point of the framework rules.
-  const kbDocs = frameworkKbDocs(cwd, fileImports(cwd, ref, file));
-  const documented = new Set(kbDocs.map((doc) => doc.specifier));
+  const importDocs = frameworkKbDocs(cwd, fileImports(cwd, ref, file));
+  const documented = new Set(importDocs.map((doc) => doc.specifier));
+  // …and the file's own vocabulary (annotations, constructed types, error-code
+  // literals) reaches the pages its imports cannot: the house class it should
+  // have used, the aspect its signature defeats.
+  const kbDocs = [
+    ...importDocs,
+    ...kbPrefetch(cwd, readFileAt(cwd, ref, file) ?? "", new Set(importDocs.map((doc) => doc.path))),
+  ];
 
   // What is left is genuinely unaccounted for: not a repository file, not a KB
   // page, not a known third-party namespace. Listing anything else here is what
@@ -207,8 +214,11 @@ export function reviewEvidence(
             "",
             "## Framework knowledge base (already read for you)",
             "Documentation for the framework imports below, resolved through the " +
-              "`frameworkKb` map. These are AUTHORITATIVE for the `framework` category: " +
+              "`frameworkKb` map, plus pages found by searching this file's own terms " +
+              "(marked `search:`). These are AUTHORITATIVE for the `framework` category: " +
               "when they conflict with general language conventions, follow them. " +
+              "A `search:` page is a lead, not a verdict — use it only when it documents " +
+              "something this file actually does or should have done. " +
               "Do not re-read them with file_read.",
             "",
             ...kbSection(kbDocs).rendered,

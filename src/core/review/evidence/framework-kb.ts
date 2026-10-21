@@ -241,6 +241,58 @@ function queryWords(query: string): string[] {
   return [...new Set(words)];
 }
 
+/** Occurrences of `word` in `text`, counted up to `cap`. */
+function countUpTo(text: string, word: string, cap: number): number {
+  let n = 0;
+  for (let at = text.indexOf(word); at !== -1 && n < cap; at = text.indexOf(word, at + word.length)) n++;
+  return n;
+}
+
+interface RankedDoc {
+  entry: KbEntry;
+  /** Points from the name/title/fqcn/tags/description — a page ABOUT the term. */
+  meta: number;
+  /** Points from body mentions (capped) — a page that merely uses the term. */
+  body: number;
+}
+
+/** KB pages matching `query`, best first. Empty when no KB is configured. */
+function rankKbDocs(cwd: string, query: string, exact = false): RankedDoc[] {
+  const dirs = [...new Set(kbPatterns(cwd).map((p) => p.dir))]
+    .map((dir) => join(cwd, dir))
+    .filter((dir) => existsSync(dir));
+  // `exact`: the query is one identifier (a clue read off source) and must match
+  // whole — splitting "CommonRequest" into common+request ranks every request
+  // class above the one page that actually uses it.
+  const words = exact ? [query.toLowerCase()] : queryWords(query);
+  const bodyCap = exact ? 15 : 5;
+  if (dirs.length === 0 || words.length === 0) return [];
+
+  const seen = new Set<string>();
+  const ranked: RankedDoc[] = [];
+  for (const dir of dirs) {
+    for (const [stem, path] of docIndex(dir)) {
+      if (KB_NAV_STEMS.has(stem) || seen.has(path)) continue;
+      seen.add(path);
+      const entry = readEntry(path);
+      if (!entry) continue;
+      let meta = 0;
+      let body = 0;
+      for (const w of words) {
+        if (entry.stem.includes(w)) meta += 5;
+        if (entry.title.includes(w) || entry.fqcn.includes(w)) meta += 4;
+        if (entry.tags.includes(w)) meta += 3;
+        if (entry.description.includes(w)) meta += 2;
+        body += countUpTo(entry.body, w, bodyCap);
+      }
+      if (meta + body > 0) ranked.push({ entry, meta, body });
+    }
+  }
+  return ranked.sort(
+    (a, b) => b.meta + b.body - (a.meta + a.body) || a.entry.path.localeCompare(b.entry.path)
+  );
+}
+
 /**
  * Search the configured framework KB directories and return the best pages.
  *
@@ -255,45 +307,110 @@ function queryWords(query: string): string[] {
  * pages are returned in full (each capped), the rest as path + summary.
  */
 export function kbSearch(cwd: string, query: string): string {
-  const dirs = [...new Set(kbPatterns(cwd).map((p) => p.dir))]
-    .map((dir) => join(cwd, dir))
-    .filter((dir) => existsSync(dir));
-  if (dirs.length === 0) return "No framework KB is configured for this project.";
+  const configured = kbPatterns(cwd).some((p) => existsSync(join(cwd, p.dir)));
+  if (!configured) return "No framework KB is configured for this project.";
+  if (queryWords(query).length === 0) return "No KB documents match: give at least one keyword.";
 
-  const words = queryWords(query);
-  if (words.length === 0) return "No KB documents match: give at least one keyword.";
+  const ranked = rankKbDocs(cwd, query);
+  if (ranked.length === 0) return `No KB documents match "${query}". Do NOT retry variations; move on.`;
 
-  const seen = new Set<string>();
-  const scored: { entry: KbEntry; score: number }[] = [];
-  for (const dir of dirs) {
-    for (const [stem, path] of docIndex(dir)) {
-      if (KB_NAV_STEMS.has(stem) || seen.has(path)) continue;
-      seen.add(path);
-      const entry = readEntry(path);
-      if (!entry) continue;
-      let score = 0;
-      for (const w of words) {
-        if (entry.stem.includes(w)) score += 5;
-        if (entry.title.includes(w) || entry.fqcn.includes(w)) score += 4;
-        if (entry.tags.includes(w)) score += 3;
-        if (entry.description.includes(w)) score += 2;
-        if (entry.body.includes(w)) score += 1;
-      }
-      if (score > 0) scored.push({ entry, score });
-    }
-  }
-  if (scored.length === 0) return `No KB documents match "${query}". Do NOT retry variations; move on.`;
-
-  scored.sort((a, b) => b.score - a.score || a.entry.path.localeCompare(b.entry.path));
   const rel = (p: string) => relative(cwd, p).split(sep).join(posix.sep);
-  return scored
+  return ranked
     .slice(0, KB_SEARCH_LISTED)
     .map(({ entry }, i) => {
       const head = `==== ${rel(entry.path)} — ${entry.title || entry.stem}: ${entry.description}`;
       if (i >= KB_SEARCH_FULL) return head;
-      const text = readFileSync(entry.path, "utf8");
+      let text: string;
+      try {
+        text = readFileSync(entry.path, "utf8");
+      } catch {
+        return head; // vanished since indexing — list it without a body
+      }
       const body = text.length > KB_DOC_MAX_CHARS ? `${text.slice(0, KB_DOC_MAX_CHARS)}\n… (doc truncated)` : text;
       return `${head}\n${body}`;
     })
     .join("\n\n");
+}
+
+// ── prefetch ─────────────────────────────────────────────────────
+
+/** Extra pages injected per file, and what a page must score to qualify. */
+export const KB_PREFETCH_MAX = 3;
+const PREFETCH_MIN_META = 5; // the page is ABOUT the clue (name/title/fqcn/tags hit)
+const PREFETCH_MIN_BODY = 6;
+const PREFETCH_RARE_PAGES = 3; // a clue found on this few pages points straight at them // …or mentions it often enough to describe its use
+
+/** Annotations that say nothing about framework usage. */
+const NOISE_ANNOTATIONS = new Set([
+  "Override", "Deprecated", "SuppressWarnings", "FunctionalInterface", "SafeVarargs",
+  "Test", "Data", "Getter", "Setter", "Builder", "Slf4j", "NoArgsConstructor",
+  "AllArgsConstructor", "RequiredArgsConstructor", "Service", "Component", "Autowired",
+]);
+
+/**
+ * Search terms a reviewer would need the KB for, read off the source itself:
+ * imported framework class names, annotations, constructed types, and
+ * identifier-like string literals (error codes, bean names).
+ *
+ * Injection by import misses the case where the page that matters belongs to a
+ * class the file does NOT import — the house wrapper it should have used, or the
+ * aspect that its method signature defeats. The file's own vocabulary is the
+ * only handle on those, and a small model asked to search for them itself
+ * either skips the search or searches by Spring annotation.
+ */
+export function kbClues(source: string): string[] {
+  const clues = new Set<string>();
+  for (const m of source.matchAll(/^import\s+(?:static\s+)?([\w.]+);/gm)) {
+    const fqcn = m[1];
+    if (fqcn.startsWith("kr.co.openlabs.") || fqcn.startsWith("kr.co.koscom.pb.framework.")) {
+      clues.add(fqcn.split(".").at(-1)!);
+    }
+  }
+  for (const m of source.matchAll(/@([A-Z]\w+)/g)) if (!NOISE_ANNOTATIONS.has(m[1])) clues.add(m[1]);
+  for (const m of source.matchAll(/\bnew\s+([A-Z]\w+)\s*[(<]/g)) clues.add(m[1]);
+  for (const m of source.matchAll(/"([A-Za-z][\w.-]{3,40})"/g)) {
+    // identifier-like only: a code or bean name carries a digit or an inner capital
+    if (/\d/.test(m[1]) || /[a-z][A-Z]/.test(m[1]) || /^[A-Z]{4,}$/.test(m[1])) clues.add(m[1]);
+  }
+  return [...clues];
+}
+
+/**
+ * Pages the file's own vocabulary points at, beyond what its imports already
+ * delivered. `have` is the repo-relative paths already injected. Each clue is
+ * searched on its own so one noisy term cannot crowd out a precise one.
+ */
+export function kbPrefetch(cwd: string, source: string, have: Set<string>, max = KB_PREFETCH_MAX): KbDoc[] {
+  const picked = new Map<string, { score: number; clue: string; doc: KbDoc }>();
+  for (const clue of kbClues(source)) {
+    const ranked = rankKbDocs(cwd, clue, true);
+    // A term that only a handful of pages mention is a pointer to them, however
+    // few times they say it (an error code lives in one constants page);
+    // a term every page mentions has to clear the bar on its own merits.
+    const rare = ranked.length <= PREFETCH_RARE_PAGES;
+    for (const r of ranked.slice(0, 3)) {
+      if (!rare && r.meta < PREFETCH_MIN_META && r.body < PREFETCH_MIN_BODY) continue;
+      const path = relative(cwd, r.entry.path).split(sep).join(posix.sep);
+      if (have.has(path)) continue;
+      const score = r.meta * 2 + r.body + (rare ? 20 : 0);
+      if ((picked.get(path)?.score ?? -1) >= score) continue;
+      let content: string;
+      try {
+        content = readFileSync(r.entry.path, "utf8");
+      } catch {
+        continue;
+      }
+      if (!content.trim()) continue;
+      picked.set(path, {
+        score,
+        clue,
+        doc: {
+          specifier: `search: ${clue}`,
+          path,
+          content: content.length > KB_DOC_MAX_CHARS ? `${content.slice(0, KB_DOC_MAX_CHARS)}\n… (doc truncated)` : content,
+        },
+      });
+    }
+  }
+  return [...picked.values()].sort((a, b) => b.score - a.score).slice(0, max).map((p) => p.doc);
 }
