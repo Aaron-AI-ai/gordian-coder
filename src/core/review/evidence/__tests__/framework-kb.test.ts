@@ -4,7 +4,7 @@
  */
 
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { clearKbCache, frameworkKbDocs, kbClues, kbPrefetch, kbSearch, resolveKbDoc, KB_DOC_MAX_CHARS } from "../framework-kb";
@@ -22,10 +22,10 @@ const KB = {
   "kr.co.openlabs.fico.common.*": ".fico/kb/fico-common-model/", // directory never created
 };
 
-function project(files: Record<string, string> = {}): string {
+function project(files: Record<string, string> = {}, config: Record<string, unknown> = {}): string {
   const d = mkdtempSync(join(tmpdir(), "f-kb-"));
   tmps.push(d);
-  writeFileSync(join(d, ".f-review.json"), JSON.stringify({ frameworkKb: KB }));
+  writeFileSync(join(d, ".f-review.json"), JSON.stringify({ frameworkKb: KB, ...config }));
   for (const [path, content] of Object.entries(files)) {
     mkdirSync(join(d, dirname(path)), { recursive: true });
     writeFileSync(join(d, path), content);
@@ -131,12 +131,16 @@ describe("frameworkKbDocs", () => {
   });
 });
 
-describe("kbSearch", () => {
-  const ext = (title: string, description: string, tags: string[], body: string) =>
-    `---\ntitle: ${title}\ndescription: ${description}\ntags:\n${tags.map((t) => `- ${t}`).join("\n")}\n---\n\n${body}`;
+const ext = (title: string, description: string, tags: string[], body: string) =>
+  `---\ntitle: ${title}\ndescription: ${description}\ntags:\n${tags.map((t) => `- ${t}`).join("\n")}\n---\n\n${body}`;
+
+// Both rankers must honor the same contract; only their ordering differs.
+for (const kbSearchMode of ["keyword", "bm25"] as const)
+describe(`kbSearch (${kbSearchMode})`, () => {
+  const projectFor = (files: Record<string, string>) => project(files, { kbSearch: kbSearchMode });
 
   it("finds a house replacement by the generic facility's name", () => {
-    const d = project({
+    const d = projectFor({
       ".fico/kb/framework-site-ext/annotation/ExtTransactional.md": ext(
         "ExtTransactional",
         "ext 데이터베이스용 트랜잭션 어노테이션",
@@ -152,7 +156,7 @@ describe("kbSearch", () => {
   });
 
   it("matches camelCase words and Korean description terms", () => {
-    const d = project({
+    const d = projectFor({
       ".fico/kb/fico-fwk-core/internal/RetryableRestTemplate.md": ext(
         "RetryableRestTemplate",
         "재시도 정책을 가진 RestTemplate",
@@ -165,7 +169,7 @@ describe("kbSearch", () => {
   });
 
   it("says so when nothing matches or no KB is configured", () => {
-    const d = project({ ".fico/kb/fico-fwk-core/utils/DateUtils.md": ext("DateUtils", "날짜", [], "x") });
+    const d = projectFor({ ".fico/kb/fico-fwk-core/utils/DateUtils.md": ext("DateUtils", "날짜", [], "x") });
     expect(kbSearch(d, "zzzunknown")).toContain("No KB documents match");
     const bare = mkdtempSync(join(tmpdir(), "f-kb-bare-"));
     tmps.push(bare);
@@ -173,16 +177,151 @@ describe("kbSearch", () => {
   });
 
   it("returns full text for the top hits only and caps each page", () => {
-    const big = "가".repeat(KB_DOC_MAX_CHARS * 2);
-    const d = project({
-      ".fico/kb/fico-fwk-core/a/Foo1.md": ext("Foo1", "foo", [], big),
+    // Foo1 is the strongest hit and Foo3 the weakest (body mention only) under
+    // both rankers, so the full-text cut-off falls between Foo2 and Foo3.
+    const d = projectFor({
+      ".fico/kb/fico-fwk-core/a/Foo1.md": ext("Foo1", "foo", ["foo"], "foo ".repeat(KB_DOC_MAX_CHARS)),
       ".fico/kb/fico-fwk-core/a/Foo2.md": ext("Foo2", "foo", [], "b"),
-      ".fico/kb/fico-fwk-core/a/Foo3.md": ext("Foo3", "foo", [], "c-body-unique"),
+      ".fico/kb/fico-fwk-core/a/Foo3.md": ext("Foo3", "bar", [], "foo c-body-unique"),
     });
     const out = kbSearch(d, "foo");
     expect(out).toContain("(doc truncated)");
     expect(out).toContain("Foo3.md"); // listed
     expect(out).not.toContain("c-body-unique"); // beyond the full-text hits
+  });
+});
+
+describe("kbSearch ranking: bm25 vs keyword", () => {
+  const firstHit = (out: string) => /^==== (\S+)/m.exec(out)?.[1] ?? "";
+  // A page whose NAME merely contains a query word (format ⊂ formatter) vs the
+  // page that is ABOUT the identifiers asked for.
+  const formatterVsDate = {
+    ".fico/kb/fico-fwk-core/utils/FormatterUtils.md": ext(
+      "FormatterUtils",
+      "고정 길이 전문 변환 유틸",
+      ["fixed"],
+      "FixedFormatter formatter 설정. formatter 체인으로 VO를 고정 길이 문자열로 바꾼다. formatter formatter"
+    ),
+    ".fico/kb/fico-fwk-core/utils/DateUtils.md": ext(
+      "DateUtils",
+      "날짜 형식 변환 유틸",
+      ["date"],
+      "SimpleDateFormat이나 DateTimeFormatter를 직접 만들지 말고 DateUtils.format을 쓴다."
+    ),
+    ".fico/kb/fico-fwk-core/utils/StringUtils.md": ext("StringUtils", "문자열 유틸", ["string"], "trim, pad"),
+  };
+  const query = "SimpleDateFormat date format DateTimeFormatter";
+
+  it("keyword lets a substring of the page name win", () => {
+    const out = kbSearch(project(formatterVsDate, { kbSearch: "keyword" }), query);
+    expect(firstHit(out)).toEndWith("FormatterUtils.md");
+  });
+
+  it("bm25 matches whole tokens, so the page about the identifiers wins", () => {
+    const out = kbSearch(project(formatterVsDate, { kbSearch: "bm25" }), query);
+    expect(firstHit(out)).toEndWith("DateUtils.md");
+  });
+
+  it("bm25 lets a rare term outweigh one every page mentions", () => {
+    const files: Record<string, string> = {
+      ".fico/kb/fico-fwk-core/kafka/KafkaConsumerService.md": ext("KafkaConsumerService", "kafka 수신", ["kafka"], "x"),
+    };
+    for (let i = 1; i <= 4; i++) {
+      files[`.fico/kb/fico-fwk-core/svc/Svc${i}.md`] = ext(`Svc${i}`, "서비스", [], "Autowired Autowired Autowired 주입");
+    }
+    const out = kbSearch(project(files, { kbSearch: "bm25" }), "Autowired KafkaConsumer");
+    expect(firstHit(out)).toEndWith("KafkaConsumerService.md");
+  });
+
+  it("bm25 meets a Korean word that carries a particle in the page", () => {
+    const d = project(
+      { ".fico/kb/framework-site-ext/annotation/ExtTransactional.md": ext("ExtTransactional", "트랜잭션을 자동 적용", [], "x") },
+      { kbSearch: "bm25" }
+    );
+    expect(kbSearch(d, "트랜잭션")).toContain("ExtTransactional.md");
+  });
+
+  it("bm25 splits an acronym prefix off a class name (PBTransactionAspect → pb, transaction, aspect)", () => {
+    const d = project(
+      {
+        ".fico/kb/framework-site-ext/aspect/PBTransactionAspect.md": ext("PBTransactionAspect", "트랜잭션 에스펙트", [], "x"),
+        ".fico/kb/fico-fwk-core/kafka/KafkaConsumerService.md": ext("KafkaConsumerService", "kafka 수신", [], "x"),
+        ".fico/kb/fico-fwk-core/utils/DateUtils.md": ext("DateUtils", "날짜", [], "x"),
+      },
+      { kbSearch: "bm25" }
+    );
+    expect(firstHit(kbSearch(d, "transaction write"))).toEndWith("PBTransactionAspect.md");
+    expect(firstHit(kbSearch(d, "IKafkaConsumerService"))).toEndWith("KafkaConsumerService.md");
+  });
+
+  // Both shapes lost under bm25 in the live A/B run (case-95, case-93): the page
+  // NAMED for a query word must not be outvoted by long pages that merely use
+  // several common query words, however often.
+  it("bm25 ranks the page named for a query word above long pages matching common words", () => {
+    const filler = "type type write write read read only only service service ".repeat(30);
+    const d = project(
+      {
+        ".fico/kb/framework-site-ext/aspect/PBTransactionAspect.md": ext(
+          "PBTransactionAspect",
+          "서비스 유형별 트랜잭션 처리",
+          ["aspect"],
+          "svcId 5번째 글자가 Q면 transaction을 rollback한다."
+        ),
+        ".fico/kb/fico-fwk-core/converter/FixedDataConverter.md": ext("FixedDataConverter", "변환", [], filler),
+        ".fico/kb/fico-fwk-core/converter/FixedDataModelConverter.md": ext("FixedDataModelConverter", "변환", [], filler),
+        ".fico/kb/fico-fwk-core/utils/DateUtils.md": ext("DateUtils", "날짜", [], "date"),
+      },
+      { kbSearch: "bm25" }
+    );
+    expect(firstHit(kbSearch(d, "Q-type service transaction write read-only"))).toEndWith("PBTransactionAspect.md");
+  });
+
+  it("bm25 keeps a sibling class that shares the query's name parts in the full-text hits", () => {
+    // unrelated pages, so word rarity means what it does in a real KB
+    const unrelated: Record<string, string> = {};
+    for (let i = 1; i <= 8; i++) unrelated[`.fico/kb/fico-fwk-core/misc/Misc${i}.md`] = ext(`Misc${i}`, "기타", [], "misc page");
+    const d = project(
+      {
+        ...unrelated,
+        ".fico/kb/fico-fwk-extension/daemon/idempotency/IdempotencyService.md": ext(
+          "IdempotencyService",
+          "멱등 처리 서비스",
+          ["idempotency"],
+          "checkAndStart로 처리 여부를 확인하고 complete로 끝낸다. IdempotencyCheckResult를 반환한다."
+        ),
+        ".fico/kb/fico-fwk-extension/daemon/idempotency/IdempotencyCheckResult.md": ext(
+          "IdempotencyCheckResult",
+          "checkAndStart 결과",
+          ["idempotency"],
+          "canProcess가 false면 처리하지 않는다."
+        ),
+        ".fico/kb/fico-fwk-extension/daemon/DaemonQueueListener.md": ext(
+          "DaemonQueueListener",
+          "큐 리스너",
+          [],
+          "IdempotencyService checkAndStart complete complete complete start start service service ".repeat(10)
+        ),
+      },
+      { kbSearch: "bm25" }
+    );
+    const out = kbSearch(d, "IdempotencyService checkAndStart complete");
+    const hits = [...out.matchAll(/^==== (\S+)/gm)].map((m) => m[1]);
+    expect(hits.slice(0, 2).some((p) => p.endsWith("IdempotencyCheckResult.md"))).toBe(true);
+  });
+
+  it("an unknown mode falls back to keyword", () => {
+    const out = kbSearch(project(formatterVsDate, { kbSearch: "vector" }), query);
+    expect(firstHit(out)).toEndWith("FormatterUtils.md");
+  });
+
+  it("sees a page edited after an earlier search", () => {
+    const d = project({ ".fico/kb/fico-fwk-core/utils/DateUtils.md": ext("DateUtils", "날짜", [], "old") });
+    expect(kbSearch(d, "zebra")).toContain("No KB documents match");
+    const path = join(d, ".fico/kb/fico-fwk-core/utils/DateUtils.md");
+    writeFileSync(path, ext("DateUtils", "날짜", [], "zebra"));
+    const later = new Date(Date.now() + 5_000);
+    utimesSync(path, later, later);
+    expect(kbSearch(d, "zebra")).toContain("DateUtils.md");
   });
 });
 
