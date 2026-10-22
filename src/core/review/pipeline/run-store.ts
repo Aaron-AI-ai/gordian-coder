@@ -259,22 +259,23 @@ export function runIsTerminal(runId: string, cwd: string): boolean {
     if (!meta) return false;
     const results = readRunResults(runId, cwd);
     // A run with missing artifacts is active even if a stale/edited cache says
-    // terminal. Also bind the marker to current review/judgment/meta state and
-    // to the report still present on disk before allowing pruning.
+    // terminal. Also bind the marker to current review/judgment/meta state. The
+    // report file is deliberately NOT part of it: a report moved or deleted by
+    // hand made a finished run "unfinished", and unfinished runs fill the plan
+    // cap until the orchestrator re-finalizes them over newer results.
     if (runCoverage(meta, results).missing.length) return false;
     const judgments = readRunJudgments(runId, cwd);
     const freshness = runFreshness(meta, cwd);
     return (
       parsed.data.fingerprint ===
-        finalizeFingerprint(
-          meta,
-          results,
-          judgments,
-          freshness.currentCriteriaIdentity,
-          freshness.currentSourceIdentity,
-          loadAllFixes(runId, meta.targets, cwd)
-        ) &&
-      diskTextHash(absoluteOutputPath(parsed.data.reportPath, cwd)) === parsed.data.reportHash
+      finalizeFingerprint(
+        meta,
+        results,
+        judgments,
+        freshness.currentCriteriaIdentity,
+        freshness.currentSourceIdentity,
+        loadAllFixes(runId, meta.targets, cwd)
+      )
     );
   } catch {
     return false;

@@ -113,9 +113,10 @@ const targets = collected.filter(f => !globs.some(g => g.match(f)));
 
 report와 manifest는 서로 다른 트리에 저장한다.
 
-- **report**: 우선순위 `--output` > `.f-review.json` 의 `output` > 기본 `fcq/report/f-review/`. 디렉터리 대상이면 파일명에 날짜가 붙는다(`review-<label>-<yyyymmdd>.md`).
+- **report**: 우선순위 `--output` > `.f-review.json` 의 `output` > 기본 `fcq/report/f-review/`. 디렉터리 대상이면 `review-<label>.md` — label에 runId(또는 세션 id)가 들어 있어 실행 하나가 파일 하나를 가지며, 다시 finalize하면 같은 파일을 갱신한다.
 - **manifest**: 고정 `fcq/f-review/manifest/review-<label>-targets.md`. 파일명에는 날짜를 넣지 않고, 본문에 생성 시각(UTC)을 기록한다.
-- **백업**: report 기록 시 `f-review` report 폴더가 이미 있으면 `f-review.<yyyymmdd-hhmmss>`로 폴더째 백업한 뒤 새로 쓴다. (임의의 `--output` 디렉터리는 백업 대상이 아니다 — 폴더명이 `f-review`일 때만.)
+- **백업 없음**: report 기록은 폴더의 다른 파일을 옮기지 않는다. (예전의 폴더째 백업은 finalize마다 폴더를 하나씩 늘리고 다른 실행의 최신 결과를 밀어내 제거했다.)
+- **완료 판정**: 실행의 완료 여부는 `finalize.json`의 지문만으로 정한다. 리포트 파일을 옮기거나 지워도 끝난 실행이 미완료로 돌아가지 않는다.
 
 ```ts
 function resolveOutputPath(opt, label /* commit short sha | timestamp */, cwd, date = new Date()) {

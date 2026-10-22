@@ -210,12 +210,13 @@ f-review 설정은 **`review` 키 아래**에 넣습니다. `review` 섹션의 �
 ### 5.1 산출물 위치
 
 ```
-fcq/report/f-review/review-<runId>-<yyyymmdd-hhmmss>.md      ← 리포트
-fcq/report/f-review/review-<runId>-<yyyymmdd-hhmmss>.html    ← 같은 내용 HTML
+fcq/report/f-review/review-<runId>.md      ← 리포트
+fcq/report/f-review/review-<runId>.html    ← 같은 내용 HTML
 ```
 
-`runId`는 `<짧은 SHA>-<시각>` 형태입니다. `output`이 파일 경로면 그 파일을 덮어씁니다.
-파일명·runId·`Generated:` 시각은 **PC의 시간대** 기준이며, 본문에는 오프셋과 지역명이 함께
+`runId`는 `<짧은 SHA>-<시각>` 형태입니다. 실행 하나에 리포트 하나 — 같은 실행을 다시
+finalize하면 같은 파일을 갱신합니다. `output`이 파일 경로면 그 파일을 덮어씁니다.
+runId·`Generated:` 시각은 **PC의 시간대** 기준이며, 본문에는 오프셋과 지역명이 함께
 적힙니다(예: `2026-10-13 13:40:37 +09:00 (Asia/Seoul)`).
 
 리포트는 지적의 **출처**를 구분합니다 — `AI`(리뷰어), `fcq`(정적 분석), `fcq+AI`(fcq 위반을
@@ -223,8 +224,9 @@ fcq/report/f-review/review-<runId>-<yyyymmdd-hhmmss>.html    ← 같은 내용 H
 지적마다 배지가 붙고 툴바의 출처 필터(전체/AI/fcq)로 걸러볼 수 있으며, 파일 블록 안에서
 AI 리뷰 → 구분선 → 정적 분석 순으로 묶입니다. `fcq+AI` 행은 두 필터 모두에 나타납니다.
 
-> 리포트 디렉터리 이름이 정확히 `f-review`이면, 새로 쓰기 전에 기존 폴더를
-> `f-review.<타임스탬프>`로 보관합니다. 그 폴더에는 항상 최신 리포트만 남습니다.
+> 리포트 폴더의 다른 파일은 옮기거나 지우지 않습니다. 실행마다 자기 파일이 쌓이므로,
+> 최신 결과는 파일 수정 시각으로 찾습니다. (이전 버전은 쓸 때마다 폴더째
+> `f-review.<타임스탬프>`로 옮겼고, 그 때문에 리포트가 여러 폴더로 갈라졌습니다.)
 
 ### 5.2 중간 산출물
 

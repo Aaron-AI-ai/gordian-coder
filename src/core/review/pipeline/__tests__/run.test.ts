@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { finalizeRun, planReview, planUnits } from "../run";
 import { fcqShardPath } from "../../evidence/fcq";
-import { MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, UNFINISHED_RUN_TTL_MS, RUN_BATCH_SIZE, createRun, finalizeFingerprint, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, writeFileReview } from "../run-store";
+import { MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, UNFINISHED_RUN_TTL_MS, RUN_BATCH_SIZE, createRun, finalizeFingerprint, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, runIsTerminal, writeFileReview } from "../run-store";
 import { loadRun, readFileReviewResult, resultUnit, reviewArtifactHash, runUnits, type RunMeta } from "../artifact";
 import { RUNS_DIR, reviewSlug, runDir, type FileReviewResult } from "../artifact";
 import { submitReview, guardExploration, onSessionIdle, MAX_RESUMES } from "../loop";
@@ -808,6 +808,45 @@ describe("finalizeRun", () => {
     expect(md).toContain("- Rubric: ");
     expect(md).toContain("### Files");
     expect(md).toContain("- a.ts");
+  });
+
+  it("re-finalizing one run rewrites its one report in place — no second file, no archive folder", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(["a.ts", "b.ts"]), d);
+    await writeFileReview(meta.runId, result("a.ts"), "# a", d);
+    const first = /[Rr]eport: (\S+)/.exec(await finalizeRun(meta.runId, d))![1]; // partial: b.ts missing
+    await writeFileReview(meta.runId, result("b.ts"), "# b", d);
+    const second = /Report: (.+)$/.exec(await finalizeRun(meta.runId, d))![1];
+
+    expect(second).toBe(first);
+    expect(first).toBe(`fcq/report/f-review/review-${meta.runId}.md`);
+    expect(readdirSync(join(d, "fcq/report"))).toEqual(["f-review"]);
+    expect(readdirSync(join(d, "fcq/report/f-review")).sort()).toEqual([
+      `review-${meta.runId}.html`,
+      `review-${meta.runId}.md`,
+    ]);
+    expect(readFileSync(join(d, second), "utf8")).toContain("## b.ts");
+  });
+
+  it("another run's finalize leaves an earlier report in place, and a finished run stays finished without its report", async () => {
+    const d = gitRepo();
+    const a = await createRun(baseMeta(["a.ts"]), d);
+    await writeFileReview(a.runId, result("a.ts"), "# a", d);
+    const aPath = /Report: (.+)$/.exec(await finalizeRun(a.runId, d))![1];
+    const b = await createRun(baseMeta(["b.ts"]), d);
+    await writeFileReview(b.runId, result("b.ts"), "# b", d);
+    await finalizeRun(b.runId, d);
+    expect(existsSync(join(d, aPath))).toBe(true); // not displaced by run b
+
+    // Unchanged state → cached answer, report untouched.
+    const before = statSync(join(d, aPath)).mtimeMs;
+    await Bun.sleep(5);
+    await finalizeRun(a.runId, d);
+    expect(statSync(join(d, aPath)).mtimeMs).toBe(before);
+
+    // Terminal status no longer depends on the report file.
+    rmSync(join(d, aPath));
+    expect(runIsTerminal(a.runId, d)).toBe(true);
   });
 
   it("merges segment units of one file into one report section and dedupes the overlap", async () => {

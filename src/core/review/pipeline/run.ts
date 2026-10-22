@@ -414,10 +414,12 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
   if (existsSync(cachePath)) {
     try {
       const cached = FinalizeCacheSchema.safeParse(JSON.parse(readFileSync(cachePath, "utf8")));
+      // Unchanged state → same answer, no write. The report only has to exist;
+      // a hand-edited one is left alone, a deleted one is rewritten in place.
       if (
         cached.success &&
         cached.data.fingerprint === fingerprint &&
-        diskTextHash(absoluteOutputPath(cached.data.reportPath, cwd)) === cached.data.reportHash
+        existsSync(absoluteOutputPath(cached.data.reportPath, cwd))
       ) {
         return cached.data.response;
       }

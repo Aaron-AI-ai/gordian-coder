@@ -4,15 +4,14 @@
  * Reports and manifests live in separate trees:
  *   report   → --output param > .f-review.json "output" > fcq/report/f-review/
  *   manifest → fcq/f-review/manifest/ (fixed)
- * A directory report target gets an auto-named
- * `review-<label>-<yyyymmdd-hhmmss>.md` — unique per run/session; a file
- * target is used as-is (and is overwritten). Writing into a dedicated
- * `f-review` folder first archives the existing folder to
- * `f-review.<yyyymmdd-hhmmss>`, so `f-review/` holds only the fresh report.
+ * A directory report target gets an auto-named `review-<label>.md`; every
+ * caller's label carries its runId or session id, so one run/session owns one
+ * file and a re-finalize rewrites that file in place. A file target is used
+ * as-is (and is overwritten). Nothing else in the folder is moved or touched.
  */
 
-import { existsSync, statSync, readdirSync, readFileSync, renameSync } from "node:fs";
-import { join, isAbsolute, dirname, basename } from "node:path";
+import { existsSync, statSync, readdirSync, readFileSync } from "node:fs";
+import { join, isAbsolute } from "node:path";
 import { loadConfig } from "../config";
 import { localFileStamp, localTimestamp } from "../../time";
 import { SEVERITIES, dedentCode, findingSource, splitFix, verdict, type Finding, type FindingSource, type Severity } from "../contract";
@@ -23,11 +22,6 @@ const DEFAULT_MANIFEST_DIR = "fcq/f-review/manifest/";
 
 function isDirSync(p: string): boolean {
   return existsSync(p) && statSync(p).isDirectory();
-}
-
-/** yyyymmdd-hhmmss in the PC's time zone, for report filenames. */
-function stamp(d: Date): string {
-  return localFileStamp(d);
 }
 
 /** Human-readable local timestamp (with offset and zone) recorded in the
@@ -46,15 +40,14 @@ export function defaultLabel(d: Date = new Date()): string {
 export function resolveOutputPath(
   opt: string | undefined,
   label: string,
-  cwd: string = process.cwd(),
-  date: Date = new Date()
+  cwd: string = process.cwd()
 ): string {
   const p = opt ?? loadConfig(cwd).output ?? DEFAULT_REPORT_DIR;
   const full = isAbsolute(p) ? p : join(cwd, p);
   const looksDir = p.endsWith("/") || isDirSync(full);
-  // Second-resolution stamp: each run/session writes its own report file
-  // instead of overwriting the previous one of the same commit + day.
-  return looksDir ? join(p, `review-${label}-${stamp(date)}.md`) : p;
+  // No write-time stamp: the label already names the run/session, and a stamp
+  // turned every re-finalize of the same run into a second report file.
+  return looksDir ? join(p, `review-${label}.md`) : p;
 }
 
 /** Manifest path — its own fixed tree, independent of the report location. */
@@ -338,7 +331,6 @@ export async function writeReport(
   appendix?: string
 ): Promise<string> {
   const abs = isAbsolute(path) ? path : join(cwd, path);
-  backupReportDir(dirname(abs), now);
   const body = renderReport(findings, label, language, failOn, baseline);
   await Bun.write(abs, appendix ? `${body}\n${appendix}` : body);
   await Bun.write(
@@ -346,22 +338,6 @@ export async function writeReport(
     renderHtmlReport(findings, label, language, failOn, baseline, now, appendix, baselineKey)
   );
   return path;
-}
-
-/**
- * Archive an existing dedicated report folder before writing a fresh report:
- * `.../f-review` → `.../f-review.<yyyymmdd-hhmmss>`, leaving `f-review/` with
- * only the newly written report. Gated on the folder name so an arbitrary
- * `--output` directory is never renamed.
- */
-function backupReportDir(dir: string, now: Date): void {
-  if (basename(dir) === "f-review" && isDirSync(dir)) {
-    // Two writes in the same second (e.g. a finalize retry) would collide on
-    // the stamped name — pick the first free suffix instead of crashing.
-    let dest = `${dir}.${stamp(now)}`;
-    for (let n = 2; existsSync(dest); n++) dest = `${dir}.${stamp(now)}-${n}`;
-    renameSync(dir, dest);
-  }
 }
 
 export interface ManifestMeta {

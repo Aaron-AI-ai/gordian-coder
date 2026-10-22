@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -44,42 +44,42 @@ const DATE = new Date("2026-07-27T09:30:05Z");
 const STAMP = localFileStamp(DATE); // yyyymmdd-hhmmss in the PC's zone (20260727-093005 under UTC)
 
 describe("resolveOutputPath", () => {
-  it("defaults to fcq/report/f-review/ with dated auto filename", () => {
-    expect(resolveOutputPath(undefined, "L", tmp(), DATE)).toBe(
-      `fcq/report/f-review/review-L-${STAMP}.md`
+  it("defaults to fcq/report/f-review/ with a label-named file (no write-time stamp)", () => {
+    expect(resolveOutputPath(undefined, "L", tmp())).toBe(
+      `fcq/report/f-review/review-L.md`
     );
   });
 
   it("treats a trailing-slash param as a directory", () => {
-    expect(resolveOutputPath("reports/", "L", tmp(), DATE)).toBe(`reports/review-L-${STAMP}.md`);
+    expect(resolveOutputPath("reports/", "L", tmp())).toBe(`reports/review-L.md`);
   });
 
   it("uses an explicit filename as-is (no date appended)", () => {
-    expect(resolveOutputPath("reports/pr-42.md", "L", tmp(), DATE)).toBe("reports/pr-42.md");
+    expect(resolveOutputPath("reports/pr-42.md", "L", tmp())).toBe("reports/pr-42.md");
   });
 
   it("reads output from config when no param", () => {
     const d = tmp();
     writeFileSync(join(d, ".f-review.json"), JSON.stringify({ output: "docs/rv/" }));
-    expect(resolveOutputPath(undefined, "L", d, DATE)).toBe(`docs/rv/review-L-${STAMP}.md`);
+    expect(resolveOutputPath(undefined, "L", d)).toBe(`docs/rv/review-L.md`);
   });
 
   it("param overrides config", () => {
     const d = tmp();
     writeFileSync(join(d, ".f-review.json"), JSON.stringify({ output: "docs/rv/" }));
-    expect(resolveOutputPath("out.md", "L", d, DATE)).toBe("out.md");
+    expect(resolveOutputPath("out.md", "L", d)).toBe("out.md");
   });
 
   it("detects an existing directory without trailing slash", () => {
     const d = tmp();
     mkdirSync(join(d, "reports"));
-    expect(resolveOutputPath("reports", "L", d, DATE)).toBe(`reports/review-L-${STAMP}.md`);
+    expect(resolveOutputPath("reports", "L", d)).toBe(`reports/review-L.md`);
   });
 
   it("keeps an absolute directory path absolute (not re-rooted under cwd)", () => {
     const d = tmp();
     const abs = join(d, "out") + "/";
-    expect(resolveOutputPath(abs, "L", d, DATE)).toBe(join(abs, `review-L-${STAMP}.md`));
+    expect(resolveOutputPath(abs, "L", d)).toBe(join(abs, `review-L.md`));
   });
 });
 
@@ -300,26 +300,24 @@ describe("writeReport", () => {
     expect(existsSync(join(d, "nested/dir/out.md"))).toBe(true);
   });
 
-  it("archives an existing f-review report folder, leaving only the fresh report", async () => {
+  it("never moves other reports in the f-review folder", async () => {
     const d = tmp();
     const dir = "fcq/report/f-review";
-    await writeReport(join(dir, "review-A-20260726-080000.md"), { "a.ts": [finding()] }, "A", d);
-    await writeReport(join(dir, "review-B-20260727-093005.md"), { "b.ts": [finding()] }, "B", d, "en", undefined, undefined, DATE);
-    expect(existsSync(join(d, dir, "review-A-20260726-080000.md"))).toBe(false); // moved out
-    expect(existsSync(join(d, dir, "review-B-20260727-093005.md"))).toBe(true); // fresh only
-    expect(existsSync(join(d, `${dir}.${STAMP}`, "review-A-20260726-080000.md"))).toBe(true); // archived
+    await writeReport(join(dir, "review-A.md"), { "a.ts": [finding()] }, "A", d);
+    await writeReport(join(dir, "review-B.md"), { "b.ts": [finding()] }, "B", d, "en", undefined, undefined, DATE);
+    expect(existsSync(join(d, dir, "review-A.md"))).toBe(true);
+    expect(existsSync(join(d, dir, "review-B.md"))).toBe(true);
+    expect(existsSync(join(d, `${dir}.${STAMP}`))).toBe(false); // no archive folder
   });
 
-  it("same-second rewrite picks a fresh backup suffix instead of crashing", async () => {
+  it("rewriting the same report keeps one file, updated in place", async () => {
     const d = tmp();
-    const dir = "fcq/report/f-review";
-    // three writes with the identical timestamp (finalize + immediate retries)
-    for (const l of ["A", "B", "C"]) {
-      await writeReport(join(dir, `review-${l}.md`), { "a.ts": [finding()] }, l, d, "en", undefined, undefined, DATE);
-    }
-    expect(existsSync(join(d, dir, "review-C.md"))).toBe(true);
-    expect(existsSync(join(d, `${dir}.${STAMP}`))).toBe(true);
-    expect(existsSync(join(d, `${dir}.${STAMP}-2`))).toBe(true);
+    const path = "fcq/report/f-review/review-R.md";
+    await writeReport(path, { "a.ts": [finding()] }, "R", d, "en", undefined, undefined, DATE);
+    await writeReport(path, { "a.ts": [finding(), finding({ line: 9, rule: "second" })] }, "R", d, "en", undefined, undefined, DATE);
+    expect(readdirSync(join(d, "fcq/report")).sort()).toEqual(["f-review"]);
+    expect(readdirSync(join(d, "fcq/report/f-review")).sort()).toEqual(["review-R.html", "review-R.md"]);
+    expect(readFileSync(join(d, path), "utf8")).toContain("second");
   });
 
   it("appends the appendix after the report body when given", async () => {
