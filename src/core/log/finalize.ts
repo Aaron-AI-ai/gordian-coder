@@ -32,6 +32,18 @@ export interface FinalizeInput {
 }
 
 const EVIDENCE_MAX_LINES = 30;
+const FIX_LINE_MAX = 300;
+
+/** One line for the relayed summary: what to do and where. The full resolution
+ * (code included) stays in the report; the chat reader only needs the gist and
+ * the files, so a missing submission yields no line at all. */
+function fixLine(s: StoredSubmission): string[] {
+  const summary = s.resolution.summary.replace(/\s+/g, " ").trim();
+  if (!summary) return [];
+  const text = summary.length > FIX_LINE_MAX ? `${summary.slice(0, FIX_LINE_MAX - 1)}…` : summary;
+  const files = [...new Set(s.resolution.changes.map((c) => c.file))];
+  return [`Fix (${s.resolution.kind}): ${text}${files.length ? ` [${files.join(", ")}]` : ""}`];
+}
 const RAW_MAX = 6_000;
 
 /** callLog is part of the interface contract (spec §11.1) but the read/unread
@@ -228,6 +240,7 @@ export function finalizeRun(runId: string, cwd: string): string {
     `✅ f-log finished — ${badge}`,
     `Report: ${rel}`,
     `Cause: ${best.submission.cause.summary || "(no submission)"} (confidence ${best.submission.confidence})`,
+    ...fixLine(best.submission),
     `Gaps: ${g === "0 / 0 / 0" ? "none" : `${g} (unexplained exceptions / unread suspects / unresolved observations)`}`,
     ...(collisionNote ? [collisionNote] : []),
   ].join("\n");

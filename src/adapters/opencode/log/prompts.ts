@@ -68,7 +68,7 @@ const LOG_WORKFLOW_REST = `2. Spawn ONE \`f-log-analyst\` subagent with that pro
    - REWORK → spawn a NEW \`f-log-analyst\` in a FRESH session with the same prompt as step 2, then judge again. The tool enforces the rework cap.
    - TERMINAL or "skipped" → step 4.
    If the judge is off, go to step 4 after the analyst submits.
-4. Call \`f_log_finalize\` with the runId. Relay its four-line summary (badge, report path, cause, gaps) to the user verbatim. Do NOT read the report back.
+4. Call \`f_log_finalize\` with the runId. Relay its short summary (badge, report path, cause, fix, gaps) to the user verbatim. Do NOT read the report back.
 
 Hard rules: spawn the subagent each step names — the two are not interchangeable (analyst: f_log_context/f_log_submit; judge: f_log_judge_context/f_log_judge). Never spawn two analysts at once. Never call f_log_plan twice for the same log. NEVER read project config or source yourself.`;
 

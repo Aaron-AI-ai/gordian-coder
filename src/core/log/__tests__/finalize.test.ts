@@ -138,13 +138,15 @@ describe("finalizeRun end-to-end", () => {
     logContext(runId, "fin-s", cwd);
     const st = getLogState("fin-s")!;
     runLogTool(st, "f_log_read", { file_path: "src/a/Svc.java" });
-    submitLog({ runId, submitToken: st.submitToken, cause: { file: "src/a/Svc.java", line: 2, summary: "null", mechanism: "m" }, evidence: [{ file: "src/a/Svc.java", lines: [1, 3], why: "w" }], observations: [{ observation: "예외 1/1: java.lang.NullPointerException: x", explained: true }], alternatives: [{ hypothesis: "h", rejectedBecause: "r" }], resolution: { summary: "s", changes: [], kind: "root-cause" }, confidence: 70 }, "fin-s");
+    submitLog({ runId, submitToken: st.submitToken, cause: { file: "src/a/Svc.java", line: 2, summary: "null", mechanism: "m" }, evidence: [{ file: "src/a/Svc.java", lines: [1, 3], why: "w" }], observations: [{ observation: "예외 1/1: java.lang.NullPointerException: x", explained: true }], alternatives: [{ hypothesis: "h", rejectedBecause: "r" }], resolution: { summary: "map.get(k) 결과가 null이면\n빈 값을 반환하도록 가드한다", changes: [{ file: "src/a/Svc.java", description: "null 가드 추가" }, { file: "src/a/Other.java", description: "x" }], kind: "root-cause" }, confidence: 70 }, "fin-s");
     const tok = /JUDGE_TOKEN=(\S+)/.exec(logJudgeContext(runId, cwd))![1];
     submitLogJudge({ runId, judgeToken: tok, scores: { observation: 30, alternatives: 20, rootCause: 25 }, unexplained: [], feedback: "ok" }, cwd);
     const out = finalizeRun(runId, cwd);
     expect(out).toContain("f-log finished — PASS");
     expect(out).toContain(`log-${runId}.md`);
     expect(out).toContain("Gaps: none");
+    // The relayed summary carries the resolution too, on ONE line, with the files to change.
+    expect(out).toContain("Fix (root-cause): map.get(k) 결과가 null이면 빈 값을 반환하도록 가드한다 [src/a/Svc.java, src/a/Other.java]");
     const path = join(cwd, ".fico/report/f-log/", `log-${runId}.md`);
     expect(existsSync(path)).toBe(true);
     expect(existsSync(join(runDir(runId, cwd), "finalize.json"))).toBe(true);

@@ -124,7 +124,7 @@ export function createLogModule(input: PluginInput): {
   });
 
   const f_log_finalize = tool({
-    description: "Finish a run: gap checks and the report. Returns a four-line summary to relay. Orchestrator only.",
+    description: "Finish a run: gap checks and the report. Returns a short summary (badge, report path, cause, fix, gaps) to relay. Orchestrator only.",
     args: { runId: z.string().min(1) },
     async execute(args) {
       return finalizeRun(args.runId, cwd);
