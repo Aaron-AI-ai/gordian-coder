@@ -27,12 +27,12 @@ OpenCode에서 대상 프로젝트를 연 뒤:
     "judgeThreshold": 70,
     "judgeRounds": 2,
     "contextMaxChars": 40000,
-    "judge": true
+    "judge": false
   }
 }
 ```
 
-`log` 섹션이 없으면 위 값이 기본이다. `frameworkKb`·`language`·`maxToolCalls`·`maxIter`는 `review`의 값을 그대로 쓴다.
+`log` 섹션이 없으면 위 값이 기본이다. `judge`는 f-review와 같이 기본 꺼짐이며, `--judge`로 실행마다 켜거나 `log.judge`(또는 `review.judge`)를 `true`로 두면 켜진다. `frameworkKb`·`language`·`maxToolCalls`·`maxIter`는 `review`의 값을 그대로 쓴다.
 
 `frameworkKb`는 f-review·f-log가 공유하므로 위처럼 최상단에 두는 것을 권장한다. 기존처럼 `review.frameworkKb`에 둬도 동작하며, 둘 다 있으면 `review` 쪽이 우선한다.
 

@@ -28,7 +28,7 @@ function start(cwd: string, sessionId: string) {
   // header as a continuation of that block's message (multi-line Java messages),
   // so appending one here would corrupt plan.observations against which the
   // valid() fixture below is matched verbatim (Gate 1).
-  const runId = /runId[:=]\s*(\S+)/.exec(planLog({ log: LOG }, cwd))![1];
+  const runId = /runId[:=]\s*(\S+)/.exec(planLog({ log: LOG, judge: true }, cwd))![1]; // these tests cover the judged path
   logContext(runId, sessionId, cwd);
   const st = getLogState(sessionId)!;
   return { runId, st };

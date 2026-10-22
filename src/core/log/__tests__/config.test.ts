@@ -21,7 +21,7 @@ describe("loadLogConfig", () => {
     expect(c.judgeThreshold).toBe(70);
     expect(c.judgeRounds).toBe(2);
     expect(c.contextMaxChars).toBe(40_000);
-    expect(c.judge).toBe(true);
+    expect(c.judge).toBe(false); // off unless configured, like f-review
     expect(c.language).toBe("ko");
     expect(c.frameworkKb).toEqual({});
   });

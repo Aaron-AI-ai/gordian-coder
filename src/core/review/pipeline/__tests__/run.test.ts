@@ -340,6 +340,15 @@ describe("planReview", () => {
     expect(msg).toContain("no project config found");
   });
 
+  it("leaves the judge gate off unless the call or the config turns it on", async () => {
+    // Same default as f-log: judging spends a second agent per file.
+    const d = gitRepo();
+    const off = await planReview({}, d);
+    expect(off).toContain("judge=off");
+    expect(loadRun(/Run created: (\S+)/.exec(off)![1], d)?.judge).toBe(false);
+    expect(await planReview({ judge: true }, d)).toContain("judge=on");
+  });
+
   it("creates a fresh run for a repeated identical plan (no resume)", async () => {
     const d = gitRepo();
     const first = await planReview({}, d);

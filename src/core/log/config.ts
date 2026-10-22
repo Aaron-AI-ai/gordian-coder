@@ -29,7 +29,7 @@ export const LOG_DEFAULTS = {
   judgeThreshold: 70,
   judgeRounds: 2,
   contextMaxChars: 40_000,
-  judge: true,
+  judge: false, // same default as f-review: judging costs a second agent per run
 } as const;
 
 // Wrong-typed field → unset (per-field .catch), same policy as ReviewConfigSchema.
