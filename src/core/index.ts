@@ -31,4 +31,4 @@ export * from "./review";
 export * as log from "./log";
 
 // wiki -> KB sync
-export * from "./kb-sync";
+export * from "./kb/kb-sync";

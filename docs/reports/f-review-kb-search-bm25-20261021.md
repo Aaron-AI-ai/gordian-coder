@@ -12,7 +12,7 @@
 
 ## 구현
 
-`src/core/review/evidence/framework-kb.ts`
+`src/core/kb/framework-kb.ts`
 
 | 항목 | 내용 |
 |---|---|

@@ -19,7 +19,7 @@ import {
   type RelatedFile,
 } from "../tools/related";
 import { fileImports, isExternalImport, unresolvedImports } from "../imports";
-import { frameworkKbDocs, kbPrefetch, type KbDoc } from "./framework-kb";
+import { frameworkKbDocs, kbPrefetch, type KbDoc } from "../../kb/framework-kb";
 
 // Raised for the injected import sources and KB pages below. The budget buys
 // back more than it costs: each fact the reviewer would otherwise fetch costs a

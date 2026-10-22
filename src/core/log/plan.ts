@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { join, posix } from "node:path";
 import { isExternalImport, normalizeRepoPath, resolveImport } from "../review/imports";
 import { isGitRepo, listFilesAt, sh } from "../review/tools/read";
-import { frameworkKbDocs, type KbDoc } from "../review/evidence/framework-kb";
+import { frameworkKbDocs, type KbDoc } from "../kb/framework-kb";
 import { loadLogConfig } from "./config";
 import { parseStackTrace, type HandlerInfo, type ParsedLog, type StackFrame } from "./parse";
 import { loadLogRules, matchLogRules } from "./rules";

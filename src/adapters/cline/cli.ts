@@ -29,7 +29,7 @@ import {
 } from "../opencode/init";
 import type { ApplyResult } from "../opencode/init";
 import * as readline from "node:readline";
-import { syncWikiKb, checkWikiKb, resolveWikiSources, ensureKbVisible } from "../../core/kb-sync";
+import { syncWikiKb, checkWikiKb, resolveWikiSources, ensureKbVisible } from "../../core/kb/kb-sync";
 import * as tty from "node:tty";
 import { VERSION } from "../../version";
 

@@ -25,7 +25,7 @@ import {
 import { currentFilePath, type ReviewState } from "../pipeline/state";
 import { codeSearch, fileFind, fileRead, fileReadDiff } from "./read";
 import { gitHistory, renderRelatedCode } from "./related";
-import { kbSearch } from "../evidence/framework-kb";
+import { kbSearch } from "../../kb/framework-kb";
 
 /** One argument, in the least-common-denominator shape both adapters render.
  * Bounds are advisory for MCP (its schema has none) and enforced by zod. */

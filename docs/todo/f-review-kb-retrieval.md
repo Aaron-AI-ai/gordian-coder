@@ -7,7 +7,7 @@
 
 | 구성 | 위치 | 동작 |
 |---|---|---|
-| import 기반 KB 주입 | `src/core/review/evidence/framework-kb.ts` `frameworkKbDocs` | 파일이 import한 클래스가 `fico_ai.json`의 `frameworkKb` 접두사와 맞으면 그 KB 문서를 주입 |
+| import 기반 KB 주입 | `src/core/kb/framework-kb.ts` `frameworkKbDocs` | 파일이 import한 클래스가 `fico_ai.json`의 `frameworkKb` 접두사와 맞으면 그 KB 문서를 주입 |
 | `kb_search` 도구 | `src/core/review/tools/index.ts` | 리뷰어가 KB를 키워드로 검색 (파일명·제목·fqcn·태그·설명·본문 점수) |
 | 사전 검색 | `framework-kb.ts` `kbClues` / `kbPrefetch`, `dossier.ts` | 코드가 파일 단서(fico import 클래스, 어노테이션, `new` 타입, 코드형 문자열 리터럴)를 뽑아 검색하고 상위 최대 3개를 주입 |
 | 한도 | `dossier.ts` | `KB_SECTION_MAX_CHARS` 18,000 / `AUTO_EVIDENCE_MAX_CHARS` 30,000 |
