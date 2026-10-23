@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { finalizeRun, planReview, planUnits } from "../run";
+import { finalizeRun, planReview, planUnits, renderCommand } from "../run";
 import { fcqShardPath } from "../../evidence/fcq";
 import { MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, UNFINISHED_RUN_TTL_MS, RUN_BATCH_SIZE, createRun, finalizeFingerprint, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, runIsTerminal, writeFileReview } from "../run-store";
 import { loadRun, readFileReviewResult, resultUnit, reviewArtifactHash, runUnits, type RunMeta } from "../artifact";
@@ -319,6 +319,17 @@ describe("planReview", () => {
     expect(msg).toContain("f_review_finalize");
     const runId = /Run created: (\S+)/.exec(msg)![1];
     expect(loadRun(runId, d)?.targets).toEqual(["a.ts", "b.ts"]);
+  });
+
+  it("keeps the plan's own inputs for the report's command line", async () => {
+    const d = gitRepo();
+    const msg = await planReview({ files: ["a.ts"], judge: false }, d);
+    const runId = /Run created: (\S+)/.exec(msg)![1];
+    expect(loadRun(runId, d)?.input).toEqual({ files: ["a.ts"], judge: false });
+    expect(renderCommand({ files: ["src/**/*.java"], judge: true, deepPasses: 2 })).toBe(
+      "f-review --files=src/**/*.java --deep=2 --judge"
+    );
+    expect(renderCommand(undefined)).toBe("");
   });
 
   it("reports the effective settings and the config file they came from", async () => {

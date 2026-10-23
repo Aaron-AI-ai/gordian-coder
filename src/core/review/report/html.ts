@@ -30,6 +30,31 @@ const TEMPLATE = TEMPLATE_HTML as unknown as string;
 /** Most severe first, matching SEVERITIES. */
 const SEV_ORDER: readonly Severity[] = SEVERITIES;
 
+/** Per-target outcome of a run, from finalize's coverage check. */
+export type FileStatus = "done" | "partial" | "forced" | "missing";
+
+/** What the run was asked to do and how far it got: the header block and the
+ * target table. Only run finalize knows this; a session report passes none
+ * and keeps the findings-only header. */
+export interface ReportContext {
+  /** The f-review command rebuilt from the plan's own inputs; "" when unknown. */
+  command: string;
+  /** Effective settings, one short phrase each (mode, judge, fcq, rubric…). */
+  settings: string[];
+  startedAt: Date;
+  finishedAt: Date;
+  files: { path: string; status: FileStatus; units: number }[];
+}
+
+/** "1h 02m 05s" / "12m 30s" / "45s" — whole seconds; a review never needs ms. */
+export function fmtDuration(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return h ? `${h}h ${pad(m)}m ${pad(s % 60)}s` : m ? `${m}m ${pad(s % 60)}s` : `${s % 60}s`;
+}
+
 function esc(s: string): string {
   return s
     .replace(/&/g, "&amp;")
@@ -95,6 +120,14 @@ interface HtmlLabels {
   source: string; // toolbar label for the source filter
   aiGroup: string; // heading of the reviewer's own findings inside a file block
   fcqGroup: string; // heading of the static-analysis findings inside a file block
+  command: string; // header: the command that produced this report
+  settings: string; // header: effective settings
+  elapsed: string; // header: plan → finalize wall time
+  done: string; // hero: targets with a complete review
+  fileList: string; // target table summary
+  status: string; // target table column
+  segments: string; // "(n segments)" in the target table
+  statusText: Record<FileStatus, string>;
 }
 
 /** Badge text per source — names, not prose, so shared across languages. */
@@ -136,6 +169,14 @@ const LABELS: Record<string, HtmlLabels> = {
     source: "출처",
     aiGroup: "AI 리뷰",
     fcqGroup: "정적 분석",
+    command: "명령",
+    settings: "설정",
+    elapsed: "소요 시간",
+    done: "분석 완료",
+    fileList: "대상 파일 목록",
+    status: "상태",
+    segments: "세그먼트",
+    statusText: { done: "완료", partial: "부분", forced: "강제 진행", missing: "미완료" },
   },
   en: {
     title: "Code Review Report",
@@ -172,6 +213,14 @@ const LABELS: Record<string, HtmlLabels> = {
     source: "Source",
     aiGroup: "AI review",
     fcqGroup: "Static analysis",
+    command: "Command",
+    settings: "Settings",
+    elapsed: "Elapsed",
+    done: "reviewed",
+    fileList: "Target files",
+    status: "status",
+    segments: "segments",
+    statusText: { done: "done", partial: "partial", forced: "forced", missing: "missing" },
   },
   ja: {
     title: "コードレビューレポート",
@@ -208,6 +257,14 @@ const LABELS: Record<string, HtmlLabels> = {
     source: "出処",
     aiGroup: "AIレビュー",
     fcqGroup: "静的解析",
+    command: "コマンド",
+    settings: "設定",
+    elapsed: "所要時間",
+    done: "分析完了",
+    fileList: "対象ファイル一覧",
+    status: "状態",
+    segments: "セグメント",
+    statusText: { done: "完了", partial: "一部", forced: "強制続行", missing: "未完了" },
   },
 };
 
@@ -223,34 +280,56 @@ function inline(s: string): string {
     .replace(/`([^`]+)`/g, "<code>$1</code>");
 }
 
+/** With a run header on the page the appendix must not say it again: the
+ * Review Context section (mode, rubric, target list) goes, and the fcq
+ * command's --paths list — every target once more — collapses to a count. */
+function trimAppendix(md: string): string {
+  return md
+    .replace(/(^|\n)## Review Context[\s\S]*$/, "")
+    .replace(/--paths=(\S+)/, (_, list: string) => `--paths=<${list.split(",").length} files>`);
+}
+
 /** The run-quality appendix is markdown built for the .md report; render its
  * headings and bullets rather than dumping it as preformatted text. */
 function appendixHtml(md: string): string {
   const out: string[] = [];
   let list = false;
-  const closeList = () => {
+  let table = false;
+  const closeBlocks = () => {
     if (list) out.push("</ul>");
-    list = false;
+    if (table) out.push("</tbody></table>");
+    list = table = false;
   };
   for (const raw of md.split("\n")) {
     const line = raw.trim();
     if (!line) {
-      closeList();
+      closeBlocks();
       continue;
     }
     if (line.startsWith("## ")) {
-      closeList();
+      closeBlocks();
       out.push(`<h2>${inline(line.slice(3))}</h2>`);
     } else if (line.startsWith("- ")) {
       if (!list) out.push("<ul>");
       list = true;
       out.push(`<li>${inline(line.slice(2))}</li>`);
+    } else if (line.startsWith("|")) {
+      // The fcq category table. The first row heads it; the |---| row is skipped.
+      const cells = line.split("|").slice(1, -1).map((c) => c.trim());
+      if (cells.every((c) => /^-+$/.test(c))) continue;
+      if (!table) {
+        closeBlocks();
+        out.push(`<table><thead><tr>${cells.map((c) => `<th>${inline(c)}</th>`).join("")}</tr></thead><tbody>`);
+        table = true;
+      } else {
+        out.push(`<tr>${cells.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`);
+      }
     } else {
-      closeList();
+      closeBlocks();
       out.push(`<p>${inline(line)}</p>`);
     }
   }
-  closeList();
+  closeBlocks();
   return `<section class="runsum">\n${out.join("\n")}\n</section>`;
 }
 
@@ -310,7 +389,8 @@ export function renderHtmlReport(
   baselineKeys?: Set<string>,
   now: Date = new Date(),
   appendix?: string,
-  baselineKeyOf: (file: string, rule: string) => string = (file, rule) => `${file}${rule}`
+  baselineKeyOf: (file: string, rule: string) => string = (file, rule) => `${file}${rule}`,
+  context?: ReportContext
 ): string {
   const L = LABELS[language] ?? LABELS.en;
   const files = Object.keys(findings).sort();
@@ -324,6 +404,54 @@ export function renderHtmlReport(
   const rate = files.length ? Math.round((cleanFiles / files.length) * 1000) / 10 : 100;
   const top = topSeverity(all);
   const stamp = localTimestamp(now);
+
+  // Run header + target table. Counts come from the plan (every target, with
+  // its outcome), not from the findings map, which only knows files that
+  // produced a result — a run with no bound subagents used to show "0 files".
+  const targets = context?.files ?? [];
+  const doneCount = targets.filter((t) => t.status === "done").length;
+  const partialCount = targets.filter((t) => t.status === "partial" || t.status === "forced").length;
+  const missingCount = targets.filter((t) => t.status === "missing").length;
+  const donePct = targets.length ? Math.round((doneCount / targets.length) * 100) : 0;
+  const elapsed = context ? fmtDuration(context.finishedAt.getTime() - context.startedAt.getTime()) : "";
+  const findingsStat = `<div class="stat${all.length ? " bad" : ""}"><div class="n">${all.length}</div><div class="l">${esc(L.findings)} &middot; AI ${aiCount} &middot; fcq ${all.length - aiCount} &middot; ${esc(L.maxSeverity)} ${top ?? esc(L.none)}</div></div>`;
+  const runInfo = context
+    ? [
+        `<dl class="runinfo">`,
+        `<dt>${esc(L.target)}</dt><dd><b>${label ? esc(label) : "-"}</b></dd>`,
+        `<dt>${esc(L.command)}</dt><dd>${context.command ? `<code>${esc(context.command)}</code>` : "-"}</dd>`,
+        `<dt>${esc(L.settings)}</dt><dd>${context.settings.map(esc).join(" &middot; ")}</dd>`,
+        `<dt>${esc(L.elapsed)}</dt><dd><b>${esc(elapsed)}</b> <span class="dim">${esc(localTimestamp(context.startedAt))} &rarr; ${esc(localTimestamp(context.finishedAt))}</span></dd>`,
+        `</dl>`,
+      ].join("\n      ")
+    : `<div class="meta">${[
+        `${esc(L.target)} <b>${label ? esc(label) : "-"}</b><br>`,
+        `${esc(L.files)} <b>${files.length}</b> &middot;`,
+        `${esc(L.findings)} <b>${all.length}</b> &middot;`,
+        `${esc(L.maxSeverity)} <b>${top ?? esc(L.none)}</b>`,
+      ].join(" ")}</div>`;
+  const fileTable = context
+    ? [
+        `<details class="filelist">`,
+        `<summary>${esc(L.fileList)} <span class="c">${targets.length}</span> <span class="dim">&middot; ${esc(L.statusText.done)} ${doneCount}` +
+          (partialCount ? ` &middot; ${esc(L.statusText.partial)} ${partialCount}` : "") +
+          (missingCount ? ` &middot; ${esc(L.statusText.missing)} ${missingCount}` : "") +
+          `</span></summary>`,
+        `<table><thead><tr><th>${esc(L.status)}</th><th>${esc(L.fileCount)}</th><th class="num">${esc(L.count)}</th><th>${esc(L.topSeverity)}</th></tr></thead><tbody>`,
+        ...targets.map((t) => {
+          const items = findings[t.path] ?? [];
+          const tTop = topSeverity(items);
+          return (
+            `<tr><td><span class="st ${t.status}">${esc(L.statusText[t.status])}</span></td>` +
+            `<td><code>${esc(t.path)}</code>${t.units > 1 ? ` <span class="dim">(${t.units} ${esc(L.segments)})</span>` : ""}</td>` +
+            `<td class="num">${t.status === "missing" ? "-" : items.length}</td>` +
+            `<td>${tTop ? `<span class="sev ${tTop}">${tTop}</span>` : "-"}</td></tr>`
+          );
+        }),
+        `</tbody></table>`,
+        `</details>`,
+      ].join("\n    ")
+    : "";
 
   // Rows are click targets that jump to the findings tab, filtered.
   const categoryRows = categories.length
@@ -420,12 +548,7 @@ export function renderHtmlReport(
     HEADING: esc(L.title),
     EYEBROW: esc(L.eyebrow),
     STAMP: esc(stamp),
-    META: [
-      `${esc(L.target)} <b>${label ? esc(label) : "-"}</b><br>`,
-      `${esc(L.files)} <b>${files.length}</b> &middot;`,
-      `${esc(L.findings)} <b>${all.length}</b> &middot;`,
-      `${esc(L.maxSeverity)} <b>${top ?? esc(L.none)}</b>`,
-    ].join(" "),
+    RUNINFO: runInfo,
     VERDICT: failOn
       ? (() => {
           const v = verdict(all, failOn);
@@ -434,11 +557,22 @@ export function renderHtmlReport(
           )}</div>`;
         })()
       : "",
-    STATS: [
-      `<div class="stat rate"><div class="n">${rate}%</div><div class="l">${esc(L.cleanFiles)} &middot; ${cleanFiles}/${files.length}</div></div>`,
-      `<div class="stat"><div class="n">${files.length}</div><div class="l">${esc(L.files)} &middot; ${esc(L.withFindings)} ${files.length - cleanFiles}</div></div>`,
-      `<div class="stat${all.length ? " bad" : ""}"><div class="n">${all.length}</div><div class="l">${esc(L.findings)} &middot; AI ${aiCount} &middot; fcq ${all.length - aiCount} &middot; ${esc(L.maxSeverity)} ${top ?? esc(L.none)}</div></div>`,
-    ].join("\n      "),
+    STATS: (context
+      ? [
+          `<div class="stat"><div class="n">${targets.length}</div><div class="l">${esc(L.files)} &middot; ${esc(L.cleanFiles)} ${cleanFiles}</div></div>`,
+          `<div class="stat ${doneCount === targets.length ? "rate" : "bad"}"><div class="n">${doneCount}</div><div class="l">${esc(L.done)} &middot; ${donePct}%` +
+            (partialCount ? ` &middot; ${esc(L.statusText.partial)} ${partialCount}` : "") +
+            (missingCount ? ` &middot; ${esc(L.statusText.missing)} ${missingCount}` : "") +
+            `</div></div>`,
+          findingsStat,
+        ]
+      : [
+          `<div class="stat rate"><div class="n">${rate}%</div><div class="l">${esc(L.cleanFiles)} &middot; ${cleanFiles}/${files.length}</div></div>`,
+          `<div class="stat"><div class="n">${files.length}</div><div class="l">${esc(L.files)} &middot; ${esc(L.withFindings)} ${files.length - cleanFiles}</div></div>`,
+          findingsStat,
+        ]
+    ).join("\n      "),
+    FILE_TABLE: fileTable,
     SPECTRUM_LABEL: esc(L.spectrum),
     SPECTRUM_EMPTY: all.length ? "" : " empty",
     SPECTRUM: SEV_ORDER.filter((s) => sevCount(s) > 0)
@@ -491,7 +625,7 @@ export function renderHtmlReport(
     FILE_BLOCKS: fileBlocks,
     NO_MATCH: esc(L.noMatch),
     RULE_BLOCKS: ruleBlocks,
-    APPENDIX: appendix ? appendixHtml(appendix) : "",
+    APPENDIX: appendix ? appendixHtml(context ? trimAppendix(appendix) : appendix) : "",
     FOOTER: `f-review &middot; ${esc(L.generated)} ${esc(stamp)}`,
   });
 }

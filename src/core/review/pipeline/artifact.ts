@@ -119,6 +119,35 @@ export function readFileReviewResult(
   }
 }
 
+/** The plan call's own inputs, as given (a glob stays a glob, a ref stays a
+ * ref), so the report can show the command that produced it. Only what the
+ * /f-review command line can express; the prose args stay out. */
+export interface RunInput {
+  commit?: string;
+  from?: string;
+  to?: string;
+  files?: string[];
+  whole?: boolean;
+  exclude?: string[];
+  output?: string;
+  deepPasses?: number;
+  judge?: boolean;
+  fcq?: boolean;
+}
+
+export const RunInputSchema: z.ZodType<RunInput> = z.object({
+  commit: z.string().optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  files: z.array(z.string()).optional(),
+  whole: z.boolean().optional(),
+  exclude: z.array(z.string()).optional(),
+  output: z.string().optional(),
+  deepPasses: z.number().int().optional(),
+  judge: z.boolean().optional(),
+  fcq: z.boolean().optional(),
+});
+
 export interface RunMeta {
   runId: string;
   createdAt: string; // ISO timestamp
@@ -166,6 +195,8 @@ export interface RunMeta {
   /** Config `fcqFix`: reviewers must write a TO-BE fix for every fcq hit, not
    * just CRITICAL/MAJOR. Costs reviewer budget; buys real code in the report. */
   fcqFix?: boolean;
+  /** What the plan was called with; absent on runs planned before it was kept. */
+  input?: RunInput;
 }
 
 /** Persisted run metadata is external state, even though this process created it. */
@@ -193,6 +224,7 @@ export const RunMetaSchema: z.ZodType<RunMeta> = z.object({
   excludes: z.array(z.string()).optional(),
   fcq: FcqRunStatusSchema.optional(),
   fcqFix: z.boolean().optional(),
+  input: RunInputSchema.optional(),
 });
 
 /** Load a run's meta, or null when the run does not exist / is unreadable. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { renderHtmlReport } from "../html";
+import { fmtDuration, renderHtmlReport } from "../html";
 import type { Finding } from "../../contract";
 
 const finding = (over: Partial<Finding> = {}): Finding => ({
@@ -81,5 +81,68 @@ describe("renderHtmlReport — source separation", () => {
     const ko = renderHtmlReport(mixed, "L", "ko");
     expect(ko).toContain("AI 리뷰 (1)");
     expect(ko).toContain("정적 분석 (2)");
+  });
+});
+
+describe("renderHtmlReport — run header and target table", () => {
+  const ctx = {
+    command: "f-review --files=src/**/*.ts --judge",
+    settings: ["explicit files · whole-file", "judge ×2"],
+    startedAt: new Date("2026-10-23T01:00:00Z"),
+    finishedAt: new Date("2026-10-23T01:12:30Z"),
+    files: [
+      { path: "src/a.ts", status: "done" as const, units: 1 },
+      { path: "src/b.ts", status: "done" as const, units: 3 },
+      { path: "src/c.ts", status: "missing" as const, units: 1 },
+    ],
+  };
+  const appendix =
+    "## Static Analysis (fcq)\n\n- Command: `fcq analyze . --paths=src/a.ts,src/b.ts,src/c.ts --report-formats=json`\n\n" +
+    "| category | rules | failed |\n| --- | --- | --- |\n| code-style | 20 | 7 |\n\n" +
+    "## Review Context\n\n- Mode: explicit files\n\n### Files\n- src/a.ts\n- src/c.ts\n";
+  const render = () =>
+    renderHtmlReport(mixed, "L", "en", undefined, undefined, new Date(), appendix, undefined, ctx);
+
+  it("shows the command, settings and elapsed time once, in the header", () => {
+    const html = render();
+    expect(html.split("f-review --files=src/**/*.ts --judge").length).toBe(2);
+    expect(html).toContain("12m 30s");
+    expect(html).toContain("judge ×2");
+  });
+
+  it("counts targets and reviewed files from the run, not from the findings map", () => {
+    const html = render();
+    expect(html).toContain('<div class="n">3</div><div class="l">files');
+    expect(html).toContain('<div class="n">2</div><div class="l">reviewed &middot; 67% &middot; missing 1');
+  });
+
+  it("lists every target with its outcome and drops the appendix's repeat of it", () => {
+    const html = render();
+    expect(html).toContain('<span class="st missing">missing</span>');
+    expect(html).toContain("(3 segments)");
+    expect(html).not.toContain("Review Context");
+    expect(html).toContain("--paths=&lt;3 files&gt;");
+    expect(html.match(/src\/c\.ts/g)).toHaveLength(1); // the target table only
+  });
+
+  it("renders the appendix's markdown table as a table", () => {
+    const html = render();
+    expect(html).toContain("<table><thead><tr><th>category</th><th>rules</th><th>failed</th></tr></thead>");
+    expect(html).toContain("<tr><td>code-style</td><td>20</td><td>7</td></tr>");
+    expect(html).not.toContain("| ---");
+  });
+
+  it("keeps the findings-only header when no run context is given", () => {
+    const html = renderHtmlReport(mixed, "L", "en");
+    expect(html).toContain('class="meta"');
+    expect(html).not.toContain('<details class="filelist">');
+  });
+});
+
+describe("fmtDuration", () => {
+  it("formats whole seconds at the largest unit needed", () => {
+    expect(fmtDuration(45_000)).toBe("45s");
+    expect(fmtDuration(750_000)).toBe("12m 30s");
+    expect(fmtDuration(3_725_000)).toBe("1h 02m 05s");
   });
 });

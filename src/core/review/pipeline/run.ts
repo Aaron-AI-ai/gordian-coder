@@ -21,7 +21,8 @@ import { join } from "node:path";
 import { SEVERITIES, dedupeFindings, verdict, type Finding, type Severity } from "../contract";
 import { collectTargets, resolveDiffRange, type CommitSpec } from "./context";
 import { FinalizeCacheSchema, MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, RUN_BATCH_SIZE, absoluteOutputPath, createRun, diskTextHash, filesSnapshotIdentity, finalizeFingerprint, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, runFreshness, unfinishedRuns } from "./run-store";
-import { loadRun, resultUnit, runUnits, type RunMeta } from "./artifact";
+import { loadRun, resultUnit, runUnits, type RunInput, type RunMeta } from "./artifact";
+import type { FileStatus, ReportContext } from "../report/html";
 import { RUNS_DIR, reviewArtifactHash, runDir } from "./artifact";
 import { planSegments, targetPath, targetRange } from "./segment";
 import { afterRef, fileLineCount } from "../tools/read";
@@ -51,6 +52,42 @@ export interface PlanReviewArgs {
 }
 
 type PlannedRun = Omit<RunMeta, "runId" | "createdAt" | "baseline">;
+
+/** The command-line-expressible plan args, verbatim, for the report header.
+ * Always an object for a new run (a bare plan is `{}`), so an absent field
+ * means a run planned before it was kept, not a plan with no arguments. */
+function planInput(args: PlanReviewArgs): RunInput {
+  const input: RunInput = {};
+  if (args.commit) input.commit = args.commit;
+  if (args.from) input.from = args.from;
+  if (args.to) input.to = args.to;
+  if (args.files?.length) input.files = args.files;
+  if (args.whole !== undefined) input.whole = args.whole;
+  if (args.exclude?.length) input.exclude = args.exclude;
+  if (args.output) input.output = args.output;
+  if (args.deepPasses !== undefined) input.deepPasses = args.deepPasses;
+  if (args.judge !== undefined) input.judge = args.judge;
+  if (args.fcq !== undefined) input.fcq = args.fcq;
+  return input;
+}
+
+/** The /f-review command line that expresses `input`, in the flag spelling
+ * the command template documents. "" for a run that kept no input. */
+export function renderCommand(input: RunInput | undefined): string {
+  if (!input) return "";
+  const parts = ["f-review"];
+  if (input.commit) parts.push(input.commit);
+  if (input.from) parts.push(`--from=${input.from}`);
+  if (input.to) parts.push(`--to=${input.to}`);
+  if (input.files?.length) parts.push(`--files=${input.files.join(",")}`);
+  if (input.whole) parts.push("--whole");
+  if (input.exclude?.length) parts.push(`--exclude=${input.exclude.join(",")}`);
+  if (input.output) parts.push(`--output=${input.output}`);
+  if (input.deepPasses !== undefined) parts.push(`--deep=${input.deepPasses}`);
+  if (input.judge) parts.push("--judge");
+  if (input.fcq) parts.push("--fcq");
+  return parts.join(" ");
+}
 
 function planFingerprint(meta: PlannedRun | RunMeta): string {
   return JSON.stringify({
@@ -220,6 +257,7 @@ export async function planReview(args: PlanReviewArgs, cwd: string): Promise<str
     criteriaIdentity: reviewCriteriaIdentity(cwd),
     excludes: [...(config.exclude ?? []), ...(args.exclude ?? [])],
     ...(config.fcqFix === true ? { fcqFix: true } : {}),
+    input: planInput(args),
   };
 
   const fingerprint = planFingerprint(planned);
@@ -577,13 +615,46 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
     const n = units.filter((unit) => targetPath(unit) === file).length;
     return n > 1 ? `${file} (${n} segments)` : file;
   });
+  const rubric = rubricSources(cwd);
+  const mode = `${meta.range ? `commit diff (${meta.range})` : "explicit files"}${meta.whole ? " · whole-file" : ""}`;
   const context = renderReviewContext(contextFiles, {
-    mode: `${meta.range ? `commit diff (${meta.range})` : "explicit files"}${meta.whole ? " · whole-file" : ""}`,
+    mode,
     range: meta.range,
     excludes: meta.excludes ?? [],
-    rubricSources: rubricSources(cwd),
+    rubricSources: rubric,
     generatedAt: manifestTimestamp(new Date(meta.createdAt)),
   });
+  // The HTML header and target table: what was asked, how it was configured,
+  // how far it got, per file. The markdown keeps its Review Context appendix
+  // instead — loadBaseline parses the .md, and the HTML trims the repeat.
+  const unitsOf = (file: string) => units.filter((unit) => targetPath(unit) === file);
+  const statusOf = (file: string): FileStatus => {
+    const own = unitsOf(file);
+    const gone = own.filter((unit) => missing.includes(unit)).length;
+    if (gone === own.length) return "missing";
+    if (gone > 0 || own.some((unit) => partials.includes(unit))) return "partial";
+    return own.some((unit) => forced.includes(unit)) ? "forced" : "done";
+  };
+  const finishedAt = new Date();
+  const reportContext: ReportContext = {
+    command: renderCommand(meta.input),
+    settings: [
+      mode,
+      ...(meta.excludes?.length ? [`exclude ${meta.excludes.join(", ")}`] : []),
+      ...((meta.deepPasses ?? 1) > 1 ? [`deepPasses ${meta.deepPasses}`] : []),
+      ...(meta.judge ? [`judge${meta.judgeRounds !== undefined ? ` ×${meta.judgeRounds}` : ""}`] : []),
+      ...(meta.fcq ? [`fcq ${meta.fcq.status}${meta.fcqFix ? " + fix" : ""}`] : []),
+      ...(meta.failOn ? [`failOn ${meta.failOn}`] : []),
+      // Grouped by source, not listed per category: five "← built-in defaults"
+      // in a row is noise where "built-in defaults: a, b, c, d, e" is one glance.
+      `rubric ${[...new Set(Object.values(rubric))]
+        .map((src) => `${src}: ${Object.keys(rubric).filter((c) => rubric[c] === src).join(", ")}`)
+        .join(" · ")}`,
+    ],
+    startedAt: new Date(meta.createdAt),
+    finishedAt,
+    files: meta.targets.map((file) => ({ path: file, status: statusOf(file), units: unitsOf(file).length })),
+  };
   await writeReport(
     path,
     findings,
@@ -592,8 +663,9 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
     meta.language,
     qualityIncomplete ? undefined : meta.failOn,
     baseline,
-    new Date(),
-    `${renderFcqSection(meta.fcq, fcqSummary)}${context}`
+    finishedAt,
+    `${renderFcqSection(meta.fcq, fcqSummary)}${context}`,
+    reportContext
   );
 
   const truncatedWarn = judgeTruncated.length

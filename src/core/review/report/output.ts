@@ -15,7 +15,7 @@ import { join, isAbsolute } from "node:path";
 import { loadConfig } from "../config";
 import { localFileStamp, localTimestamp } from "../../time";
 import { SEVERITIES, dedentCode, findingSource, splitFix, verdict, type Finding, type FindingSource, type Severity } from "../contract";
-import { renderHtmlReport } from "./html";
+import { renderHtmlReport, type ReportContext } from "./html";
 
 const DEFAULT_REPORT_DIR = "fcq/report/f-review/";
 const DEFAULT_MANIFEST_DIR = "fcq/f-review/manifest/";
@@ -328,14 +328,15 @@ export async function writeReport(
   failOn?: Severity,
   baseline?: Set<string>,
   now: Date = new Date(),
-  appendix?: string
+  appendix?: string,
+  context?: ReportContext
 ): Promise<string> {
   const abs = isAbsolute(path) ? path : join(cwd, path);
   const body = renderReport(findings, label, language, failOn, baseline);
   await Bun.write(abs, appendix ? `${body}\n${appendix}` : body);
   await Bun.write(
     htmlReportPath(abs),
-    renderHtmlReport(findings, label, language, failOn, baseline, now, appendix, baselineKey)
+    renderHtmlReport(findings, label, language, failOn, baseline, now, appendix, baselineKey, context)
   );
   return path;
 }

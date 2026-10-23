@@ -39,6 +39,23 @@ header { padding:34px 0 22px; border-bottom:1px solid var(--line); }
 h1 { font-size:30px; font-weight:800; letter-spacing:-.01em; margin:10px 0 12px; }
 .meta { font-family:var(--mono); color:var(--graphite); font-size:12px; line-height:1.9; word-break:break-all; }
 .meta b { color:var(--ink); font-weight:600; }
+.runinfo { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:6px 18px; margin:0; font-size:13px; line-height:1.7; }
+.runinfo dt { font-family:var(--mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--graphite); padding-top:3px; }
+.runinfo dd { margin:0; word-break:break-all; }
+.runinfo code { font-family:var(--mono); font-size:12px; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:3px 8px; }
+.dim { color:var(--graphite); font-size:12px; }
+
+/* target table: every planned file with its outcome */
+details.filelist { margin:18px 0 0; background:var(--card); border:1px solid var(--line); border-radius:9px; }
+details.filelist > summary { cursor:pointer; padding:11px 14px; font-size:13px; font-weight:600; list-style:none; }
+details.filelist > summary::-webkit-details-marker { display:none; }
+details.filelist > summary::before { content:'\25B8'; color:var(--graphite); margin-right:8px; }
+details.filelist[open] > summary::before { content:'\25BE'; }
+details.filelist[open] > summary { border-bottom:1px solid var(--line); }
+details.filelist table { margin:0; }
+details.filelist code { font-family:var(--mono); font-size:12px; word-break:break-all; }
+.st { display:inline-block; font-family:var(--mono); font-size:11px; padding:2px 7px; border-radius:5px; color:#fff; white-space:nowrap; }
+.st.done { background:var(--pass); } .st.partial { background:var(--minor); } .st.forced { background:var(--major); } .st.missing { background:var(--fail); }
 
 /* verdict */
 .verdict { display:flex; align-items:center; gap:10px; margin:20px 0 0; padding:13px 16px;
@@ -169,7 +186,7 @@ details.vblk li::before { content:'\25B8'; color:var(--graphite); margin-right:7
       <span class="eyebrow">{{STAMP}}</span>
     </div>
     <h1>{{HEADING}}</h1>
-    <div class="meta">{{META}}</div>
+    {{RUNINFO}}
   </header>
 
   {{VERDICT}}
@@ -182,6 +199,8 @@ details.vblk li::before { content:'\25B8'; color:var(--graphite); margin-right:7
       <div class="spectrum-legend">{{LEGEND}}</div>
     </div>
   </section>
+
+  {{FILE_TABLE}}
 
   <div class="stickyhead">
     <nav class="tabs" role="tablist">{{TABS}}</nav>
