@@ -141,7 +141,10 @@ function walk(dir: string, base: string, out: string[]): void {
     if (e.name === ".git" || e.name === "node_modules") continue;
     const full = join(dir, e.name);
     if (e.isDirectory()) walk(full, base, out);
-    else out.push(relative(base, full));
+    // Repo-relative FORWARD-slash paths, like the git listings above: on Windows
+    // relative() yields backslashes, and a run planned from them stored targets
+    // no f_review_context join could ever match (0/45 units registered).
+    else out.push(relative(base, full).replaceAll("\\", "/"));
   }
 }
 

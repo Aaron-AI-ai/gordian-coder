@@ -11,6 +11,7 @@ import {
   FILE_READ_MAX_CHARS,
   FILE_READ_MAX_LINES,
   fileLineCount,
+  listFilesAt,
   readFileAt,
   renderFileContent,
   sanitizeFindingLines,
@@ -287,5 +288,16 @@ describe("codeSearch (non-git fallback)", () => {
     const d = tmp();
     writeFileSync(join(d, "x.ts"), "nothing here");
     expect(codeSearch(d, null, "widget")).toContain("No matches");
+  });
+});
+
+describe("listFilesAt (non-git fallback)", () => {
+  it("returns repo-relative forward-slash paths on every platform", () => {
+    // Only bites on Windows, where relative() yields backslashes; here it
+    // guards the contract the run-join check relies on.
+    const d = tmp();
+    mkdirSync(join(d, "src", "main"), { recursive: true });
+    writeFileSync(join(d, "src", "main", "A.java"), "class A {}");
+    expect(listFilesAt(d, null)).toEqual(["src/main/A.java"]);
   });
 });
