@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseStackTrace } from "../parse";
-import { classifyFrames, rankSuspects, findEntry, buildObservations, searchStackless, planLog, MAX_SUSPECTS, parseLogCommandArgs } from "../plan";
+import { classifyFrames, rankSuspects, findEntry, buildObservations, searchStackless, planLog, MAX_SUSPECTS, MAX_OBSERVATIONS, parseLogCommandArgs } from "../plan";
 import { readRunJson, runDir } from "../run-store";
 import type { LogPlan } from "../plan";
 
@@ -72,6 +72,36 @@ describe("plan", () => {
     expect(o).toContain("예외 1/1: kr.co.koscom.pb.framework.site.ext.exception.PBOnlineException");
     expect(o).toContain("핸들러 errorCode=1001");
     expect(buildObservations(parsed)).toEqual(o);
+  });
+
+  // A wrapped exception repeats the caller's frames in every Caused-by block; that is
+  // one call path printed three times, not recursion (case-94: 53 observations, unsubmittable).
+  test("buildObservations: frames shared across Caused-by blocks are not repeats; recursion in one block is", () => {
+    const wrapped = parseStackTrace([
+      "java.lang.RuntimeException: outer",
+      "\tat a.Svc.run(Svc.java:10)",
+      "\tat a.Main.main(Main.java:5)",
+      "Caused by: java.lang.IllegalStateException: inner",
+      "\tat a.Dao.q(Dao.java:3)",
+      "\tat a.Svc.run(Svc.java:9)",
+      "\tat a.Main.main(Main.java:5)",
+      "Caused by: java.sql.SQLException: root",
+      "\tat a.Db.x(Db.java:1)",
+      "\tat a.Dao.q(Dao.java:2)",
+      "\tat a.Svc.run(Svc.java:9)",
+      "\tat a.Main.main(Main.java:5)",
+    ].join("\n"));
+    expect(buildObservations(wrapped).filter((x) => x.startsWith("반복 프레임"))).toEqual([]);
+
+    const recursive = parseStackTrace(["java.lang.StackOverflowError", ...Array(4).fill("\tat a.R.depth(R.java:4)")].join("\n"));
+    expect(buildObservations(recursive)).toContain("반복 프레임: a.R.depth ×4 (재귀/루프 가능)");
+  });
+
+  test("buildObservations: never more than the submit schema accepts, exception lines kept", () => {
+    const frames = Array.from({ length: 70 }, (_, i) => Array(3).fill(`\tat a.R.m${i}(R.java:${i + 1})`)).flat();
+    const o = buildObservations(parseStackTrace(["java.lang.StackOverflowError: deep", ...frames].join("\n")));
+    expect(o.length).toBeLessThanOrEqual(MAX_OBSERVATIONS);
+    expect(o[0]).toStartWith("예외 1/1: java.lang.StackOverflowError");
   });
 
   test("searchStackless: URI → controller/service, errorCode → throw site", () => {

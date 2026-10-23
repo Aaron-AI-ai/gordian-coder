@@ -41,6 +41,8 @@ export interface PlanOptions {
 export const MAX_SUSPECTS = 8;
 const ENTRY_SUFFIX = /(Controller|Job|Tasklet|Consumer|Listener|Runnable)$/;
 const REPEAT_MIN = 3;
+/** Observations per plan — also the submit schema's cap, so every plan stays submittable. */
+export const MAX_OBSERVATIONS = 50;
 
 function allFrames(p: ParsedLog): StackFrame[] {
   return [...p.chain, ...p.suppressed].flatMap((b) => b.frames);
@@ -99,19 +101,30 @@ export function buildObservations(parsed: ParsedLog): string[] {
     if (b.omitted) o.push(`예외 ${i + 1}: ${b.omitted}개 프레임 생략(바깥 블록과 공통)`);
   });
   parsed.suppressed.forEach((b) => o.push(`Suppressed: ${b.type}${b.message ? `: ${b.message.slice(0, 120)}` : ""}`));
-  const counts = new Map<string, number>();
-  for (const f of allFrames(parsed)) {
-    const k = `${f.cls}.${f.method}`;
-    counts.set(k, (counts.get(k) ?? 0) + 1);
-  }
-  for (const [k, n] of counts) if (n >= REPEAT_MIN) o.push(`반복 프레임: ${k} ×${n} (재귀/루프 가능)`);
   const h = parsed.handler;
   if (h.errorCode) o.push(`핸들러 errorCode=${h.errorCode}`);
   if (h.svcId) o.push(`핸들러 svcId=${h.svcId}`);
   if (h.uri) o.push(`핸들러 URI=${h.uri}`);
   if (h.even) o.push(`핸들러 even=${h.even}`);
   if (h.logger) o.push(`핸들러 로거: ${h.logger}`);
-  return o;
+  // Repeats are counted per block: a wrapped exception reprints its caller's frames in
+  // every Caused-by block, which is one call path, not recursion.
+  const repeats = new Map<string, number>();
+  for (const b of [...parsed.chain, ...parsed.suppressed]) {
+    const counts = new Map<string, number>();
+    for (const f of b.frames) {
+      const k = `${f.cls}.${f.method}`;
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    for (const [k, n] of counts) if (n >= REPEAT_MIN && n > (repeats.get(k) ?? 0)) repeats.set(k, n);
+  }
+  // Repeats go last and give way first: the submission must echo every observation and
+  // the schema caps the list, so an over-long plan would be impossible to submit.
+  for (const [k, n] of repeats) {
+    if (o.length >= MAX_OBSERVATIONS) break;
+    o.push(`반복 프레임: ${k} ×${n} (재귀/루프 가능)`);
+  }
+  return o.slice(0, MAX_OBSERVATIONS);
 }
 
 function gitGrepFiles(cwd: string, needle: string): string[] {

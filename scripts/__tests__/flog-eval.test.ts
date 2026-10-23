@@ -67,6 +67,31 @@ describe("flog-eval", () => {
     expect(r.exception).toBe(true);
   });
 
+  // case-02: the report names the root cause (ReflectionException) and leaves the
+  // wrapping PersistenceException to the quoted stack — both are a correct answer.
+  test("exception may list several acceptable exceptions; any one in the scored sections passes", () => {
+    const md = REPORT.replaceAll("NullPointerException", "ReflectionException");
+    const wrapperOnly = { ...CASE, exception: "org.apache.ibatis.exceptions.PersistenceException" };
+    expect(score(wrapperOnly, md).exception).toBe(false);
+    const either = { ...CASE, exception: ["org.apache.ibatis.exceptions.PersistenceException", "org.apache.ibatis.reflection.ReflectionException"] };
+    expect(score(either, md).exception).toBe(true);
+  });
+
+  // fix_code alone only proves a code block exists; fix_code_any pins what the fix must say.
+  test("fix_code_any requires one expected fragment inside a fix-section code block, spacing and case ignored", () => {
+    expect(score({ ...CASE, fix_code_any: ["if(row==NULL)"] }, REPORT).fix_code).toBe(true);
+    expect(score({ ...CASE, fix_code_any: ["Optional.ofNullable"] }, REPORT).fix_code).toBe(false);
+    // prose outside the code block does not count
+    expect(score({ ...CASE, fix_code_any: ["PBOnlineException.create(\"1001\", accountNo)"] }, REPORT).fix_code).toBe(false);
+    // without fix_code_any the old rule (any code block) holds
+    expect(score(CASE, REPORT).fix_code).toBe(true);
+  });
+
+  test("a fix_code_any entry starting with re: is a regex over the whitespace-free, lowercased code", () => {
+    expect(score({ ...CASE, fix_code_any: ['re:create\\("\\d{4}"'] }, REPORT).fix_code).toBe(true);
+    expect(score({ ...CASE, fix_code_any: ['re:create\\("\\d{5}"'] }, REPORT).fix_code).toBe(false);
+  });
+
   test("rule check passes when the case declares no rule; english headers are recognised", () => {
     const en = `## Summary\nNPE\n## Entry point → cause path\nTLABQ001Service.java tlabq001\n## Cause and evidence\nnull\n## Resolution\nadd a null check\n## Run info\n- rules: none\n`;
     const { rule, ...rest } = CASE;

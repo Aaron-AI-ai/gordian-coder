@@ -18,10 +18,13 @@ import { basename, join } from "node:path";
 export interface GoldenCase {
   id: string;
   log: string;
-  exception: string;
+  /** One FQCN, or several when the wrapper and its root cause are both right. */
+  exception: string | string[];
   cause_files: string[];
   cause_symbol: string;
   fix_keywords_any: string[];
+  /** Fragments the fix CODE must contain (one is enough). Absent → any code block passes. */
+  fix_code_any?: string[];
   rule?: string;
 }
 
@@ -49,6 +52,18 @@ function pick(sections: Record<string, string>, names: string[]): string {
   return names.map((n) => sections[n] ?? "").join("\n").toLowerCase();
 }
 
+/** A code block exists in the fix section and, when `expected` is given, one of its fragments
+ * appears inside a code block — whitespace dropped so `length = 7` matches `length=7`.
+ * An entry `re:<regex>` is matched against that same whitespace-free, lowercased code. */
+function fixCodeMatches(fix: string, expected?: string[]): boolean {
+  const blocks = [...fix.matchAll(/```[^\n]*\n([\s\S]*?)```/g)].map((m) => m[1]);
+  if (blocks.length === 0) return false;
+  if (!expected?.length) return true;
+  const squash = (t: string) => t.replace(/\s+/g, "").toLowerCase();
+  const code = squash(blocks.join("\n"));
+  return expected.some((e) => (e.startsWith("re:") ? new RegExp(e.slice(3)).test(code) : code.includes(squash(e))));
+}
+
 export function score(c: GoldenCase, md: string) {
   const s = splitSections(md);
   const where = pick(s, [...SECTIONS.summary, ...SECTIONS.path, ...SECTIONS.cause]);
@@ -58,11 +73,11 @@ export function score(c: GoldenCase, md: string) {
   return {
     // FQCN(예: java.lang.NullPointerException) 또는 단순 클래스명(NullPointerException) 중 하나만
     // 있어도 통과 — 요약문은 보통 단순 클래스명만 쓴다.
-    exception: has(where, c.exception) || has(where, c.exception.split(".").pop()!),
+    exception: [c.exception].flat().some((e) => has(where, e) || has(where, e.split(".").pop()!)),
     cause_file: c.cause_files.some((f) => has(where, f) || has(where, basename(f))),
     cause_symbol: has(where, c.cause_symbol),
     fix: c.fix_keywords_any.some((k) => has(fix, k)),
-    fix_code: fix.includes("```"),
+    fix_code: fixCodeMatches(fix, c.fix_code_any),
     rule: c.rule ? has(run, c.rule) : true,
   };
 }

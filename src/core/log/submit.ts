@@ -10,7 +10,7 @@ import { z } from "zod";
 import { capped } from "../review/contract";
 import { normalizeRepoPath } from "../review/imports";
 import { MAX_FAILED_SUBMITS, MAX_RESUMES } from "../review/pipeline/loop";
-import type { LogPlan } from "./plan";
+import { MAX_OBSERVATIONS, type LogPlan } from "./plan";
 import { mergeCallLog, readRunJson, submissionCount, writeRunJson, type RunMeta } from "./run-store";
 import { clearLogState, getLogState, type LogSession } from "./state";
 import { NO_ACTIVE_LOG } from "./tools";
@@ -27,7 +27,7 @@ export const LogSubmitSchema = z.object({
     mechanism: capped(3000),
   }),
   evidence: z.array(z.object({ file: capped(500), lines: lineRange, why: capped(500) })).min(1).max(20),
-  observations: z.array(z.object({ observation: capped(500), explained: z.boolean(), how: capped(500).optional() })).max(50),
+  observations: z.array(z.object({ observation: capped(500), explained: z.boolean(), how: capped(500).optional() })).max(MAX_OBSERVATIONS),
   alternatives: z.array(z.object({ hypothesis: capped(500), rejectedBecause: capped(500) })).min(1).max(10),
   resolution: z.object({
     summary: capped(1000),
