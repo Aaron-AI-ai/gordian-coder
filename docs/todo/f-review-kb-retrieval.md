@@ -59,6 +59,7 @@
 - 2단계: 검색기를 "점수를 합치는 구조"로 두고 임베딩 검색기를 선택 기능으로 추가 (`embedding: off | local | api`, 기본 off).
 - 결정 필요: 사내망 정책상 외부 임베딩 API 허용 여부. 로컬 모델이면 배포 크기와 4개 플랫폼(OpenCode, Claude Code, Cline, Pi) 동작 확인 필요.
 - 색인(벡터 포함)은 KB 파일 해시 기준으로 캐시.
+- 세부 검토: `docs/todo/kb-bm25-korean-morphology.md`(bm25 한국어 형태소), `docs/todo/kb-hybrid-bm25-chroma.md`(bm25 + Chroma 임베딩 하이브리드).
 
 ### 3.5 [C] 도메인 규칙 md (임시 대안)
 
