@@ -10,10 +10,13 @@ import {
   degenerateReason,
   repetitiveText,
   scriptMismatch,
+  strayHan,
+  reportHanWarning,
   verdict,
   dedupeFindings,
   findingSource,
   dedentCode,
+  fixAddsThrow,
   type Finding,
 } from "../contract";
 
@@ -212,6 +215,41 @@ describe("degenerate-output detection", () => {
     expect(scriptMismatch(zh, "ja")).toBe(false); // kanji is legitimate Japanese
     expect(scriptMismatch("이 코드는 입력 검증이 누락되어 보안 문제가 있습니다.", "ko")).toBe(false);
     expect(scriptMismatch("短い", "ko")).toBe(false); // under the judgment floor
+  });
+
+  it("strayHan catches a few Chinese characters inside Korean prose, skipping backtick code and ja/zh", () => {
+    // the real case: below scriptMismatch's 30% floor, still wrong
+    const s = "서비스 메서드入口处 최소한 null/빈 값 검증을 추가하세요.";
+    expect(scriptMismatch(s, "ko")).toBe(false);
+    expect(strayHan(s, "ko")).toEqual(["入口处"]);
+    expect(strayHan(s, "en")).toEqual(["入口处"]);
+    expect(strayHan(s, "ja")).toEqual([]);
+    expect(strayHan("로그의 `error=조회 失败` 문자열을 그대로 인용", "ko")).toEqual([]);
+    expect(strayHan("정상적인 한국어 문장입니다.", "ko")).toEqual([]);
+  });
+
+  it("reportHanWarning names report lines with Han in prose, ignoring fenced and inline code", () => {
+    const md = [
+      "# 리포트",
+      "원인은 返回 값이 null이라서",
+      "```java",
+      "// 中文 주석은 코드라 제외",
+      "```",
+      "````md",
+      "```",
+      "嵌套 펜스 안도 코드",
+      "```",
+      "````",
+      "인용 `中文` 은 제외, 本文 은 포함",
+    ].join("\n");
+    const w = reportHanWarning(md, "ko");
+    expect(w).toContain("2 line(s)");
+    expect(w).toContain('L2 "返回"');
+    expect(w).toContain('L11 "本文"');
+    expect(w).not.toContain("中文");
+    expect(w).not.toContain("嵌套");
+    expect(reportHanWarning("깨끗한 리포트\n```\n中文\n```", "ko")).toBe("");
+    expect(reportHanWarning(md, "ja")).toBe("");
   });
 
   it("degenerateReason checks rule/message but not suggestion", () => {
@@ -416,5 +454,23 @@ describe("dedupeFindings", () => {
     dedupeFindings(input);
     expect(input).toHaveLength(2);
     expect(a.severity).toBe("minor");
+  });
+});
+
+describe("fixAddsThrow", () => {
+  const asIs = "try {\n  out = bsm.proc(in);\n} catch (PBBaseException e) {\n  ctx.setQty(ZERO);\n}";
+  it("flags a fallback catch rewritten to throw", () => {
+    const toBe = "try {\n  out = bsm.proc(in);\n} catch (PBBaseException e) {\n  log.error(\"x\");\n  throw PBOnlineException.create(\"8001\", e);\n}";
+    expect(fixAddsThrow({ asIs, toBe })).toBe(true);
+    expect(fixAddsThrow({ suggestion: `AS-IS:\n${asIs}\nTO-BE:\n${toBe}` })).toBe(true);
+  });
+  it("accepts a fix that keeps the fallback", () => {
+    const toBe = "} catch (PBBaseException e) {\n  log.warn(\"x\");\n  ctx.setQty(ZERO);\n}\nif (spot == null) { throw new IllegalStateException(); }";
+    expect(fixAddsThrow({ asIs, toBe })).toBe(false); // throw outside the catch is not counted
+  });
+  it("ignores fixes with no catch in AS-IS and catches that already threw", () => {
+    expect(fixAddsThrow({ asIs: "a.b();", toBe: "try { a.b(); } catch (E e) { throw e; }" })).toBe(false);
+    const rethrow = "} catch (E e) {\n  throw new X(e);\n}";
+    expect(fixAddsThrow({ asIs: rethrow, toBe: rethrow.replace("X", "Y") })).toBe(false);
   });
 });

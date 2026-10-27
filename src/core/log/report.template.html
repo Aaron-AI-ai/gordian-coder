@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<!--
+  f-log HTML report template — the f-review report's visual system
+  (src/core/review/report/report.template.html), cut down to one page:
+  verdict, log analysis, cause, resolution, and a collapsed appendix.
+
+  finalize.ts fills every placeholder; unknown names throw (see fill in
+  review/report/html.ts), so this comment must not contain a double-brace token.
+-->
+<html lang="{{LANG}}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<style>
+:root {
+  --paper:#fbfaf7; --card:#ffffff; --ink:#15171a; --graphite:#646b73; --line:#e6e4dd;
+  --pass:#2f7d32; --fail:#c5362b; --warn:#b07a00; --accent:#2f6feb;
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,'D2Coding',monospace;
+  --sans:'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',system-ui,sans-serif;
+}
+* { box-sizing:border-box; }
+[hidden] { display:none !important; }
+body { margin:0; font-family:var(--sans); background:var(--paper); color:var(--ink); -webkit-font-smoothing:antialiased; }
+.wrap { max-width:1000px; margin:0 auto; padding:0 22px 64px; }
+.eyebrow { font-family:var(--mono); font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--graphite); }
+header { padding:34px 0 22px; border-bottom:1px solid var(--line); }
+.topline { display:flex; justify-content:space-between; align-items:baseline; gap:16px; flex-wrap:wrap; }
+h1 { font-size:30px; font-weight:800; letter-spacing:-.01em; margin:10px 0 12px; }
+.runinfo { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:6px 18px; margin:0; font-size:13px; line-height:1.7; }
+.runinfo dt { font-family:var(--mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--graphite); padding-top:3px; }
+.runinfo dd { margin:0; word-break:break-all; }
+.dim { color:var(--graphite); font-size:12px; }
+code { font-family:var(--mono); background:#f1efe8; padding:1px 6px; border-radius:5px; font-size:12px; word-break:break-all; }
+
+/* verdict: the one-line answer, before anything else */
+.verdict { margin:20px 0 0; padding:14px 16px; border-radius:9px; border:1px solid; }
+.verdict.pass { background:#eef5ee; border-color:#cfe3cf; }
+.verdict.warn { background:#fdf7ea; border-color:#eedfb8; }
+.verdict.fail { background:#fdf1ef; border-color:#f2d4cf; }
+.verdict .head { display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:13px; font-weight:700; }
+.verdict.pass .head { color:var(--pass); } .verdict.warn .head { color:var(--warn); } .verdict.fail .head { color:var(--fail); }
+.verdict .cause { font-size:17px; font-weight:700; margin:8px 0 0; line-height:1.5; }
+.verdict ul { margin:8px 0 0; padding-left:18px; font-size:13px; color:var(--ink); }
+.badge { display:inline-block; padding:2px 9px; border-radius:6px; font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.04em; color:#fff; white-space:nowrap; }
+.badge.pass { background:var(--pass); } .badge.warn { background:var(--warn); } .badge.fail { background:var(--fail); }
+.badge.kind { background:var(--graphite); }
+
+.stats { display:flex; gap:34px; flex-wrap:wrap; padding:24px 0 22px; border-bottom:1px solid var(--line); }
+.stat .n { font-family:var(--mono); font-size:30px; font-weight:700; line-height:1; letter-spacing:-.02em; }
+.stat .l { font-size:12px; color:var(--graphite); margin-top:7px; }
+.stat.good .n { color:var(--pass); } .stat.bad .n { color:var(--fail); }
+
+/* jump links */
+.toc { display:flex; gap:8px; flex-wrap:wrap; margin:20px 0 0; }
+.toc a { font-family:var(--mono); font-size:12px; padding:5px 11px; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:7px; text-decoration:none; }
+.toc a:hover { border-color:#c9c6bc; }
+
+/* sections */
+section.step { margin-top:30px; }
+section.step > h2 { display:flex; align-items:center; gap:10px; font-size:18px; font-weight:800; margin:0 0 12px; }
+section.step > h2 .no { font-family:var(--mono); font-size:12px; color:var(--paper); background:var(--ink); border-radius:50%; width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin:0 0 10px; font-size:14px; line-height:1.7; }
+.card p { margin:0 0 8px; } .card p:last-child { margin-bottom:0; }
+.card h3 { font-size:13px; font-weight:700; margin:0 0 8px; color:var(--graphite); letter-spacing:.04em; }
+.path { list-style:none; margin:0; padding:0; font-family:var(--mono); font-size:12px; }
+.path li { padding:3px 0 3px 18px; position:relative; word-break:break-all; }
+.path li::before { content:'\2193'; position:absolute; left:2px; color:var(--graphite); }
+.path li:first-child::before { content:'\25B8'; }
+.path li.root { color:var(--fail); font-weight:700; }
+.obs { list-style:none; margin:0; padding:0 !important; font-size:13px; }
+.obs li { padding:4px 0; display:flex; gap:8px; align-items:baseline; }
+.obs .ok { color:var(--pass); font-weight:700; } .obs .no { color:var(--fail); font-weight:700; }
+
+/* code boxes: evidence (context, muted) and fix (the answer, accented + copyable) */
+.codebox { position:relative; margin:8px 0 0; border-radius:0 6px 6px 0; border-left:3px solid var(--line); background:#faf9f6; }
+.codebox pre { margin:0; padding:10px 12px; font-family:var(--mono); font-size:12px; line-height:1.55; white-space:pre; overflow-x:auto; }
+.codebox.fix { background:#f2f6f1; border-left-color:#5c8a5c; }
+.codebox .ln { color:#a7a59c; user-select:none; display:inline-block; min-width:3ch; text-align:right; margin-right:12px; }
+.codebox .hit { background:#fbe9e6; display:inline-block; min-width:100%; }
+.copy { white-space:nowrap; flex-shrink:0; font-family:var(--mono); font-size:11px; padding:4px 10px; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:6px; cursor:pointer; }
+.copy:hover { border-color:#c9c6bc; }
+.copy.done { background:var(--pass); color:#fff; border-color:var(--pass); }
+.copy:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.codebox .copy { position:absolute; top:6px; right:6px; }
+.change { border-top:1px dashed var(--line); padding-top:12px; margin-top:12px; }
+.change:first-of-type { border-top:none; padding-top:0; margin-top:0; }
+.change .file { font-family:var(--mono); font-size:12px; font-weight:700; }
+.fixhead { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+.fixhead p { margin:0; }
+
+/* appendix */
+details.more { background:var(--card); border:1px solid var(--line); border-radius:9px; margin:9px 0; }
+details.more > summary { cursor:pointer; padding:11px 14px; font-size:13px; font-weight:600; list-style:none; }
+details.more > summary::-webkit-details-marker { display:none; }
+details.more > summary::before { content:'\25B8'; color:var(--graphite); margin-right:8px; }
+details.more[open] > summary::before { content:'\25BE'; }
+details.more[open] > summary { border-bottom:1px solid var(--line); }
+details.more .body { padding:10px 16px 14px; font-size:13px; line-height:1.75; }
+details.more .body ul { margin:0; padding-left:18px; }
+details.more .codebox { margin:0; }
+.footer { margin-top:46px; padding-top:14px; border-top:1px solid var(--line); color:var(--graphite); font-family:var(--mono); font-size:11px; }
+@media print { .copy, .toc { display:none; } details.more { break-inside:avoid; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="topline">
+      <span class="eyebrow">F-LOG · LOG ANALYSIS</span>
+      <span class="eyebrow">{{STAMP}}</span>
+    </div>
+    <h1>{{HEADING}}</h1>
+    {{RUNINFO}}
+  </header>
+
+  {{VERDICT}}
+
+  <div class="stats">{{STATS}}</div>
+
+  <nav class="toc">{{TOC}}</nav>
+
+  <section class="step" id="analysis">
+    <h2><span class="no">1</span>{{ANALYSIS_TITLE}}</h2>
+    {{ANALYSIS}}
+  </section>
+
+  <section class="step" id="cause">
+    <h2><span class="no">2</span>{{CAUSE_TITLE}}</h2>
+    {{CAUSE}}
+  </section>
+
+  <section class="step" id="fix">
+    <h2><span class="no">3</span>{{FIX_TITLE}}</h2>
+    {{FIX}}
+  </section>
+
+  <section class="step" id="more">
+    {{APPENDIX}}
+  </section>
+
+  <div class="footer">{{FOOTER}}</div>
+</div>
+<script>
+(function(){
+  /* navigator.clipboard needs a secure context; a report opened from disk may
+     not be one, so fall back to a hidden textarea + execCommand. */
+  function legacy(text){
+    var ta=document.createElement('textarea');
+    ta.value=text; ta.setAttribute('readonly',''); ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.select();
+    var ok=false; try{ ok=document.execCommand('copy'); }catch(e){}
+    document.body.removeChild(ta); return ok;
+  }
+  function flash(b,ok){
+    var label=b.getAttribute('data-label')||b.textContent;
+    b.setAttribute('data-label',label);
+    b.textContent=ok?b.getAttribute('data-done'):b.getAttribute('data-fail');
+    b.classList.toggle('done',ok);
+    setTimeout(function(){ b.textContent=label; b.classList.remove('done'); },1500);
+  }
+  document.addEventListener('click',function(e){
+    var b=e.target.closest&&e.target.closest('[data-copy]');
+    if(!b){ return; }
+    var src=document.getElementById(b.getAttribute('data-copy'));
+    if(!src){ return; }
+    var text=src.textContent;
+    if(navigator.clipboard&&window.isSecureContext){
+      navigator.clipboard.writeText(text).then(function(){ flash(b,true); },function(){ flash(b,legacy(text)); });
+    } else { flash(b,legacy(text)); }
+  });
+})();
+</script>
+</body>
+</html>

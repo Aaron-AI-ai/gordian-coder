@@ -7,9 +7,12 @@
  * submission when the model simply stops (spec §13 #12).
  */
 import { z } from "zod";
-import { capped } from "../review/contract";
+import { capped, strayHan } from "../review/contract";
+import { kbDocsForCode } from "../kb/framework-kb";
+import { KB_DOC_MAX_CHARS } from "./context";
 import { normalizeRepoPath } from "../review/imports";
 import { MAX_FAILED_SUBMITS, MAX_RESUMES } from "../review/pipeline/loop";
+import { languageName } from "../review/pipeline/prompt";
 import { MAX_OBSERVATIONS, type LogPlan } from "./plan";
 import { mergeCallLog, readRunJson, submissionCount, writeRunJson, type RunMeta } from "./run-store";
 import { clearLogState, getLogState, type LogSession } from "./state";
@@ -83,6 +86,9 @@ function store(st: LogSession, sub: LogSubmission, sessionId: string, extra: { f
   return `${badge} for run ${st.runId}, round ${round}. ${nextStepText(st.runId, meta?.judge ?? true)}`;
 }
 
+/** KB pages one fix-code check may hand back — the bounce rides in a tool result. */
+const KB_FIX_MAX_DOCS = 3;
+
 export function submitLog(payload: unknown, sessionId: string): string {
   const st = getLogState(sessionId);
   if (!st?.active) return NO_ACTIVE_LOG;
@@ -137,6 +143,42 @@ export function submitLog(payload: unknown, sessionId: string): string {
     const bounce = reject(`evidence[] may only cite files you read with f_log_read/f_log_blame or that were injected as suspects. Not seen: ${unseen.join(", ")}`);
     if (bounce) return bounce;
     return store(st, sub, sessionId, { forced: " — after repeated evidence on unread files" });
+  }
+
+  // Gate 3: Chinese characters slipped into the prose. Only text the analyst
+  // wrote (observation strings are verbatim log text). Past the cap it is stored
+  // as written, not forced — the analysis is sound, and finalize's report check
+  // still names the characters.
+  const language = readRunJson<RunMeta>(st.runId, st.cwd, "run.json")?.language ?? "ko";
+  const prose = [
+    sub.cause.summary, sub.cause.mechanism, sub.resolution.summary,
+    ...sub.resolution.changes.map((c) => c.description),
+    ...sub.evidence.map((e) => e.why),
+    ...sub.observations.map((o) => o.how ?? ""),
+    ...sub.alternatives.flatMap((a) => [a.hypothesis, a.rejectedBecause]),
+  ];
+  const han = [...new Set(prose.flatMap((t) => strayHan(t, language)))];
+  if (han.length) {
+    const bounce = reject(`Chinese characters in your text: ${han.slice(0, 10).join(", ")}. Rewrite those words in ${languageName(language)} and resubmit.`);
+    if (bounce) return bounce;
+  }
+
+  // Gate 4: fix code that uses a house class whose KB page the analyst never
+  // saw is written from memory. Hand it exactly those pages, once — the
+  // guide is served at the point the code is written, not guessed up front.
+  if (!st.kbNudged) {
+    const code = sub.resolution.changes.map((c) => c.code ?? "").join("\n");
+    const unseen = kbDocsForCode(st.cwd, code, Infinity).filter((d) => !st.kbShown?.includes(d.path)).slice(0, KB_FIX_MAX_DOCS);
+    if (unseen.length) {
+      st.kbNudged = true;
+      st.kbShown = [...(st.kbShown ?? []), ...unseen.map((d) => d.path)];
+      const bounce = reject([
+        `resolution.changes[].code uses framework classes whose KB guide you have not seen: ${unseen.map((d) => d.specifier).join(", ")}.`,
+        "Check each call/annotation against the page below (factory and constructor signatures, required arguments, error-code rules), correct the code, and resubmit the full payload.",
+        ...unseen.map((d) => `### ${d.specifier} (${d.path})\n${d.content.slice(0, KB_DOC_MAX_CHARS)}`),
+      ].join("\n\n"));
+      if (bounce) return bounce;
+    }
   }
 
   return store(st, sub, sessionId, {});

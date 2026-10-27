@@ -262,6 +262,36 @@ export function scriptMismatch(s: string, language: string): boolean {
   return han / letters.length > 0.3;
 }
 
+/** Han runs in prose outside backtick code spans. scriptMismatch only sees a
+ * wholesale switch; a small model also slips a few Chinese characters into
+ * otherwise Korean text ("메서드入口处 최소한"), which a ko/en report never
+ * needs. Quoted code/log text in backticks may legitimately carry Han. */
+export function strayHan(s: string, language: string): string[] {
+  if (language.startsWith("zh") || language.startsWith("ja")) return [];
+  return s.replace(/`[^`\n]*`/g, "").match(/\p{Script=Han}+/gu) ?? [];
+}
+
+/** Post-write check of a markdown report: lines whose prose (fenced blocks and
+ * inline code excluded) still carries stray Han. "" when clean. A fence closes
+ * only on the same character at least as long, so a 4-backtick block holding a
+ * 3-backtick example stays code throughout. */
+export function reportHanWarning(md: string, language: string): string {
+  const hits: string[] = [];
+  let fence = "";
+  md.split("\n").forEach((line, i) => {
+    const m = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (m && (!fence || (m[1][0] === fence[0] && m[1].length >= fence.length && !line.trim().slice(m[1].length)))) {
+      fence = fence ? "" : m[1];
+      return;
+    }
+    if (fence) return;
+    const runs = strayHan(line, language);
+    if (runs.length) hits.push(`L${i + 1} "${[...new Set(runs)].join(", ")}"`);
+  });
+  if (!hits.length) return "";
+  return `⚠️ Chinese characters in report prose (${hits.length} line(s)): ${hits.slice(0, 5).join("; ")}${hits.length > 5 ? "; …" : ""}`;
+}
+
 /** Why a finding's prose reads as degenerate model output, or null when clean.
  * Checks `rule`/`message` only — `suggestion` is code, which repeats legitimately. */
 export function degenerateReason(f: Finding, language: string): string | null {
@@ -269,6 +299,30 @@ export function degenerateReason(f: Finding, language: string): string | null {
   if (scriptMismatch(`${f.rule} ${f.message}`, language))
     return `unexpected script for review language "${language}"`;
   return null;
+}
+
+/** `throw` statements inside the catch blocks of a code fragment. Brace
+ * counting, not parsing: braces inside string literals can skew it, which only
+ * ever costs one extra or one missed nudge. */
+function catchThrows(code: string): number {
+  let n = 0;
+  for (const m of code.matchAll(/\bcatch\s*\([^)]*\)\s*\{/g)) {
+    const start = m.index! + m[0].length;
+    let depth = 1;
+    let i = start;
+    for (; i < code.length && depth; i++) depth += code[i] === "{" ? 1 : code[i] === "}" ? -1 : 0;
+    n += code.slice(start, i).match(/\bthrow\b/g)?.length ?? 0;
+  }
+  return n;
+}
+
+/** True when the fix turns a recovering catch into a throwing one. A catch that
+ * sets a fallback (`ZERO`, an empty result) is usually a business decision;
+ * small models "fix" it into `throw`, silently changing what the API returns. */
+export function fixAddsThrow(f: { asIs?: string; toBe?: string; suggestion?: string }): boolean {
+  const { asIs, toBe } = splitFix(f);
+  if (!asIs || !toBe || !/\bcatch\s*\(/.test(asIs)) return false;
+  return catchThrows(toBe) > catchThrows(asIs);
 }
 
 /** True when `sev` is at least as severe as `threshold` (SEVERITIES is ordered most→least severe). */

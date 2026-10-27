@@ -24,6 +24,10 @@ export interface BugCase {
   anchor?: string | string[]; // 결함이 여러 줄에 걸쳐 드러나면 목록으로 — 어느 줄 근처든 인정
   keywords_any: string[];
   kb_ref?: string;
+  // 수정안(TO-BE) 검사: 검출한 finding의 TO-BE가 이 정규식에 하나라도 걸리면 FAIL (예: 기존 fallback을 throw로 바꿈)
+  fix_forbid_any?: string[];
+  // 검출한 finding 중 하나의 TO-BE에 이 문자열 중 하나가 있어야 PASS (예: 기존 fallback 값 유지)
+  fix_require_any?: string[];
   commit: string;
 }
 export interface ControlCase {
@@ -42,6 +46,7 @@ export interface FindingRow {
   rule: string;
   message: string;
   suggestion: string;
+  toBe?: string; // `### 제안 상세`의 TO-BE 코드 블록
 }
 
 // selector: 콤마로 구분한 케이스 ID 목록, 각 항목은 정확한 ID이거나 `*` 와일드카드를 쓸 수 있다.
@@ -75,6 +80,8 @@ async function loadCases(target: string, selector?: string): Promise<EvalCase[]>
         anchor: y.anchor as string | string[] | undefined,
         keywords_any: (y.keywords_any ?? []) as string[],
         kb_ref: y.kb_ref as string | undefined,
+        fix_forbid_any: y.fix_forbid_any as string[] | undefined,
+        fix_require_any: y.fix_require_any as string[] | undefined,
         commit: y.commit as string,
       });
     }
@@ -85,7 +92,11 @@ async function loadCases(target: string, selector?: string): Promise<EvalCase[]>
 /** 리포트 마크다운에서 `## <file>` 섹션의 finding 표를 파싱한다. 섹션이 없으면 빈 배열(클린). */
 export function parseFileFindings(md: string, file: string): FindingRow[] {
   const sections = md.split(/^## /m).slice(1);
-  const section = sections.find((s) => s.split("\n")[0].trim() === file);
+  // diff 모드는 git 루트 기준 경로로 제목을 쓴다: 대상이 저장소 하위 디렉터리면 앞에 상위 경로가 붙는다
+  const section = sections.find((s) => {
+    const head = s.split("\n")[0].trim();
+    return head === file || head.endsWith(`/${file}`);
+  });
   if (!section) return [];
   const rows: FindingRow[] = [];
   for (const line of section.split("\n")) {
@@ -101,7 +112,31 @@ export function parseFileFindings(md: string, file: string): FindingRow[] {
       rule: body[3], message: body[4], suggestion: body[5] ?? "",
     });
   }
+  const fixes = parseToBeBlocks(section);
+  for (const r of rows) {
+    r.toBe = (fixes.find((x) => x.line === r.line && x.rule === r.rule) ?? fixes.find((x) => x.line === r.line))?.toBe;
+  }
   return rows;
+}
+
+/** `#### <rule> (L<n>)` 상세 블록마다 TO-BE 라벨 다음 첫 코드 펜스의 내용을 뽑는다. */
+export function parseToBeBlocks(section: string): { rule: string; line: number | null; toBe: string }[] {
+  const out: { rule: string; line: number | null; toBe: string }[] = [];
+  for (const block of section.split(/^#### /m).slice(1)) {
+    const lines = block.split("\n");
+    const head = lines[0].trim().match(/^(.*?)(?: \(L(\d+)\))?$/)!;
+    const label = lines.findIndex((l) => l.startsWith("**") && l.includes("TO-BE"));
+    if (label < 0) continue;
+    const open = lines.findIndex((l, i) => i > label && /^`{3,}/.test(l));
+    if (open < 0) continue;
+    const fence = lines[open].match(/^`+/)![0];
+    const close = lines.findIndex((l, i) => i > open && l.trim() === fence);
+    out.push({
+      rule: head[1], line: head[2] ? Number(head[2]) : null,
+      toBe: lines.slice(open + 1, close < 0 ? undefined : close).join("\n"),
+    });
+  }
+  return out;
 }
 
 /** 정답의 줄 범위들을 구한다. anchor(문자열 또는 목록)마다 소스에서 그 문자열이 든 줄을 찾는다(각각 정확히 1줄이어야 함). */
@@ -128,13 +163,18 @@ export function scoreBugCase(c: BugCase, rows: FindingRow[], range?: [number, nu
     ? Array.isArray(range[0]) ? (range as [number, number][]) : [range as [number, number]]
     : resolveLineRanges(c, "");
   const cats = Array.isArray(c.category) ? c.category : [c.category];
-  return rows.some((r) =>
+  const hits = rows.filter((r) =>
     cats.includes(r.category) &&
     SEVERITY_RANK[r.severity] <= SEVERITY_RANK[c.min_severity] &&
     r.line !== null &&
     ranges.some(([lo, hi]) => r.line! >= lo - LINE_TOLERANCE && r.line! <= hi + LINE_TOLERANCE) &&
     c.keywords_any.some((k) => (r.message + " " + r.suggestion).toLowerCase().includes(k.toLowerCase()))
   );
+  if (!hits.length) return false;
+  const forbid = (c.fix_forbid_any ?? []).map((p) => new RegExp(p, "i"));
+  if (hits.some((r) => forbid.some((re) => re.test(r.toBe ?? "")))) return false;
+  const need = c.fix_require_any ?? [];
+  return !need.length || hits.some((r) => need.some((k) => (r.toBe ?? "").includes(k)));
 }
 
 /** 대조군은 minor 이상 finding이 없어야 통과. `tests` 카테고리는 샘플 코드에 테스트가 없어서 항상 뜨는 노이즈라 제외한다. */
@@ -180,10 +220,17 @@ async function main(): Promise<void> {
     const md = await Bun.file(full).text();
     const findings = parseFileFindings(md, c.file);
     let pass: boolean;
+    let note = "";
     if (c.kind === "bug") {
       try {
         const src = await Bun.file(join(target, c.file)).text();
-        pass = scoreBugCase(c, findings, resolveLineRanges(c, src));
+        const ranges = resolveLineRanges(c, src);
+        pass = scoreBugCase(c, findings, ranges);
+        // 검출은 됐는데 수정안이 의도를 바꿨는지 구분해 보여준다
+        if (!pass && (c.fix_forbid_any || c.fix_require_any) &&
+            scoreBugCase({ ...c, fix_forbid_any: undefined, fix_require_any: undefined }, findings, ranges)) {
+          note = "검출 O, 수정안이 기존 의도 변경";
+        }
       } catch (e) {
         console.error((e as Error).message);
         pass = false;
@@ -192,7 +239,7 @@ async function main(): Promise<void> {
       pass = scoreControlCase(findings);
     }
     if (!pass) failed++;
-    rows.push(`| ${c.id} | ${pass ? "PASS" : "FAIL"} | ${report} |`);
+    rows.push(`| ${c.id} | ${pass ? "PASS" : `FAIL${note ? ` (${note})` : ""}`} | ${report} |`);
   }
   console.log(`\n| case | result | report |`);
   console.log(`|---|---|---|`);

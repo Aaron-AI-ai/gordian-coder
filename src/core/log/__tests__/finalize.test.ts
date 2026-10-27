@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { computeGaps, badgeFor, renderLogReport, reportPath, finalizeRun, type FinalizeInput } from "../finalize";
+import { computeGaps, badgeFor, renderLogReport, renderLogHtml, reportPath, finalizeRun, type FinalizeInput } from "../finalize";
 import { loadLogConfig } from "../config";
 import type { LogPlan } from "../plan";
 import type { StoredSubmission } from "../submit";
@@ -117,6 +117,45 @@ describe("renderLogReport", () => {
   });
 });
 
+describe("renderLogHtml", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "f-log-html-"));
+  mkdirSync(join(cwd, "src/a"), { recursive: true });
+  writeFileSync(join(cwd, "src/a/Svc.java"), "class Svc {\n  void run() { map.get(k).size(); }\n}\n");
+  const noGaps = { unexplainedExceptions: [], unreadSuspects: [], unresolvedObservations: [] };
+  const withCode: StoredSubmission = { ...sub, resolution: { ...sub.resolution, changes: [
+    { file: "src/a/Svc.java", description: "null 가드", code: "if (v == null) {\n    return List.of();\n}" },
+  ] } };
+  const input: FinalizeInput = { plan, input: "java.lang.NullPointerException: <script>alert(1)</script>\n\tat a.Svc.run(Svc.java:2)\n", submission: withCode, judgments: judged, attempt: judged.attempts[0], session: { toolCalls: 4, maxToolCalls: 10, rounds: 1 }, cwd };
+
+  test("three numbered steps, verdict with cause, evidence with the cause line highlighted", () => {
+    const html = renderLogHtml(input, noGaps, "PASS", "ko", new Date());
+    for (const s of ["로그 분석", "원인", "해결 방안", "검토한 대안", "못 본 것", "심사 이력", "실행 정보"]) expect(html).toContain(s);
+    expect(html).toContain(`<div class="verdict pass"`);
+    expect(html).toContain("map.get(k) is null");
+    expect(html).toContain(`<span class="hit"><span class="ln">2</span>  void run() { map.get(k).size(); }</span>`);
+    expect(html).not.toContain("{{");
+  });
+  test("each code change is its own copy target holding the code alone; the whole resolution is copyable as markdown", () => {
+    const html = renderLogHtml(input, noGaps, "PASS", "ko", new Date());
+    expect(html).toContain(`<pre id="fix-0">if (v == null) {\n    return List.of();\n}</pre>`);
+    expect(html).toContain(`data-copy="fix-0"`);
+    expect(html).toContain(`data-copy="fix-all"`);
+    expect(html).toContain("- src/a/Svc.java: null 가드\n```java\nif (v == null) {");
+  });
+  test("log text is escaped", () => {
+    const html = renderLogHtml(input, noGaps, "PASS", "ko", new Date());
+    expect(html).not.toContain("<script>alert(1)");
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+  });
+  test("FORCED empty submission renders a fail verdict with no copy buttons", () => {
+    const empty: StoredSubmission = { ...sub, forced: " — x", cause: { file: "", summary: "", mechanism: "" }, evidence: [], observations: [], alternatives: [], resolution: { summary: "", changes: [], kind: "mitigation" }, confidence: 0 };
+    const html = renderLogHtml({ ...input, submission: empty, attempt: undefined }, noGaps, "FORCED", "en", new Date());
+    expect(html).toContain(`<div class="verdict fail"`);
+    expect(html).toContain("no submission");
+    expect(html).not.toContain(`data-copy=`);
+  });
+});
+
 describe("reportPath", () => {
   test("directory vs file, override wins", () => {
     const cwd = mkdtempSync(join(tmpdir(), "f-log-rp-"));
@@ -145,14 +184,20 @@ describe("finalizeRun end-to-end", () => {
     expect(out).toContain("f-log finished — PASS");
     expect(out).toContain(`log-${runId}.md`);
     expect(out).toContain("Gaps: none");
+    expect(out).not.toContain("Chinese characters");
     // The relayed summary carries the resolution too, on ONE line, with the files to change.
     expect(out).toContain("Fix (root-cause): map.get(k) 결과가 null이면 빈 값을 반환하도록 가드한다 [src/a/Svc.java, src/a/Other.java]");
     const path = join(cwd, ".fico/report/f-log/", `log-${runId}.md`);
     expect(existsSync(path)).toBe(true);
     expect(existsSync(join(runDir(runId, cwd), "finalize.json"))).toBe(true);
+    const htmlPath = path.replace(/\.md$/, ".html");
+    expect(out).toContain(`HTML: .fico/report/f-log/log-${runId}.html`);
+    expect(readFileSync(htmlPath, "utf8")).toContain("null 가드 추가");
     const before = readFileSync(path, "utf8");
+    const htmlBefore = readFileSync(htmlPath, "utf8");
     expect(finalizeRun(runId, cwd)).toBe(out);
     expect(readFileSync(path, "utf8")).toBe(before);
+    expect(readFileSync(htmlPath, "utf8")).toBe(htmlBefore);
     expect(finalizeRun("nope", cwd)).toContain("Unknown run");
   });
   test("--output=<file> reused across runs redirects the second run instead of hiding its report (I-5)", () => {
@@ -183,11 +228,33 @@ describe("finalizeRun end-to-end", () => {
     const second = runOnce(1);
     expect(second.out).toContain(`Report: out/log-${second.runId}.md`);
     expect(second.out).toContain("already existed");
+    expect(second.out).toContain(`HTML: out/log-${second.runId}.html`);
+    expect(existsSync(join(cwd, "out", `log-${second.runId}.html`))).toBe(true);
     const path = join(cwd, "out", `log-${second.runId}.md`);
     expect(existsSync(path)).toBe(true);
     expect(readFileSync(path, "utf8")).toContain(second.runId);
     // first run's report is untouched
     expect(readFileSync(join(cwd, "out/same.md"), "utf8")).toContain(first.runId);
+  });
+
+  test("a report whose prose still carries Chinese characters gets a warning line naming them", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "f-log-fin-han-"));
+    mkdirSync(join(cwd, "src/a"), { recursive: true });
+    writeFileSync(join(cwd, "src/a/Svc.java"), "class Svc {\n  void run() { map.get(k).size(); }\n}\n");
+    const git = (args: string[]) => Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd });
+    git(["init", "-q"]); git(["add", "."]); git(["commit", "-qm", "init"]);
+    const runId = /runId[:=]\s*(\S+)/.exec(planLog({ log: "java.lang.NullPointerException: x\n\tat a.Svc.run(Svc.java:2)\n" }, cwd))![1];
+    logContext(runId, "fin-han", cwd);
+    const st = getLogState("fin-han")!;
+    submitLog({ runId, submitToken: st.submitToken, cause: { file: "src/a/Svc.java", line: 2, summary: "null", mechanism: "m" }, evidence: [{ file: "src/a/Svc.java", lines: [1, 3], why: "w" }], observations: [{ observation: "예외 1/1: java.lang.NullPointerException: x", explained: true }], alternatives: [{ hypothesis: "h", rejectedBecause: "r" }], resolution: { summary: "s", changes: [], kind: "root-cause" }, confidence: 70 }, "fin-han");
+    // A submission that reached storage with Han (past the submit gate's cap).
+    const subPath = join(runDir(runId, cwd), "submission-1.json");
+    const stored = JSON.parse(readFileSync(subPath, "utf8"));
+    stored.cause.mechanism = "k가 返回되지 않음";
+    writeFileSync(subPath, JSON.stringify(stored));
+    const out = finalizeRun(runId, cwd);
+    expect(out).toContain("Chinese characters in report prose");
+    expect(out).toContain("返回");
   });
 
   test("no submission yet → refusal naming the analyst", () => {

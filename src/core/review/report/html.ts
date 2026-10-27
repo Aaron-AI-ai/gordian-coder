@@ -55,7 +55,7 @@ export function fmtDuration(ms: number): string {
   return h ? `${h}h ${pad(m)}m ${pad(s % 60)}s` : m ? `${m}m ${pad(s % 60)}s` : `${s % 60}s`;
 }
 
-function esc(s: string): string {
+export function esc(s: string): string {
   return s
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -78,7 +78,7 @@ function q(...parts: (string | number | undefined)[]): string {
  * rendering blank: a renamed placeholder is a bug that must surface at the
  * first render, not as a silently empty section in a delivered report.
  */
-function fill(template: string, vars: Record<string, string>): string {
+export function fill(template: string, vars: Record<string, string>): string {
   return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => {
     if (!(name in vars)) throw new Error(`report template: unknown placeholder {{${name}}}`);
     return vars[name];

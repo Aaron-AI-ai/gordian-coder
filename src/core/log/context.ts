@@ -17,8 +17,10 @@ export const RAW_MAX_CHARS = 6_000;
 export const OBS_MAX_CHARS = 3_000;
 export const PRIMARY_SNIPPET_MAX_CHARS = 4_000;
 export const RULES_MAX_CHARS = 6_000;
-export const KB_MAX_DOCS = 3;
-export const KB_DOC_MAX_CHARS = 3_000;
+// ponytail: 5 × 2.5k keeps KB under the 40k default beside the other sections;
+// a page past the cap is named, and the submit check serves it if the fix uses it.
+export const KB_MAX_DOCS = 5;
+export const KB_DOC_MAX_CHARS = 2_500;
 export const OTHER_SNIPPETS_MAX_CHARS = 8_000;
 export const PRIMARY_RADIUS = 40;
 export const OTHER_RADIUS = 10;
@@ -85,7 +87,18 @@ function snippet(cwd: string, s: Suspect, radius: number, maxChars: number): str
 function kbSection(i: ContextInput): string {
   const docs = i.plan.kbDocs.slice(0, KB_MAX_DOCS);
   if (!docs.length) return "";
-  return ["## 프레임워크 KB (이미 주입됨 — 다시 읽지 마라)", ...docs.map((d) => `### ${d.specifier} (${d.path})\n${cut(d.content, KB_DOC_MAX_CHARS, "(KB 문서 일부)")}`)].join("\n\n");
+  const rest = i.plan.kbDocs.slice(KB_MAX_DOCS).map((d) => d.specifier.replace(/^search: /, ""));
+  return [
+    "## 프레임워크 KB (이미 주입됨 — 다시 읽지 마라. 해결 방안 code 는 이 가이드를 따른다)",
+    ...docs.map((d) => `### ${d.specifier} (${d.path})\n${cut(d.content, KB_DOC_MAX_CHARS, "(KB 문서 일부)")}`),
+    ...(rest.length ? [`그 밖의 관련 KB: ${rest.join(", ")}`] : []),
+  ].join("\n\n");
+}
+
+/** KB pages whose body made it into the rendered text (the section can be
+ * dropped under budget) — the submit check treats only these as seen. */
+export function shownKbDocs(text: string, plan: LogPlan): string[] {
+  return plan.kbDocs.filter((d) => text.includes(`### ${d.specifier} (${d.path})`)).map((d) => d.path);
 }
 
 /** Which suspects actually survived into the rendered text (budget cuts can
@@ -156,6 +169,7 @@ export function logContext(runId: string, sessionId: string, cwd: string): strin
     submitToken: st.submitToken, language: meta.language, cwd, maxChars: cfg.contextMaxChars,
   });
   writeRunText(runId, cwd, `context-${round}.md`, text);
+  st.kbShown = shownKbDocs(text, plan);
   // Finalize needs which suspects were actually shown, union'd across rounds
   // (a rework round's "이전 라운드와 동일" rules/KB replacement still injects suspects).
   const prevInjected = readRunJson<string[]>(runId, cwd, "injected.json") ?? [];

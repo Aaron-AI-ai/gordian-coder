@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { renderContext, logContext, RAW_MAX_CHARS, OBS_MAX_CHARS, type ContextInput } from "../context";
+import { KB_MAX_DOCS, renderContext, logContext, RAW_MAX_CHARS, OBS_MAX_CHARS, type ContextInput } from "../context";
 import { parseStackTrace } from "../parse";
 import { planLog } from "../plan";
 import { getLogState } from "../state";
@@ -57,6 +57,15 @@ describe("renderContext", () => {
     expect(out).not.toContain("ctl 20");         // other snippets dropped
     expect(out).toContain("R".repeat(50));       // rules survive — bottom-up order, not "drop everything"
     expect(out.length).toBeLessThanOrEqual(4_000 + 200);
+  });
+
+  test("KB: the first KB_MAX_DOCS pages in full, the rest listed by name", () => {
+    const kbDocs = Array.from({ length: KB_MAX_DOCS + 2 }, (_, n) => ({ specifier: `K${n}`, path: `.fico/kb/K${n}.md`, content: `BODY${n}` }));
+    const base = input(cwd);
+    const out = renderContext({ ...base, plan: { ...base.plan, kbDocs } });
+    expect(out).toContain(`BODY${KB_MAX_DOCS - 1}`);
+    expect(out).not.toContain(`BODY${KB_MAX_DOCS}`);
+    expect(out).toContain(`K${KB_MAX_DOCS}, K${KB_MAX_DOCS + 1}`);
   });
 
   test("raw log is trimmed to RAW_MAX_CHARS with a pointer to input.log", () => {

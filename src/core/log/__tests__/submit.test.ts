@@ -60,6 +60,24 @@ describe("submitLog", () => {
     expect(readRunJson(runId, cwd, "callLog.json")).toBeTruthy();
   });
 
+  test("Chinese characters in Korean prose → rejected naming them; past the cap stored as written, not forced", () => {
+    const cwd = repo();
+    const { runId, st } = start(cwd, "s-han");
+    const p = valid(runId, st.submitToken);
+    p.cause.mechanism = "k가 삽入되지 않아 返回 값이 null";
+    p.resolution.changes[0].description = "`中文` 인용은 허용";
+    for (let i = 1; i <= MAX_FAILED_SUBMITS; i++) {
+      const out = submitLog(p, "s-han");
+      expect(out).toContain("Chinese characters");
+      expect(out).toContain("返回");
+      expect(out).not.toContain("中文");
+    }
+    expect(submitLog(p, "s-han")).toContain("✅");
+    const stored = readRunJson<StoredSubmission>(runId, cwd, "submission-1.json")!;
+    expect(stored.forced).toBeUndefined();
+    expect(stored.cause.mechanism).toContain("返回");
+  });
+
   test("missing observation → rejected with the missing line named", () => {
     const cwd = repo();
     const { runId, st } = start(cwd, "s-obs");
@@ -127,6 +145,39 @@ describe("submitLog", () => {
     expect(submitLog({}, "nobody")).toContain("No active log analysis");
     const { st } = start(cwd, "s-run");
     expect(submitLog(valid("other-run", st.submitToken), "s-run")).toContain("other-run");
+  });
+});
+
+describe("submitLog KB check on fix code", () => {
+  function kbRepo(svcImports: boolean): string {
+    const cwd = mkdtempSync(join(tmpdir(), "f-log-submit-kb-"));
+    const w = (rel: string, body: string) => { mkdirSync(join(cwd, rel, ".."), { recursive: true }); writeFileSync(join(cwd, rel), body); };
+    w("src/a/Svc.java", `${svcImports ? "import kr.co.koscom.pb.framework.site.ext.exception.PBOnlineException;\n" : ""}class Svc {\n  void run() { map.get(k).size(); }\n}\n`);
+    w(".fico/config/fico_ai.json", JSON.stringify({ review: { frameworkKb: { "kr.co.koscom.pb.framework.site.ext.*": ".fico/kb/site-ext/" } } }));
+    w(".fico/kb/site-ext/exception/PBOnlineException.md", "# PBOnlineException\nKBBODY: create(String code, Object... args)");
+    const git = (args: string[]) => Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd });
+    git(["init", "-q"]); git(["add", "."]); git(["commit", "-qm", "init"]);
+    return cwd;
+  }
+  const withFix = (runId: string, token: string) => {
+    const p = valid(runId, token);
+    p.resolution.changes = [{ file: "src/a/Svc.java", description: "null 가드", code: 'if (v == null) throw PBOnlineException.create("1002");' } as never];
+    return p;
+  };
+
+  test("fix code using a framework class whose KB page the analyst never saw → one bounce carrying that page", () => {
+    const cwd = kbRepo(false);
+    const { runId, st } = start(cwd, "s-kb");
+    const first = submitLog(withFix(runId, st.submitToken), "s-kb");
+    expect(first).toContain("PBOnlineException");
+    expect(first).toContain("KBBODY: create(String code, Object... args)");
+    expect(submitLog(withFix(runId, st.submitToken), "s-kb")).toContain("✅"); // once only
+  });
+
+  test("the page was already in the context → no bounce", () => {
+    const cwd = kbRepo(true);
+    const { runId, st } = start(cwd, "s-kb2");
+    expect(submitLog(withFix(runId, st.submitToken), "s-kb2")).toContain("✅");
   });
 });
 

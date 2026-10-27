@@ -58,6 +58,7 @@ export interface ReviewState {
   staleSubmits: Record<string, number>; // stale submit-token replays per target; bounded to prevent an ignored-call loop
   lastSubmitHash: Record<string, string>; // per-file hash of the last submit the FINAL CHECK bounced — an identical resubmission means re-bouncing is pointless
   lastValidFindings: Record<string, Finding[]>; // per-file findings of the last parseable submit — salvaged if invalid submits later hit the cap
+  intentNudged?: Record<string, boolean>; // per-target: already bounced once for a fix that turns a fallback catch into a throw
   forcedNotes: Record<string, string>; // per-target force-advance note — propagated into the report/run result so a salvaged review is never mistaken for a clean one
   assessedByTarget: Record<string, Category[]>; // actual categories reported by the accepted/forced submit; forced coverage must not be rewritten as complete
   deepPasses: number; // total review rounds per target (1 = single pass; clamped 1..5)

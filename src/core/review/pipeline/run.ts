@@ -18,7 +18,7 @@ import { createHash } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { SEVERITIES, dedupeFindings, verdict, type Finding, type Severity } from "../contract";
+import { SEVERITIES, dedupeFindings, reportHanWarning, verdict, type Finding, type Severity } from "../contract";
 import { collectTargets, resolveDiffRange, type CommitSpec } from "./context";
 import { FinalizeCacheSchema, MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, RUN_BATCH_SIZE, absoluteOutputPath, createRun, diskTextHash, filesSnapshotIdentity, finalizeFingerprint, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, runFreshness, unfinishedRuns } from "./run-store";
 import { loadRun, resultUnit, runUnits, type RunInput, type RunMeta } from "./artifact";
@@ -668,6 +668,10 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
     reportContext
   );
 
+  // Post-write check: the submit gate bounces Chinese characters, but past its
+  // cap (or in fcq/fix text) they can still reach the file — name them here.
+  const hanWarn = reportHanWarning(readFileSync(absoluteOutputPath(path, cwd), "utf8"), meta.language);
+
   const truncatedWarn = judgeTruncated.length
     ? ` ℹ️ ${judgeTruncated.length} file(s) were judged over a partial view of the change: ${judgeTruncated.join(", ")}.`
     : "";
@@ -749,6 +753,7 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
     const fcqNote = fcqSummary ? ` (incl. ${fcqSummary.targetViolations} from fcq)` : "";
     response = `✅ Run complete — ${scope}, ${all.length} issue(s)${fcqNote}.${gate}${forcedWarn}${truncatedWarn}${fixWarn} Report: ${path}`;
   }
+  if (hanWarn) response += `\n${hanWarn}`;
   await Bun.write(
     cachePath,
     JSON.stringify(

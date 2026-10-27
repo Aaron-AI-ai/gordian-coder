@@ -450,6 +450,31 @@ export function kbSearch(cwd: string, query: string): string {
     .join("\n\n");
 }
 
+/**
+ * KB pages named exactly after a class or annotation that `code` uses, in order
+ * of first use. A page's file stem is its class's simple name, so an exact
+ * match is precise where a ranked search is not: a fix that writes
+ * `PBOnlineException.create(...)` gets that page, not every page mentioning
+ * exceptions. For checking code the model wrote against the house guide.
+ */
+export function kbDocsForCode(cwd: string, code: string, max = KB_MAX_DOCS): KbDoc[] {
+  const names = [...new Set([...code.matchAll(/\b[A-Z][A-Za-z0-9_]+\b/g)].map((m) => m[0]))];
+  if (!names.length) return [];
+  const byStem = new Map(kbEntries(cwd).map((e) => [e.stem, e]));
+  const docs: KbDoc[] = [];
+  for (const name of names) {
+    const entry = byStem.get(name);
+    if (!entry || !entry.text.trim()) continue;
+    docs.push({
+      specifier: name,
+      path: relative(cwd, entry.path).split(sep).join(posix.sep),
+      content: entry.text.length > KB_DOC_MAX_CHARS ? `${entry.text.slice(0, KB_DOC_MAX_CHARS)}\n… (doc truncated)` : entry.text,
+    });
+    if (docs.length >= max) break;
+  }
+  return docs;
+}
+
 // ── prefetch ─────────────────────────────────────────────────────
 
 /** Extra pages injected per file, and what a page must score to qualify. */

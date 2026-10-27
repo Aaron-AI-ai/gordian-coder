@@ -6,6 +6,9 @@
  */
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, extname, isAbsolute, join } from "node:path";
+import { reportHanWarning } from "../review/contract";
+import { esc, fill } from "../review/report/html";
+import { htmlReportPath } from "../review/report/output";
 import { readFileAt, renderFileContent } from "../review/tools/read";
 import { localTimestamp } from "../time";
 import { loadLogConfig, type LogConfig } from "./config";
@@ -14,6 +17,10 @@ import { parseStackTrace } from "./parse";
 import type { LogPlan } from "./plan";
 import { loadJudgments, readRunJson, readRunText, writeRunJson, type LogJudgeAttempt, type LogJudgments, type RunMeta } from "./run-store";
 import type { StoredSubmission } from "./submit";
+import TEMPLATE_HTML from "./report.template.html" with { type: "text" };
+
+// Same cast as review/report/html.ts: bun-types types *.html as an HTMLBundle.
+const TEMPLATE = TEMPLATE_HTML as unknown as string;
 
 export interface Gaps {
   unexplainedExceptions: string[];
@@ -32,6 +39,7 @@ export interface FinalizeInput {
 }
 
 const EVIDENCE_MAX_LINES = 30;
+const OBS_OPEN_MAX = 5;
 const FIX_LINE_MAX = 300;
 
 /** One line for the relayed summary: what to do and where. The full resolution
@@ -186,6 +194,184 @@ export function renderLogReport(i: FinalizeInput, gaps: Gaps, badge: Badge, lang
   return out.join("\n");
 }
 
+/** HTML-only labels; section names reuse L without the markdown "## ". */
+const H = {
+  ko: {
+    title: "로그 분석 리포트", project: "프로젝트", analysis: "로그 분석", causeTitle: "원인", fixTitle: "해결 방안",
+    verdict: "판정", observations: "로그 관측", explained: "설명됨", notExplained: "설명 안 됨", evidence: "근거 코드",
+    copy: "복사", copyAll: "해결 방안 전체 복사", copied: "복사됨", copyFail: "복사 실패", exceptions: "예외", gaps: "누락",
+    noChanges: "구체적인 코드 변경 없음",
+  },
+  en: {
+    title: "Log Analysis Report", project: "Project", analysis: "Log analysis", causeTitle: "Cause", fixTitle: "Resolution",
+    verdict: "Verdict", observations: "Log observations", explained: "explained", notExplained: "not explained", evidence: "Evidence",
+    copy: "Copy", copyAll: "Copy whole resolution", copied: "Copied", copyFail: "Copy failed", exceptions: "exceptions", gaps: "gaps",
+    noChanges: "no concrete code change",
+  },
+} as const;
+
+/** PASS reads as settled, an unjudged/terminal answer as "check it", a
+ * forced or partial one as "do not trust as-is". */
+const BADGE_TONE: Record<Badge, "pass" | "warn" | "fail"> = { PASS: "pass", "JUDGE SKIPPED": "warn", UNJUDGED: "warn", TERMINAL: "warn", FORCED: "fail", PARTIAL: "fail" };
+
+/** Evidence lines with a line-number gutter (not selectable, so a copy grabs
+ * code only); lines inside the cited range are highlighted. */
+function quoteHtml(cwd: string, file: string, from: number, to: number, hitLine?: number): string {
+  const content = readFileAt(cwd, null, file);
+  if (content === null) return `<pre>(file not readable)</pre>`;
+  const lines = content.replace(/\n$/, "").split("\n");
+  const start = Math.max(1, from);
+  const end = Math.min(lines.length, to, start + EVIDENCE_MAX_LINES - 1);
+  const rows = [];
+  for (let n = start; n <= end; n++) {
+    const row = `<span class="ln">${n}</span>${esc(lines[n - 1])}`;
+    rows.push(n === hitLine ? `<span class="hit">${row}</span>` : row);
+  }
+  return `<pre>${rows.join("\n")}</pre>`;
+}
+
+/** Copy target + button. The text lives in its own element so the button
+ * copies exactly the code, never the gutter or the button label. */
+function copyBtn(id: string, label: string, h: (typeof H)[keyof typeof H]): string {
+  return `<button class="copy" type="button" data-copy="${id}" data-done="${esc(h.copied)}" data-fail="${esc(h.copyFail)}">${esc(label)}</button>`;
+}
+
+export function renderLogHtml(i: FinalizeInput, gaps: Gaps, badge: Badge, lang: "ko" | "en", now: Date): string {
+  const t = L[lang];
+  const h = H[lang];
+  const sec = (s: string) => s.slice(3);
+  const s = i.submission;
+  const empty = !s.cause.summary;
+  const root = parseStackTrace(i.input).chain.at(-1);
+  const tone = BADGE_TONE[badge];
+  const stamp = localTimestamp(now);
+  const project = i.cwd.split(/[\\/]/).at(-1) ?? "";
+  const gapCount = gaps.unexplainedExceptions.length + gaps.unreadSuspects.length + gaps.unresolvedObservations.length;
+  const exceptionCount = i.plan.observations.filter((o) => /^예외 \d+\/\d+: /.test(o)).length;
+  const causeAt = s.cause.file ? `${s.cause.file}${s.cause.line ? `:${s.cause.line}` : ""}` : "";
+
+  const notes = [
+    s.envCause && t.env,
+    s.resolution.kind === "mitigation" && !empty && t.mitigation,
+    badge === "TERMINAL" && t.terminal,
+    badge === "PARTIAL" && t.partial,
+    badge === "FORCED" && `${t.forced}${s.forced ?? ""}`,
+  ].filter((n): n is string => !!n);
+  const verdict = [
+    `<div class="verdict ${tone}" role="status">`,
+    `<div class="head"><span class="badge ${tone}">${esc(badge)}</span> ${esc(t.confidence)} ${s.confidence}${causeAt ? ` &middot; <code>${esc(causeAt)}</code>` : ""}</div>`,
+    `<div class="cause">${empty ? esc(t.none) : esc(s.cause.summary)}</div>`,
+    notes.length ? `<ul>${notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : "",
+    `</div>`,
+  ].join("\n  ");
+
+  const stats = [
+    `<div class="stat ${s.confidence >= 70 ? "good" : s.confidence < 40 ? "bad" : ""}"><div class="n">${s.confidence}</div><div class="l">${esc(t.confidence)}</div></div>`,
+    `<div class="stat"><div class="n">${exceptionCount}</div><div class="l">${esc(h.exceptions)}</div></div>`,
+    `<div class="stat ${gapCount ? "bad" : "good"}"><div class="n">${gapCount}</div><div class="l">${esc(h.gaps)}</div></div>`,
+    `<div class="stat"><div class="n">${s.resolution.changes.length}</div><div class="l">${esc(h.fixTitle)}</div></div>`,
+  ].join("\n    ");
+
+  // 1. Log analysis: where the failure travelled, and what the log showed.
+  const inApp = (root?.frames ?? []).filter((f) => i.plan.kinds[f.cls] === "app");
+  const pathItems = [
+    ...(i.plan.entry ? [`${t.entry}: ${i.plan.entry.cls}.${i.plan.entry.method}${i.plan.entry.line ? `:${i.plan.entry.line}` : ""}`] : []),
+    ...[...inApp].reverse().map((f) => `${f.cls}.${f.method}${f.line ? `(${f.file}:${f.line})` : ""}`),
+  ];
+  const pathHtml = pathItems.length || causeAt
+    ? `<div class="card"><h3>${esc(sec(t.path))}</h3><ul class="path">${pathItems.map((p) => `<li>${esc(p)}</li>`).join("")}${causeAt ? `<li class="root">${esc(t.causeFrame)}: ${esc(causeAt)}</li>` : ""}</ul></div>`
+    : `<div class="card"><ul class="path">${i.plan.suspects.map((x) => `<li>${esc(`${x.path} [${x.source}]`)}</li>`).join("") || "<li>(none)</li>"}</ul></div>`;
+  // Long frame-repeat lists would bury the cause, so more than a handful folds;
+  // the summary still says how many the analysis left unexplained.
+  const obsItems = s.observations
+    .map((o) => `<li><span class="${o.explained ? "ok" : "no"}" title="${esc(o.explained ? h.explained : h.notExplained)}">${o.explained ? "&#10003;" : "&#10007;"}</span><span>${esc(o.observation)}${o.how ? ` <span class="dim">&mdash; ${esc(o.how)}</span>` : ""}</span></li>`)
+    .join("");
+  const unexplainedObs = s.observations.filter((o) => !o.explained).length;
+  const obsHtml = s.observations.length
+    ? `<details class="more"${s.observations.length <= OBS_OPEN_MAX ? " open" : ""}><summary>${esc(h.observations)} <span class="dim">(${s.observations.length} &middot; ${esc(h.notExplained)} ${unexplainedObs})</span></summary><div class="body"><ul class="obs">${obsItems}</ul></div></details>`
+    : "";
+  const raw = i.input.length > RAW_MAX ? `${i.input.slice(0, RAW_MAX)}\n… (${i.input.length} chars; runs/${i.plan.runId}/input.log)` : i.input;
+  const rawHtml = `<details class="more"><summary>${esc(sec(t.raw))}</summary><div class="codebox"><pre>${esc(raw.trimEnd())}</pre></div></details>`;
+
+  // 2. Cause: mechanism, then the code it rests on.
+  const causeHtml = empty
+    ? `<div class="card"><p>${esc(t.none)}</p></div>`
+    : [
+        `<div class="card"><p><b>${esc(s.cause.summary)}</b></p><p>${esc(s.cause.mechanism)}</p></div>`,
+        ...s.evidence.filter((e) => e.file).map((e) =>
+          `<div class="card"><h3>${esc(h.evidence)} &middot; <code>${esc(`${e.file}:${e.lines[0]}-${e.lines[1]}`)}</code></h3><p>${esc(e.why)}</p><div class="codebox">${quoteHtml(i.cwd, e.file, e.lines[0], e.lines[1], e.file === s.cause.file ? s.cause.line : undefined)}</div></div>`),
+      ].join("\n    ");
+
+  // 3. Resolution: each change copyable on its own, plus the whole thing as markdown.
+  const allText = [s.resolution.summary, ...s.resolution.changes.flatMap((c) => [`- ${c.file}: ${c.description}`, ...(c.code ? ["```" + extname(c.file).slice(1), c.code.trimEnd(), "```"] : [])])].join("\n");
+  const changes = s.resolution.changes.map((c, n) => [
+    `<div class="change">`,
+    `<div class="file">${esc(c.file)}</div>`,
+    `<p>${esc(c.description)}</p>`,
+    c.code ? `<div class="codebox fix"><pre id="fix-${n}">${esc(c.code.trimEnd())}</pre>${copyBtn(`fix-${n}`, h.copy, h)}</div>` : "",
+    `</div>`,
+  ].join(""));
+  const fixHtml = empty
+    ? `<div class="card"><p>${esc(t.none)}</p></div>`
+    : [
+        `<div class="card"><div class="fixhead"><p><span class="badge kind">${esc(s.resolution.kind)}</span> ${esc(s.resolution.summary)}</p>${copyBtn("fix-all", h.copyAll, h)}</div><pre id="fix-all" hidden>${esc(allText)}</pre></div>`,
+        `<div class="card">${changes.join("") || `<p class="dim">${esc(h.noChanges)}</p>`}</div>`,
+      ].join("\n    ");
+
+  // Appendix: everything the reader may want to audit, collapsed.
+  const li = (xs: string[]) => `<ul>${xs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
+  const alts = [
+    ...s.alternatives.filter((a) => a.hypothesis).map((a) => `${a.hypothesis} — ${a.rejectedBecause}`),
+    ...i.judgments.rejected.map((r) => `(R${r.round}, judge) ${r.cause} — ${r.feedback}`),
+  ];
+  const gapLines = [
+    ...(gaps.unexplainedExceptions.length ? [`${t.unexplained}: ${gaps.unexplainedExceptions.join(", ")}`] : []),
+    ...(gaps.unreadSuspects.length ? [`${t.unread}: ${gaps.unreadSuspects.join(", ")}`] : []),
+    ...(gaps.unresolvedObservations.length ? [`${t.unresolved}: ${gaps.unresolvedObservations.join("; ")}`] : []),
+  ];
+  const judge = i.judgments.skipped
+    ? [`${t.skipped}: ${i.judgments.skipped}`]
+    : i.judgments.attempts.length
+      ? i.judgments.attempts.map((a) => `R${a.round}: ${a.total} (obs ${a.scores.observation} / alt ${a.scores.alternatives} / root ${a.scores.rootCause}) → ${a.verdict}${a.unexplained.length ? ` · unexplained: ${a.unexplained.join("; ")}` : ""}`)
+      : [t.judgeNone];
+  const more = (title: string, body: string, count?: number) =>
+    `<details class="more"><summary>${esc(title)}${count !== undefined ? ` <span class="dim">(${count})</span>` : ""}</summary><div class="body">${body}</div></details>`;
+  const appendix = [
+    more(sec(t.alts), alts.length ? li(alts) : "—", alts.length),
+    more(sec(t.gaps), gapLines.length ? li([...gapLines, t.gapsNote]) : esc(t.noGaps), gapCount),
+    more(sec(t.judge), li(judge)),
+    more(sec(t.run), li([
+      `runId: ${i.plan.runId}`, `${t.tools}: ${i.session.toolCalls}/${i.session.maxToolCalls}`, `${t.rounds}: ${i.session.rounds}`,
+      `${t.rules}: ${i.plan.ruleFiles.join(", ") || "—"}`, `${t.kb}: ${i.plan.kbDocs.map((d) => d.path).join(", ") || "—"}`, `${t.runs}: runs/${i.plan.runId}/`,
+    ])),
+  ].join("\n    ");
+
+  return fill(TEMPLATE, {
+    LANG: lang,
+    TITLE: `${esc(h.title)} &middot; ${esc(i.plan.runId)}`,
+    HEADING: esc(h.title),
+    STAMP: esc(stamp),
+    RUNINFO: [
+      `<dl class="runinfo">`,
+      `<dt>${esc(h.project)}</dt><dd><b>${esc(project)}</b></dd>`,
+      `<dt>runId</dt><dd><code>${esc(i.plan.runId)}</code></dd>`,
+      `<dt>${esc(t.tools)}</dt><dd>${i.session.toolCalls}/${i.session.maxToolCalls} <span class="dim">&middot; ${esc(t.rounds)} ${i.session.rounds}</span></dd>`,
+      `</dl>`,
+    ].join("\n    "),
+    VERDICT: verdict,
+    STATS: stats,
+    TOC: [["analysis", h.analysis], ["cause", h.causeTitle], ["fix", h.fixTitle]].map(([id, label], n) => `<a href="#${id}">${n + 1}. ${esc(label)}</a>`).join(""),
+    ANALYSIS_TITLE: esc(h.analysis),
+    ANALYSIS: [pathHtml, obsHtml, rawHtml].filter(Boolean).join("\n    "),
+    CAUSE_TITLE: esc(h.causeTitle),
+    CAUSE: causeHtml,
+    FIX_TITLE: esc(h.fixTitle),
+    FIX: fixHtml,
+    APPENDIX: appendix,
+    FOOTER: `f-log &middot; ${esc(stamp)}`,
+  });
+}
+
 function isDir(p: string): boolean {
   try { return statSync(p).isDirectory(); } catch { return false; }
 }
@@ -216,10 +402,10 @@ export function finalizeRun(runId: string, cwd: string): string {
   const badge = badgeFor(best.submission, judgments, best.attempt);
   const cfg = loadLogConfig(cwd);
   const toolCalls = Object.values(callLog[runId] ?? {}).reduce((a, b) => a + b, 0);
-  const md = renderLogReport(
-    { plan, input, submission: best.submission, judgments, attempt: best.attempt, session: { toolCalls, maxToolCalls: cfg.maxToolCalls, rounds: Math.max(1, judgments.attempts.length, best.submission.round) }, cwd },
-    gaps, badge, meta.language === "en" ? "en" : "ko", new Date()
-  );
+  const reportInput: FinalizeInput = { plan, input, submission: best.submission, judgments, attempt: best.attempt, session: { toolCalls, maxToolCalls: cfg.maxToolCalls, rounds: Math.max(1, judgments.attempts.length, best.submission.round) }, cwd };
+  const lang = meta.language === "en" ? "en" : "ko";
+  const now = new Date();
+  const md = renderLogReport(reportInput, gaps, badge, lang, now);
   const requested = reportPath(cwd, cfg, runId, meta.output);
   mkdirSync(dirname(requested), { recursive: true });
   // This run has never finalized before (the `prior` check above returned
@@ -234,15 +420,21 @@ export function finalizeRun(runId: string, cwd: string): string {
     collisionNote = `Note: ${relOf(requested)} already existed; wrote ${relOf(path)}`;
   }
   writeFileSync(path, md);
+  const html = htmlReportPath(path);
+  writeFileSync(html, renderLogHtml(reportInput, gaps, badge, lang, now));
   const rel = relOf(path);
   const g = `${gaps.unexplainedExceptions.length} / ${gaps.unreadSuspects.length} / ${gaps.unresolvedObservations.length}`;
   const response = [
     `✅ f-log finished — ${badge}`,
     `Report: ${rel}`,
+    `HTML: ${relOf(html)}`,
     `Cause: ${best.submission.cause.summary || "(no submission)"} (confidence ${best.submission.confidence})`,
     ...fixLine(best.submission),
     `Gaps: ${g === "0 / 0 / 0" ? "none" : `${g} (unexplained exceptions / unread suspects / unresolved observations)`}`,
     ...(collisionNote ? [collisionNote] : []),
+    // Post-write check: Gate 3 bounces Chinese characters, but past its cap
+    // they are stored as written — the reader must hear about it here.
+    ...[reportHanWarning(md, lang)].filter(Boolean),
   ].join("\n");
   writeRunJson(runId, cwd, "finalize.json", { response, reportPath: rel, badge, gaps } satisfies FinalizeRecord);
   return response;

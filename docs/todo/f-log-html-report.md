@@ -1,6 +1,8 @@
 # TODO: f-log 리포트 HTML 출력
 
-> 상태: **미착수 · 우선순위 높음** (2026-10-22 등록)
+> 상태: **완료** (2026-10-22 등록, 2026-10-27 구현)
+>
+> 구현: `src/core/log/finalize.ts` `renderLogHtml` + `src/core/log/report.template.html`. 공용화는 f-review `html.ts`의 `esc`·`fill`을 export해 재사용하는 데서 멈췄다(템플릿·CSS는 f-log용으로 축약 복사). `report/` 공용 모듈 승격은 세 번째 소비자가 생길 때.
 
 ## 배경
 

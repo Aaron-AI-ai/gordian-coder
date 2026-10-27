@@ -40,10 +40,13 @@ OpenCode에서 대상 프로젝트를 연 뒤:
 
 ```
 .fico/report/f-log/log-<runId>.md      리포트 (덮어쓰지 않음)
+.fico/report/f-log/log-<runId>.html    같은 내용의 HTML 화면 (브라우저로 열기)
 .fico/f-log/runs/<runId>/               input.log · plan.json · context-<n>.md · submission-<n>.json · judgments.json · finalize.json
 ```
 
 리포트 순서: 요약 → 스택 원문 → 진입점→원인 경로 → 원인 상세와 근거(실제 코드 인용) → 해결 방안(변경 파일별 수정 후 코드·설정 조각 포함) → 검토한 대안 → **못 본 것** → 심사 이력 → 실행 정보. 배지: `PASS` / `TERMINAL`(임계값 미달, 최고점 채택) / `FORCED` / `PARTIAL` / `JUDGE SKIPPED`.
+
+HTML 리포트는 판정 배너(배지·신뢰도·원인 한 줄) 아래에 **1. 로그 분석**(진입점→원인 경로, 로그 관측, 스택 원문) → **2. 원인**(메커니즘, 근거 코드 — 원인 줄 강조) → **3. 해결 방안**(변경마다 `복사` 버튼, `해결 방안 전체 복사`는 markdown으로 복사) 순서로 보여주고, 검토한 대안·못 본 것·심사 이력·실행 정보는 접어 둔다. 채팅 요약에 `HTML:` 줄로 경로가 나온다.
 
 ## 룰 파일 — `log/rules/*.md`
 

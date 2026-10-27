@@ -473,6 +473,51 @@ describe("startReview / submitReview (full loop)", () => {
     expect(kept[0].message).toBe("정상 소견");
   });
 
+  it("bounces findings with a few Chinese characters in Korean text, then keeps them as written at the cap", async () => {
+    const d = gitRepo();
+    await startReview({}, d, "t"); // language defaults to ko
+    guardExploration(getState("t")!, "file_read", ""); // keep the final check clean
+    const submit = {
+      assessed: [...REQUIRED_CATEGORIES],
+      findings: [
+        { category: "correctness", severity: "major", file: "a.ts", line: 1, rule: "입력 검증", message: "서비스 메서드入口处 최소한 null 검증을 추가하세요." },
+      ],
+    };
+    for (let i = 1; i <= 5; i++) {
+      const msg = await submitReview(submit, "t");
+      expect(msg).toContain("Chinese characters");
+      expect(msg).toContain("入口处");
+      expect(getState("t")!.currentIndex).toBe(0);
+    }
+    // past the cap the finding is sound, so it is kept (not dropped like degenerate output)
+    let out = await submitReview(submit, "t");
+    if (out.includes("Final check")) out = await submitReview(submit, "t");
+    expect(out).toContain("Next file: b.ts");
+    expect(getState("t")!.findings["a.ts"]).toHaveLength(1);
+  });
+
+  it("bounces a fix that turns a fallback catch into a throw once, then accepts it", async () => {
+    const d = gitRepo();
+    await startReview({}, d, "t");
+    guardExploration(getState("t")!, "file_read", ""); // keep the final check clean
+    const submit = {
+      assessed: [...REQUIRED_CATEGORIES],
+      findings: [
+        {
+          category: "correctness", severity: "major", file: "a.ts", line: 7, rule: "r", message: "조회 실패 시 null 응답",
+          asIs: "} catch (PBBaseException e) {\n  ctx.setQty(ZERO);\n}",
+          toBe: "} catch (PBBaseException e) {\n  throw PBOnlineException.create(\"8001\", e);\n}",
+        },
+      ],
+    };
+    const first = await submitReview(submit, "t");
+    expect(first).toContain("change error-handling intent (line 7)");
+    expect(getState("t")!.currentIndex).toBe(0);
+    const second = await submitReview(submit, "t");
+    expect(second).not.toContain("error-handling intent");
+    expect(getState("t")!.findings["a.ts"]).toHaveLength(1);
+  });
+
   it("truncates an oversized submission instead of rejecting it", async () => {
     const d = gitRepo();
     await startReview({}, d, "t");

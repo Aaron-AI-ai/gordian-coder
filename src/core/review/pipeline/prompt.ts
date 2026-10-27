@@ -22,6 +22,14 @@ export function languageName(code: string): string {
   return LANG_NAMES[code] ?? code;
 }
 
+/** Small models drift into Chinese mid-sentence; say it outright. Empty for
+ * Japanese/Chinese, where Han is the language itself. */
+export function noHanLine(code: string): string {
+  return code.startsWith("zh") || code.startsWith("ja")
+    ? ""
+    : ` Never write Chinese characters (Hanzi) — use ${languageName(code)} words only.`;
+}
+
 /** The per-file review prompt for the target currently under review. */
 export function reviewPromptFor(st: ReviewState): string | null {
   const target = currentFile(st);
@@ -96,6 +104,6 @@ export function reviewPromptFor(st: ReviewState): string | null {
 export function languageInstructionFor(st: ReviewState): string {
   return (
     `Write every finding's \`message\` and \`rule\` text in ${languageName(st.language)}. ` +
-    `Keep enum values (category, severity) and code identifiers as-is.`
+    `Keep enum values (category, severity) and code identifiers as-is.${noHanLine(st.language)}`
   );
 }

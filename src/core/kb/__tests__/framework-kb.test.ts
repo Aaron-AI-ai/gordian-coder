@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { clearKbCache, frameworkKbDocs, kbClues, kbPrefetch, kbSearch, resolveKbDoc, KB_DOC_MAX_CHARS } from "../framework-kb";
+import { clearKbCache, frameworkKbDocs, kbClues, kbDocsForCode, kbPrefetch, kbSearch, resolveKbDoc, KB_DOC_MAX_CHARS } from "../framework-kb";
 
 const tmps: string[] = [];
 afterEach(() => {
@@ -367,5 +367,18 @@ describe("kbClues / kbPrefetch", () => {
     const d = project(files);
     const src = Array.from({ length: 6 }, (_, i) => `new Widget${i + 1}();`).join("\n");
     expect(kbPrefetch(d, src, new Set()).length).toBeLessThanOrEqual(3);
+  });
+});
+
+describe("kbDocsForCode", () => {
+  it("returns pages named exactly after classes/annotations the code uses, in order of first use", () => {
+    const d = project({
+      ".fico/kb/framework-site-ext/exception/PBOnlineException.md": "# PBOnlineException\ncreate(code, args...)",
+      ".fico/kb/fico-fwk-core/annotations/FixedData.md": "# FixedData\nlength in bytes",
+      ".fico/kb/fico-fwk-core/converter/FixedDataConverter.md": "# FixedDataConverter",
+    });
+    const code = '@FixedData(length = 20)\nprivate String a;\nif (x == null) throw PBOnlineException.create("1002");\nString s = new String();';
+    expect(kbDocsForCode(d, code).map((x) => x.path.split("/").at(-1))).toEqual(["FixedData.md", "PBOnlineException.md"]);
+    expect(kbDocsForCode(d, "int a = 1;")).toEqual([]);
   });
 });

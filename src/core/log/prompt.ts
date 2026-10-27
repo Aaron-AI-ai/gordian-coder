@@ -1,9 +1,9 @@
 /** Prompt text that rides inside tool responses (the adapter's agent prompts
  * are in adapters/opencode/log/prompts.ts; this is the per-round part). */
-import { languageName } from "../review/pipeline/prompt";
+import { languageName, noHanLine } from "../review/pipeline/prompt";
 
 export function languageLine(language: string): string {
-  return `Write cause, mechanism, resolution and alternatives in ${languageName(language)}. Keep code identifiers, file paths and exception names as-is.`;
+  return `Write cause, mechanism, resolution and alternatives in ${languageName(language)}. Keep code identifiers, file paths and exception names as-is.${noHanLine(language)}`;
 }
 
 export function analystInstructions(submitToken: string, language: string, judge: boolean): string {

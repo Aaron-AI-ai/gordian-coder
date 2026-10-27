@@ -39,6 +39,10 @@ describe("parseFileFindings", () => {
   test("a section with no table returns empty (clean)", () => {
     expect(parseFileFindings(SAMPLE_REPORT, "src/main/java/review/AcntCleanQueryService.java")).toEqual([]);
   });
+  test("matches a git-root-relative heading (diff mode in a repo subdirectory)", () => {
+    const md = SAMPLE_REPORT.replace("## src/main/java/review/AcntBalanceQueryService.java", "## lab/online/src/main/java/review/AcntBalanceQueryService.java");
+    expect(parseFileFindings(md, "src/main/java/review/AcntBalanceQueryService.java")).toHaveLength(1);
+  });
   test("a file with no section at all also returns empty", () => {
     expect(parseFileFindings(SAMPLE_REPORT, "no/such/file.java")).toEqual([]);
   });
@@ -160,5 +164,54 @@ describe("anchor lists (a defect that legitimately shows up on several lines)", 
     expect(scoreBugCase(base, [row(2)], ranges)).toBe(true);
     expect(scoreBugCase(base, [row(6)], ranges)).toBe(true);
     expect(scoreBugCase(base, [row(12)], ranges)).toBe(false);
+  });
+});
+
+describe("fix intent (fix_forbid_any / fix_require_any)", () => {
+  const file = "src/Svc.java";
+  const report = (toBe: string) => `# r
+
+## ${file}
+
+| severity | category | line | rule | message | suggestion | source |
+|---|---|---|---|---|---|---|
+| major | correctness | 20 | 예외 무시 후 null 참조 | 조회 실패 시 null 응답 | ↓ 아래 참조 | AI |
+
+### 제안 상세
+
+#### 예외 무시 후 null 참조 (L20)
+
+**현재 코드 (AS-IS)**
+
+\`\`\`java
+} catch (PBBaseException e) {
+    ctx.setQty(BigDecimal.ZERO);
+}
+\`\`\`
+
+**수정 코드 (TO-BE)**
+
+\`\`\`java
+${toBe}
+\`\`\`
+`;
+  const c = {
+    id: "case-101", kind: "bug" as const, file,
+    category: "correctness", min_severity: "major",
+    line_range: [20, 20] as [number, number],
+    keywords_any: ["null"], commit: "case-101",
+    fix_forbid_any: ["\\bthrow\\b"], fix_require_any: ["ZERO"],
+  };
+  test("parses the TO-BE block onto the row", () => {
+    expect(parseFileFindings(report("ctx.setQty(BigDecimal.ZERO);"), file)[0].toBe).toBe("ctx.setQty(BigDecimal.ZERO);");
+  });
+  test("passes when the fallback is kept", () => {
+    expect(scoreBugCase(c, parseFileFindings(report("} catch (PBBaseException e) {\n    log.warn(\"x\");\n    ctx.setQty(BigDecimal.ZERO);\n}"), file))).toBe(true);
+  });
+  test("fails when the fix throws instead", () => {
+    expect(scoreBugCase(c, parseFileFindings(report("} catch (PBBaseException e) {\n    throw PBOnlineException.create(\"8001\", e);\n}"), file))).toBe(false);
+  });
+  test("fails when the fallback value disappears", () => {
+    expect(scoreBugCase(c, parseFileFindings(report("} catch (PBBaseException e) {\n    log.warn(\"x\");\n}"), file))).toBe(false);
   });
 });

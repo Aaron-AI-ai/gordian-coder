@@ -6,9 +6,9 @@
  */
 import { readFileSync } from "node:fs";
 import { join, posix } from "node:path";
-import { isExternalImport, normalizeRepoPath, resolveImport } from "../review/imports";
-import { isGitRepo, listFilesAt, sh } from "../review/tools/read";
-import { frameworkKbDocs, type KbDoc } from "../kb/framework-kb";
+import { fileImports, isExternalImport, normalizeRepoPath, resolveImport } from "../review/imports";
+import { isGitRepo, listFilesAt, readFileAt, sh } from "../review/tools/read";
+import { frameworkKbDocs, kbPrefetch, type KbDoc } from "../kb/framework-kb";
 import { loadLogConfig } from "./config";
 import { parseStackTrace, type HandlerInfo, type ParsedLog, type StackFrame } from "./parse";
 import { loadLogRules, matchLogRules } from "./rules";
@@ -133,6 +133,28 @@ function gitGrepFiles(cwd: string, needle: string): string[] {
   return r.code === 0 ? r.stdout.split("\n").filter(Boolean).map(normalizeRepoPath) : [];
 }
 
+/** Suspect files whose imports and vocabulary feed the KB, and the plan's KB cap. */
+const KB_SUSPECT_FILES = 2;
+const KB_PLAN_MAX_DOCS = 8;
+
+/**
+ * KB pages for the analyst, most specific first: the framework frames of the
+ * root-cause block, then what the top suspects import, then their own
+ * vocabulary (annotations, constructed types, code literals — kbPrefetch).
+ * The root frames alone left an app-code failure (NPE, mapper error) with no
+ * page at all, yet its fix reaches for the house classes the cause file
+ * already uses (PBOnlineException, @FixedData). Context renders the head of
+ * this list in full and names the rest.
+ */
+export function planKbDocs(cwd: string, rootFqcns: string[], suspects: Suspect[]): KbDoc[] {
+  const docs = [...frameworkKbDocs(cwd, rootFqcns)];
+  const have = () => new Set(docs.map((d) => d.path));
+  const top = suspects.slice(0, KB_SUSPECT_FILES);
+  for (const s of top) docs.push(...frameworkKbDocs(cwd, fileImports(cwd, null, s.path)).filter((d) => !have().has(d.path)));
+  for (const s of top) docs.push(...kbPrefetch(cwd, readFileAt(cwd, null, s.path) ?? "", have()));
+  return docs.slice(0, KB_PLAN_MAX_DOCS);
+}
+
 /** No frames? Derive suspects from what the handler line carried (spec §6). */
 export function searchStackless(cwd: string, handler: HandlerInfo): Suspect[] {
   const out: Suspect[] = [];
@@ -219,7 +241,7 @@ export function planLog(opts: PlanOptions, cwd: string): string {
   const entry = findEntry(parsed, kinds);
   const observations = buildObservations(parsed);
   const rootFqcns = (parsed.chain.at(-1)?.frames ?? []).map((f) => f.cls).filter((c) => kinds[c] === "framework");
-  const kbDocs = frameworkKbDocs(cwd, [...new Set(rootFqcns)]);
+  const kbDocs = planKbDocs(cwd, [...new Set(rootFqcns)], suspects);
   const types = [...parsed.chain, ...parsed.suppressed].map((b) => b.type);
   const ruleFiles = matchLogRules(loadLogRules(cwd), types, suspects.map((s) => s.path), parsed.handler).map((r) => r.file);
 

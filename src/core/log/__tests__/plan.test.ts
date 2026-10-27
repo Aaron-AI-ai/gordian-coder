@@ -169,3 +169,27 @@ describe("parseLogCommandArgs", () => {
     expect(parseLogCommandArgs("msg=--judge x").log).toBe("msg=--judge x");
   });
 });
+
+describe("planLog KB: root frames, then suspect imports, then suspect vocabulary", () => {
+  test("an app-only stack still gets the framework pages its cause file imports and uses", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "f-log-plan-kb-"));
+    const w = (rel: string, body: string) => { mkdirSync(join(cwd, rel, ".."), { recursive: true }); writeFileSync(join(cwd, rel), body); };
+    w("src/main/java/a/Svc.java", [
+      "package a;",
+      "import kr.co.koscom.pb.framework.site.ext.exception.PBOnlineException;",
+      "public class Svc {",
+      "  @ExtTransactional(\"ext\")",
+      "  public void run() { map.get(k).size(); }",
+      "}",
+    ].join("\n"));
+    w(".fico/config/fico_ai.json", JSON.stringify({ review: { frameworkKb: { "kr.co.koscom.pb.framework.site.ext.*": ".fico/kb/site-ext/" } } }));
+    w(".fico/kb/site-ext/exception/PBOnlineException.md", "---\ntitle: PBOnlineException\n---\n# PBOnlineException\ncreate(code, args...)");
+    w(".fico/kb/site-ext/annotation/ExtTransactional.md", "---\ntitle: ExtTransactional\n---\n# ExtTransactional\nuse for the ext datasource");
+    const git = (args: string[]) => Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd });
+    git(["init", "-q"]); git(["add", "."]); git(["commit", "-qm", "init"]);
+    const out = planLog({ log: "java.lang.NullPointerException: x\n\tat a.Svc.run(Svc.java:5)\n" }, cwd);
+    const plan = readRunJson<LogPlan>(/runId[:=]\s*(\S+)/.exec(out)![1], cwd, "plan.json")!;
+    const names = plan.kbDocs.map((d) => d.path.split("/").at(-1));
+    expect(names).toEqual(["PBOnlineException.md", "ExtTransactional.md"]); // import first, then vocabulary
+  });
+});
