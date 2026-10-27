@@ -166,6 +166,32 @@ async function bigRun() {
 }
 
 describe("judgeContext", () => {
+  it("tells the orchestrator to move on when the revision already passed", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+    await submitJudge(judgePayload(meta.runId, DEFAULT_JUDGE_THRESHOLD), d);
+
+    const msg = judgeContext(meta.runId, "a.ts", d);
+    expect(msg).toContain("already passed its judge");
+    expect(msg).toContain(`score ${DEFAULT_JUDGE_THRESHOLD}`);
+    expect(msg).toContain("Do NOT judge it again");
+    expect(msg).not.toContain(JUDGE_CRITERIA[0]); // no criteria: nothing to judge
+  });
+
+  it("tells the orchestrator to re-spawn the reviewer, not re-judge, after an unchanged REWORK", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+    await submitJudge(judgePayload(meta.runId, 10), d);
+
+    const msg = judgeContext(meta.runId, "a.ts", d);
+    expect(msg).toContain("already judged REWORK");
+    expect(msg).toContain("score 10");
+    expect(msg).toContain("re-spawn the reviewer");
+    expect(msg).toContain("Do NOT judge the unchanged artifact again");
+  });
+
   it("rejects an unknown run", () => {
     expect(judgeContext("ghost", "a.ts", dir())).toContain("Unknown run");
   });
@@ -236,6 +262,36 @@ describe("judgeContext", () => {
 });
 
 describe("submitJudge", () => {
+  it("rejects a part number outside the plan and charges the no-part budget", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+
+    const msg = await submitJudge(judgePayload(meta.runId, 80, { part: 7 }), d);
+    expect(msg).toContain("part 7 does not exist");
+    expect(msg).toContain("1 part(s)");
+
+    const j = loadJudgment(meta.runId, "a.ts", d);
+    expect(j.attempts).toHaveLength(0);
+    expect(j.invalidSubmissions).toHaveLength(1);
+    expect(j.invalidSubmissions[0].part).toBeUndefined();
+  });
+
+  it("records a schema-invalid payload with a valid identity as a retryable invalid submission", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(), d);
+    await writeFileReview(meta.runId, reviewResult(), "# a", d);
+
+    const msg = await submitJudge({ ...judgePayload(meta.runId, 80), score: "high" }, d);
+    expect(msg).toContain("score");
+    expect(msg).toContain(`Retry 1/${MAX_INVALID_JUDGE_SUBMISSIONS}`);
+
+    const j = loadJudgment(meta.runId, "a.ts", d);
+    expect(j.attempts).toHaveLength(0);
+    expect(j.invalidSubmissions).toHaveLength(1);
+    expect(j.terminal).toBeUndefined();
+  });
+
   it("rejects an invalid payload", async () => {
     expect(await submitJudge({ nope: true }, dir())).toContain("Invalid judge submission");
   });
