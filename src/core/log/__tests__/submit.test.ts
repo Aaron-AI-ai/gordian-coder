@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { submitLog, onLogSessionIdle, type StoredSubmission } from "../submit";
 import { planLog } from "../plan";
 import { logContext } from "../context";
@@ -258,6 +258,18 @@ describe("submitLog constant-into-framework-call check on fix code", () => {
     const cwd = constRepo();
     const { runId, st } = start(cwd, "s-const2");
     expect(submitLog(withConst(runId, st.submitToken, 'static final String LABEL = "mobile";'), "s-const2")).toContain("✅");
+  });
+
+  test("a change pointing outside the repo is never read", () => {
+    const cwd = constRepo();
+    const outside = mkdtempSync(join(tmpdir(), "f-log-submit-out-"));
+    writeFileSync(join(outside, "Svc.java"), "class Svc { String r(String p) { return StringUtils.masking(p, MASK_TYPE); } }");
+    const { runId, st } = start(cwd, "s-const3");
+    for (const file of [join(outside, "Svc.java"), `../${basename(outside)}/Svc.java`]) {
+      const p = withConst(runId, st.submitToken, 'static final String MASK_TYPE = "9";');
+      p.resolution.changes[0].file = file;
+      expect(submitLog(p, "s-const3")).not.toContain("StringUtils.masking(p, MASK_TYPE)");
+    }
   });
 });
 

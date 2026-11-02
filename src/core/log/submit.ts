@@ -6,13 +6,12 @@
  * cannot stall the run (spec §10). The idle watchdog stores a `partial`
  * submission when the model simply stops (spec §13 #12).
  */
-import { readFileSync } from "node:fs";
-import { relative, resolve } from "node:path";
 import { z } from "zod";
 import { capped, strayHan } from "../review/contract";
 import { kbConfigMisses, kbDocsForCode, type KbDoc } from "../kb/framework-kb";
 import { KB_DOC_MAX_CHARS, recordKbShown } from "./context";
 import { normalizeRepoPath } from "../review/imports";
+import { readFileAt } from "../review/tools/read";
 import { MAX_FAILED_SUBMITS, MAX_RESUMES } from "../review/pipeline/loop";
 import { languageName } from "../review/pipeline/prompt";
 import { MAX_OBSERVATIONS, type LogPlan } from "./plan";
@@ -110,10 +109,9 @@ function constantUses(cwd: string, changes: { file: string; code?: string }[]): 
   for (const ch of changes) {
     const decls = [...(ch.code ?? "").matchAll(/\bfinal\s+[\w.<>[\]]+\s+([A-Z][A-Z0-9_]*)\s*=\s*([^;]+);/g)];
     if (!decls.length) continue;
-    const abs = resolve(cwd, ch.file);
-    if (relative(cwd, abs).startsWith("..")) continue;
-    let lines: string[];
-    try { lines = readFileSync(abs, "utf8").split(/\r?\n/); } catch { continue; }
+    const text = readFileAt(cwd, null, ch.file); // contained in the repo, like every other f-log read
+    if (text === null) continue;
+    const lines = text.split(/\r?\n/);
     for (const [, name, value] of decls) {
       // the constant as an argument of `Cls.method(` — up to the first `)`, so nested calls before it are missed
       const call = new RegExp(`\\b([A-Z]\\w*)\\.\\w+\\s*\\([^;)]*\\b${name}\\b`, "g");
