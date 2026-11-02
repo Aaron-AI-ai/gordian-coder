@@ -5,7 +5,7 @@
  * the stored response and never rewrites the report.
  */
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, extname, isAbsolute, join } from "node:path";
+import { basename, dirname, extname, isAbsolute, join } from "node:path";
 import { reportHanWarning } from "../review/contract";
 import { esc, fill } from "../review/report/html";
 import { htmlReportPath } from "../review/report/output";
@@ -36,6 +36,12 @@ export interface FinalizeInput {
   attempt?: LogJudgeAttempt;
   session: { toolCalls: number; maxToolCalls: number; rounds: number };
   cwd: string;
+  /** The analyzed log file (--file); absent when pasted. */
+  source?: string;
+  /** KB pages the analyst saw (kbShown.json). */
+  kbShown?: string[];
+  /** Files the analyst read (readFiles.json). */
+  readFiles?: string[];
 }
 
 const EVIDENCE_MAX_LINES = 30;
@@ -91,6 +97,9 @@ const L = {
     confidence: "신뢰도", entry: "진입점", causeFrame: "원인 프레임", unexplained: "설명 안 된 예외", unread: "안 읽은 용의 파일", unresolved: "미해결 관측",
     rounds: "라운드", tools: "툴 호출", rules: "적용 룰", kb: "주입 KB", runs: "실행 상세", judgeNone: "심사 안 함", terminal: "임계값 미달 — 최고점 라운드 채택",
     partial: "분석 미완 — 모델이 제출 전에 중단", forced: "강제 수락", skipped: "심사 생략",
+    target: "## 분석 대상", source: "로그 파일", pasted: "직접 붙여넣은 로그", time: "발생 시각", svc: "서비스 ID", code: "에러 코드",
+    trace: "추적 ID · 사용자", where: "호스트 · 스레드", logLine: "로그 메시지", exception: "예외", logger: "기록 위치",
+    materials: "근거 자료", kbRef: "참고한 프레임워크 KB", usedInFix: "수정 코드에 사용", rulesRef: "적용한 분석 룰", filesRead: "분석 중 읽은 파일",
   },
   en: {
     summary: "## Summary", raw: "## Stack trace", path: "## Entry point → cause path", cause: "## Cause and evidence", fix: "## Resolution",
@@ -101,8 +110,64 @@ const L = {
     confidence: "confidence", entry: "entry", causeFrame: "cause frame", unexplained: "unexplained exceptions", unread: "unread suspect files", unresolved: "unresolved observations",
     rounds: "rounds", tools: "tool calls", rules: "rules applied", kb: "KB injected", runs: "run details", judgeNone: "not judged", terminal: "below threshold — best-scoring round adopted",
     partial: "analysis incomplete — the model stopped before submitting", forced: "force-accepted", skipped: "judge skipped",
+    target: "## Analyzed request", source: "Log file", pasted: "pasted log", time: "Occurred at", svc: "Service ID", code: "Error code",
+    trace: "Trace ID · user", where: "Host · thread", logLine: "Log message", exception: "Exception", logger: "Logged by",
+    materials: "Evidence materials", kbRef: "Framework KB consulted", usedInFix: "used in the fix", rulesRef: "Analysis rules applied", filesRead: "Files read during analysis",
   },
 } as const;
+
+type Labels = (typeof L)[keyof typeof L];
+const LOG_LINE_MAX = 300;
+
+/** What request the log is about, from the log itself: [label, value, monospace]. Rows the log does not carry are left out. */
+function targetRows(i: FinalizeInput, t: Labels): [string, string, boolean][] {
+  const p = parseStackTrace(i.input);
+  const { handler: h, head } = p;
+  const top = p.chain[0];
+  const root = p.chain.at(-1);
+  const ex = (b: NonNullable<typeof root>) => `${b.type}${b.message ? `: ${b.message.split("\n")[0]}` : ""}`;
+  const line = head.message && head.message.length > LOG_LINE_MAX ? `${head.message.slice(0, LOG_LINE_MAX - 1)}…` : head.message;
+  const rows: [string, string | undefined, boolean][] = [
+    [t.source, i.source ?? t.pasted, !!i.source],
+    [t.time, head.time, false],
+    ["URI", h.uri, true],
+    [t.svc, h.svcId, true],
+    [t.code, h.errorCode, true],
+    ["even", h.even, true],
+    [t.trace, [head.traceId, head.user].filter(Boolean).join(" · "), true],
+    [t.where, [head.host, head.thread].filter(Boolean).join(" · "), false],
+    [t.logLine, line && head.level ? `[${head.level}] ${line}` : line, false],
+    [t.exception, root && (top !== root ? `${ex(top)} → ${ex(root)}` : ex(root)), true],
+    [t.logger, h.logger, true],
+  ];
+  return rows.filter((r): r is [string, string, boolean] => !!r[1]);
+}
+
+/** In-app frames of the root block, outermost first, each once; the entry
+ * point has its own line, so its frame is not repeated here. */
+function pathFrames(i: FinalizeInput, root: ReturnType<typeof parseStackTrace>["chain"][number] | undefined): string[] {
+  const e = i.plan.entry;
+  const seen = new Set(e ? [`${e.cls}.${e.method}:${e.line}`] : []);
+  const out: string[] = [];
+  for (const f of [...(root?.frames ?? [])].reverse()) {
+    const key = `${f.cls}.${f.method}:${f.line}`;
+    if (i.plan.kinds[f.cls] !== "app" || seen.has(key)) continue;
+    seen.add(key);
+    out.push(`${f.cls}.${f.method}${f.line ? `(${f.file}:${f.line})` : ""}`);
+  }
+  return out;
+}
+
+/** The materials the cause rests on beyond the quoted code: KB pages the
+ * analyst saw (flagged when the fix code names that class), rules, files read. */
+function materials(i: FinalizeInput) {
+  const words = new Set(i.submission.resolution.changes.map((c) => c.code ?? "").join("\n").match(/\w+/g));
+  const kb = (i.kbShown ?? []).map((path) => {
+    const name = basename(path).replace(/\.md$/, "");
+    return { name, path, used: words.has(name) };
+  }).sort((a, b) => Number(b.used) - Number(a.used));
+  return { kb, rules: i.plan.ruleFiles, files: i.readFiles ?? [] };
+}
 
 function quote(cwd: string, file: string, from: number, to: number): string {
   const content = readFileAt(cwd, null, file);
@@ -120,6 +185,7 @@ export function renderLogReport(i: FinalizeInput, gaps: Gaps, badge: Badge, lang
   const out: string[] = [];
 
   out.push(`# f-log ${i.plan.runId} — **${badge}**`, `${localTimestamp(now)} · ${i.cwd.split(/[\\/]/).at(-1)}`, "");
+  out.push(t.target, ...targetRows(i, t).map(([k, v, mono]) => `- **${k}**: ${mono ? `\`${v}\`` : v}`), "");
   out.push(t.summary, empty ? `_${t.none}_` : `**${s.cause.summary}** (${t.confidence} ${s.confidence})`);
   if (s.envCause) out.push(`- ${t.env}`);
   if (s.resolution.kind === "mitigation" && !empty) out.push(`- ${t.mitigation}`);
@@ -132,8 +198,7 @@ export function renderLogReport(i: FinalizeInput, gaps: Gaps, badge: Badge, lang
   out.push(t.raw, "```", raw.trimEnd(), "```", "");
 
   out.push(t.path);
-  const inApp = (root?.frames ?? []).filter((f) => i.plan.kinds[f.cls] === "app");
-  const chain = [...inApp].reverse().map((f) => `${f.cls}.${f.method}${f.line ? `(${f.file}:${f.line})` : ""}`);
+  const chain = pathFrames(i, root);
   if (i.plan.entry) out.push(`- ${t.entry}: ${i.plan.entry.cls}.${i.plan.entry.method}${i.plan.entry.line ? `:${i.plan.entry.line}` : ""}`);
   if (chain.length) out.push(`- ${chain.join(" → ")}`);
   if (!empty) out.push(`- **${t.causeFrame}: ${s.cause.file}${s.cause.line ? `:${s.cause.line}` : ""}**`);
@@ -149,6 +214,9 @@ export function renderLogReport(i: FinalizeInput, gaps: Gaps, badge: Badge, lang
       out.push(`**${e.file}:${e.lines[0]}-${e.lines[1]}** — ${e.why}`, "```", quote(i.cwd, e.file, e.lines[0], e.lines[1]), "```");
     }
   }
+  const m = materials(i);
+  out.push("", `### ${t.materials}`, `- ${t.kbRef}:${m.kb.length ? "" : " —"}`, ...m.kb.map((k) => `  - ${k.name} — ${k.path}${k.used ? ` (${t.usedInFix})` : ""}`));
+  out.push(`- ${t.rulesRef}: ${m.rules.join(", ") || "—"}`, `- ${t.filesRead}:${m.files.length ? "" : " —"}`, ...m.files.map((f) => `  - ${f}`));
   out.push("");
 
   out.push(t.fix, empty ? `_${t.none}_` : s.resolution.summary);
@@ -273,10 +341,9 @@ export function renderLogHtml(i: FinalizeInput, gaps: Gaps, badge: Badge, lang: 
   ].join("\n    ");
 
   // 1. Log analysis: where the failure travelled, and what the log showed.
-  const inApp = (root?.frames ?? []).filter((f) => i.plan.kinds[f.cls] === "app");
   const pathItems = [
     ...(i.plan.entry ? [`${t.entry}: ${i.plan.entry.cls}.${i.plan.entry.method}${i.plan.entry.line ? `:${i.plan.entry.line}` : ""}`] : []),
-    ...[...inApp].reverse().map((f) => `${f.cls}.${f.method}${f.line ? `(${f.file}:${f.line})` : ""}`),
+    ...pathFrames(i, root),
   ];
   const pathHtml = pathItems.length || causeAt
     ? `<div class="card"><h3>${esc(sec(t.path))}</h3><ul class="path">${pathItems.map((p) => `<li>${esc(p)}</li>`).join("")}${causeAt ? `<li class="root">${esc(t.causeFrame)}: ${esc(causeAt)}</li>` : ""}</ul></div>`
@@ -301,6 +368,18 @@ export function renderLogHtml(i: FinalizeInput, gaps: Gaps, badge: Badge, lang: 
         ...s.evidence.filter((e) => e.file).map((e) =>
           `<div class="card"><h3>${esc(h.evidence)} &middot; <code>${esc(`${e.file}:${e.lines[0]}-${e.lines[1]}`)}</code></h3><p>${esc(e.why)}</p><div class="codebox">${quoteHtml(i.cwd, e.file, e.lines[0], e.lines[1], e.file === s.cause.file ? s.cause.line : undefined)}</div></div>`),
       ].join("\n    ");
+  const m = materials(i);
+  const refList = (xs: string[]) => `<ul class="refs">${xs.map((x) => `<li>${x}</li>`).join("") || "<li>&mdash;</li>"}</ul>`;
+  const materialsHtml = [
+    `<div class="card"><h3>${esc(t.materials)}</h3>`,
+    `<p class="dim">${esc(t.kbRef)}</p>`,
+    refList(m.kb.map((k) => `<code>${esc(k.name)}</code> <span class="dim">${esc(k.path)}</span>${k.used ? `<span class="badge pass">${esc(t.usedInFix)}</span>` : ""}`)),
+    `<p class="dim">${esc(t.rulesRef)}</p>`,
+    refList(m.rules.map((r) => `<code>${esc(r)}</code>`)),
+    `<p class="dim">${esc(t.filesRead)}</p>`,
+    refList(m.files.map((f) => `<code>${esc(f)}</code>`)),
+    `</div>`,
+  ].join("");
 
   // 3. Resolution: each change copyable on its own, plus the whole thing as markdown.
   const allText = [s.resolution.summary, ...s.resolution.changes.flatMap((c) => [`- ${c.file}: ${c.description}`, ...(c.code ? ["```" + extname(c.file).slice(1), c.code.trimEnd(), "```"] : [])])].join("\n");
@@ -358,13 +437,18 @@ export function renderLogHtml(i: FinalizeInput, gaps: Gaps, badge: Badge, lang: 
       `<dt>${esc(t.tools)}</dt><dd>${i.session.toolCalls}/${i.session.maxToolCalls} <span class="dim">&middot; ${esc(t.rounds)} ${i.session.rounds}</span></dd>`,
       `</dl>`,
     ].join("\n    "),
+    TARGET: [
+      `<section class="target" aria-label="${esc(sec(t.target))}"><span class="eyebrow">${esc(sec(t.target))}</span><dl class="runinfo">`,
+      ...targetRows(i, t).map(([k, v, mono]) => `<dt>${esc(k)}</dt><dd>${mono ? `<code>${esc(v)}</code>` : esc(v)}</dd>`),
+      `</dl></section>`,
+    ].join("\n    "),
     VERDICT: verdict,
     STATS: stats,
     TOC: [["analysis", h.analysis], ["cause", h.causeTitle], ["fix", h.fixTitle]].map(([id, label], n) => `<a href="#${id}">${n + 1}. ${esc(label)}</a>`).join(""),
     ANALYSIS_TITLE: esc(h.analysis),
     ANALYSIS: [pathHtml, obsHtml, rawHtml].filter(Boolean).join("\n    "),
     CAUSE_TITLE: esc(h.causeTitle),
-    CAUSE: causeHtml,
+    CAUSE: `${causeHtml}\n    ${materialsHtml}`,
     FIX_TITLE: esc(h.fixTitle),
     FIX: fixHtml,
     APPENDIX: appendix,
@@ -402,7 +486,8 @@ export function finalizeRun(runId: string, cwd: string): string {
   const badge = badgeFor(best.submission, judgments, best.attempt);
   const cfg = loadLogConfig(cwd);
   const toolCalls = Object.values(callLog[runId] ?? {}).reduce((a, b) => a + b, 0);
-  const reportInput: FinalizeInput = { plan, input, submission: best.submission, judgments, attempt: best.attempt, session: { toolCalls, maxToolCalls: cfg.maxToolCalls, rounds: Math.max(1, judgments.attempts.length, best.submission.round) }, cwd };
+  const reportInput: FinalizeInput = { plan, input, submission: best.submission, judgments, attempt: best.attempt, session: { toolCalls, maxToolCalls: cfg.maxToolCalls, rounds: Math.max(1, judgments.attempts.length, best.submission.round) }, cwd,
+    source: meta.source, kbShown: readRunJson<string[]>(runId, cwd, "kbShown.json") ?? [], readFiles };
   const lang = meta.language === "en" ? "en" : "ko";
   const now = new Date();
   const md = renderLogReport(reportInput, gaps, badge, lang, now);

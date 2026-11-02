@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { clearKbCache, frameworkKbDocs, kbClues, kbDocsForCode, kbPrefetch, kbSearch, resolveKbDoc, KB_DOC_MAX_CHARS } from "../framework-kb";
+import { clearKbCache, frameworkKbDocs, kbClues, kbConfigMisses, kbDocsForCode, kbPrefetch, kbSearch, resolveKbDoc, KB_DOC_MAX_CHARS } from "../framework-kb";
 
 const tmps: string[] = [];
 afterEach(() => {
@@ -380,5 +380,37 @@ describe("kbDocsForCode", () => {
     const code = '@FixedData(length = 20)\nprivate String a;\nif (x == null) throw PBOnlineException.create("1002");\nString s = new String();';
     expect(kbDocsForCode(d, code).map((x) => x.path.split("/").at(-1))).toEqual(["FixedData.md", "PBOnlineException.md"]);
     expect(kbDocsForCode(d, "int a = 1;")).toEqual([]);
+  });
+});
+
+describe("kbConfigMisses", () => {
+  const props = {
+    ".fico/kb/framework-site-ext/crypto/CubeOneProperties.md":
+      '# CubeOneProperties\n```java\n@ConfigurationProperties(prefix = "fico.crypto.cubeone")\npublic class CubeOneProperties {}\n```',
+  };
+  const yml = (code: string, file = "src/main/resources/application.yml") => [{ file, code }];
+
+  it("flags a config key that starts with the tail of a KB prefix but drops the rest, and names the bound key", () => {
+    const d = project(props);
+    const [miss, ...rest] = kbConfigMisses(d, yml("cubeone:\n  default-crypto-id: AES256\n  log-type: INFO\n"));
+    expect(rest).toHaveLength(1);
+    expect(miss).toMatchObject({ key: "cubeone.default-crypto-id", bound: "fico.crypto.cubeone.default-crypto-id", specifier: "CubeOneProperties" });
+    expect(miss.path).toBe(".fico/kb/framework-site-ext/crypto/CubeOneProperties.md");
+    expect(miss.content).toContain("fico.crypto.cubeone");
+  });
+
+  it("passes keys under the full prefix, unrelated keys, .properties under the prefix, and non-config files", () => {
+    const d = project(props);
+    expect(kbConfigMisses(d, yml("fico:\n  crypto:\n    cubeone:\n      default-crypto-id: AES256\n"))).toEqual([]);
+    expect(kbConfigMisses(d, yml("spring:\n  application:\n    name: x\n"))).toEqual([]);
+    expect(kbConfigMisses(d, yml("fico.crypto.cubeone.default-crypto-id=AES256\n", "application.properties"))).toEqual([]);
+    expect(kbConfigMisses(d, yml("cubeone:\n  x: 1\n", "src/main/java/A.java"))).toEqual([]);
+  });
+
+  it("reads .properties keys and survives a yaml fragment that does not parse", () => {
+    const d = project(props);
+    expect(kbConfigMisses(d, yml("# fix\ncubeone.default-crypto-id = AES256\n", "src/main/resources/application.properties")).map((m) => m.key))
+      .toEqual(["cubeone.default-crypto-id"]);
+    expect(kbConfigMisses(d, yml("cubeone: [unclosed\n"))).toEqual([]);
   });
 });

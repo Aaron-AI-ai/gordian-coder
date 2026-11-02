@@ -7,12 +7,14 @@
  * <target-dir>/f-log-cases/<id>.yaml 마다 target-dir에서 `opencode run --command f-log`를 돌려
  * .fico/report/f-log/<id>.md 를 만들고, 리포트 절을 정답과 대조해 PASS/FAIL 표를 찍는다.
  * FAIL 또는 리포트 없음이 하나라도 있으면 exit 1. --no-run 은 기존 리포트만 채점한다.
+ * 실행 중에는 f-log-cases/ 를 프로젝트 밖(tmpdir)으로 옮겨 분석 에이전트가 정답을 못 읽게 하고, 종료 시 되돌린다.
  * exit 2: 사용법 오류(target 누락) 또는 케이스 없음(f-log-cases/ 없거나 비어 있음).
  * <selector>는 콤마로 구분한 케이스 ID 목록이며, 각 항목에 `*` 와일드카드(접두어/구간 지정용,
  * 예 case-0*)를 쓸 수 있다: --case 'case-04-fixed-string-length-overflow,case-1*'
  * 설계: docs/superpowers/specs/2026-09-17-f-log-eval-testbed-design.md §6
  */
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 export interface GoldenCase {
@@ -25,6 +27,8 @@ export interface GoldenCase {
   fix_keywords_any: string[];
   /** Fragments the fix CODE must contain (one is enough). Absent → any code block passes. */
   fix_code_any?: string[];
+  /** Fragments the fix CODE must not contain: the plain-Java way the framework replaces. */
+  fix_forbid_any?: string[];
   rule?: string;
 }
 
@@ -52,23 +56,30 @@ function pick(sections: Record<string, string>, names: string[]): string {
   return names.map((n) => sections[n] ?? "").join("\n").toLowerCase();
 }
 
-/** A code block exists in the fix section and, when `expected` is given, one of its fragments
- * appears inside a code block — whitespace dropped so `length = 7` matches `length=7`.
- * An entry `re:<regex>` is matched against that same whitespace-free, lowercased code. */
-function fixCodeMatches(fix: string, expected?: string[]): boolean {
+/** The fix section's code blocks as written; null when there is no code block. */
+function fixCode(fix: string): string | null {
   const blocks = [...fix.matchAll(/```[^\n]*\n([\s\S]*?)```/g)].map((m) => m[1]);
-  if (blocks.length === 0) return false;
-  if (!expected?.length) return true;
-  const squash = (t: string) => t.replace(/\s+/g, "").toLowerCase();
-  const code = squash(blocks.join("\n"));
-  return expected.some((e) => (e.startsWith("re:") ? new RegExp(e.slice(3)).test(code) : code.includes(squash(e))));
+  return blocks.length ? blocks.join("\n") : null;
 }
+
+// whitespace dropped and lowercased so `length = 7` matches `length=7`
+const squash = (t: string) => t.replace(/\s+/g, "").toLowerCase();
+
+/** `raw:<regex>` is a multiline regex over the code as written (indentation matters, e.g. yml
+ * nesting); `re:<regex>` runs on the squashed code; any other entry is squashed and looked up as a
+ * substring. */
+const anyIn = (code: string, frags: string[]) =>
+  frags.some((e) =>
+    e.startsWith("raw:") ? new RegExp(e.slice(4), "m").test(code)
+    : e.startsWith("re:") ? new RegExp(e.slice(3)).test(squash(code))
+    : squash(code).includes(squash(e)));
 
 export function score(c: GoldenCase, md: string) {
   const s = splitSections(md);
   const where = pick(s, [...SECTIONS.summary, ...SECTIONS.path, ...SECTIONS.cause]);
   const fix = pick(s, SECTIONS.fix);
   const run = pick(s, SECTIONS.run);
+  const code = fixCode(fix);
   const has = (hay: string, needle: string) => hay.includes(needle.toLowerCase());
   return {
     // FQCN(예: java.lang.NullPointerException) 또는 단순 클래스명(NullPointerException) 중 하나만
@@ -77,7 +88,9 @@ export function score(c: GoldenCase, md: string) {
     cause_file: c.cause_files.some((f) => has(where, f) || has(where, basename(f))),
     cause_symbol: has(where, c.cause_symbol),
     fix: c.fix_keywords_any.some((k) => has(fix, k)),
-    fix_code: fixCodeMatches(fix, c.fix_code_any),
+    // a code block exists and, when fix_code_any is given, says one of its fragments
+    fix_code: code !== null && (!c.fix_code_any?.length || anyIn(code, c.fix_code_any)),
+    fix_forbid: !(code && c.fix_forbid_any?.length && anyIn(code, c.fix_forbid_any)),
     rule: c.rule ? has(run, c.rule) : true,
   };
 }
@@ -93,8 +106,7 @@ export function matchesCaseSelector(id: string, selector?: string): boolean {
   });
 }
 
-async function loadCases(target: string, selector?: string): Promise<GoldenCase[]> {
-  const dir = join(target, "f-log-cases");
+async function loadCases(dir: string, selector?: string): Promise<GoldenCase[]> {
   if (!existsSync(dir)) return [];
   const files = readdirSync(dir).filter((f) => f.endsWith(".yaml")).sort();
   const cases: GoldenCase[] = [];
@@ -105,6 +117,24 @@ async function loadCases(target: string, selector?: string): Promise<GoldenCase[
     cases.push({ id, ...y });
   }
   return cases;
+}
+
+/**
+ * Moves the golden set out of the project while f-log runs, so the analyst's
+ * file tools cannot read the answers. A set left at `away` by an interrupted
+ * run is moved back first. The returned restore is idempotent.
+ * ponytail: rename only, a tmpdir on another volume throws EXDEV; copy+delete if that bites.
+ */
+export function hideCases(target: string, away: string): () => void {
+  const dir = join(target, "f-log-cases");
+  if (!existsSync(dir) && existsSync(away)) renameSync(away, dir);
+  if (!existsSync(dir)) return () => {};
+  renameSync(dir, away);
+  let hidden = true;
+  return () => {
+    if (hidden) renameSync(away, dir);
+    hidden = false;
+  };
 }
 
 function runFLog(target: string, c: GoldenCase, report: string, model?: string): void {
@@ -128,7 +158,12 @@ async function main(): Promise<void> {
   const only = flag("--case");
   const noRun = args.includes("--no-run");
 
-  const cases = await loadCases(target, only);
+  const away = join(tmpdir(), `flog-eval-hidden-${basename(target)}`);
+  if (!noRun) {
+    process.on("exit", hideCases(target, away));
+    for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => process.exit(130));
+  }
+  const cases = await loadCases(noRun ? join(target, "f-log-cases") : away, only);
   if (!cases.length) { console.error(`no cases in ${join(target, "f-log-cases")}`); process.exit(2); }
 
   const rows: string[] = [];
@@ -137,14 +172,14 @@ async function main(): Promise<void> {
     const report = `.fico/report/f-log/${c.id}.md`;
     if (!noRun) runFLog(target, c, report, model);
     const full = join(target, report);
-    if (!existsSync(full)) { rows.push(`| ${c.id} | – | – | – | – | – | – | 리포트 없음 |`); failed++; continue; }
+    if (!existsSync(full)) { rows.push(`| ${c.id} | – | – | – | – | – | – | – | 리포트 없음 |`); failed++; continue; }
     const r = score(c, await Bun.file(full).text());
     const cell = (b: boolean) => (b ? "PASS" : "FAIL");
     if (Object.values(r).some((b) => !b)) failed++;
-    rows.push(`| ${c.id} | ${cell(r.exception)} | ${cell(r.cause_file)} | ${cell(r.cause_symbol)} | ${cell(r.fix)} | ${cell(r.fix_code)} | ${cell(r.rule)} | ${report} |`);
+    rows.push(`| ${c.id} | ${cell(r.exception)} | ${cell(r.cause_file)} | ${cell(r.cause_symbol)} | ${cell(r.fix)} | ${cell(r.fix_code)} | ${cell(r.fix_forbid)} | ${cell(r.rule)} | ${report} |`);
   }
-  console.log("\n| case | exception | cause_file | cause_symbol | fix | fix_code | rule | report |");
-  console.log("|---|---|---|---|---|---|---|---|");
+  console.log("\n| case | exception | cause_file | cause_symbol | fix | fix_code | fix_forbid | rule | report |");
+  console.log("|---|---|---|---|---|---|---|---|---|");
   for (const row of rows) console.log(row);
   console.log(`\n${cases.length - failed}/${cases.length} cases fully PASS`);
   process.exit(failed ? 1 : 0);

@@ -465,14 +465,71 @@ export function kbDocsForCode(cwd: string, code: string, max = KB_MAX_DOCS): KbD
   for (const name of names) {
     const entry = byStem.get(name);
     if (!entry || !entry.text.trim()) continue;
-    docs.push({
-      specifier: name,
-      path: relative(cwd, entry.path).split(sep).join(posix.sep),
-      content: entry.text.length > KB_DOC_MAX_CHARS ? `${entry.text.slice(0, KB_DOC_MAX_CHARS)}\n… (doc truncated)` : entry.text,
-    });
+    docs.push(toDoc(cwd, name, entry));
     if (docs.length >= max) break;
   }
   return docs;
+}
+
+function toDoc(cwd: string, specifier: string, entry: KbEntry): KbDoc {
+  return {
+    specifier,
+    path: relative(cwd, entry.path).split(sep).join(posix.sep),
+    content: entry.text.length > KB_DOC_MAX_CHARS ? `${entry.text.slice(0, KB_DOC_MAX_CHARS)}\n… (doc truncated)` : entry.text,
+  };
+}
+
+export interface KbConfigMiss extends KbDoc {
+  /** The key as the fix wrote it. */
+  key: string;
+  /** The key the KB class actually binds. */
+  bound: string;
+}
+
+const CONFIG_PREFIX = /@ConfigurationProperties\(\s*(?:(?:prefix|value)\s*=\s*)?"([^"]+)"/g;
+
+/** Dotted keys a config change sets: `a.b=c` lines in .properties, indentation
+ * nesting in yml. Leaves only — a parent key is a step on the way, not a setting.
+ * ponytail: indentation walk, not a YAML parser; flow maps and multi-line scalars are skipped. */
+function configKeys(file: string, code: string): string[] {
+  const keys: string[] = [];
+  if (/\.properties$/i.test(file)) {
+    for (const m of code.matchAll(/^\s*([\w.-]+)\s*[=:]/gm)) keys.push(m[1]);
+  } else if (/\.ya?ml$/i.test(file)) {
+    const stack: { indent: number; key: string }[] = [];
+    for (const line of code.split(/\r?\n/)) {
+      const m = /^(\s*)([\w.-]+)\s*:(?:\s|$)/.exec(line);
+      if (!m) continue;
+      while (stack.length && stack.at(-1)!.indent >= m[1].length) stack.pop();
+      stack.push({ indent: m[1].length, key: m[2] });
+      keys.push(stack.map((s) => s.key).join("."));
+    }
+  }
+  return keys.filter((k) => !keys.some((o) => o.startsWith(`${k}.`)));
+}
+
+/**
+ * Config keys in fix code that a KB `@ConfigurationProperties` class would bind
+ * only under its full prefix: `cubeone.default-crypto-id` against prefix
+ * `fico.crypto.cubeone` starts with the prefix's tail but never binds. Keys
+ * under the full prefix, or sharing no tail with any prefix, pass.
+ */
+export function kbConfigMisses(cwd: string, changes: { file: string; code?: string }[]): KbConfigMiss[] {
+  const keys = changes.flatMap((c) => configKeys(c.file, c.code ?? ""));
+  if (!keys.length) return [];
+  const prefixes = kbEntries(cwd).flatMap((e) => [...e.text.matchAll(CONFIG_PREFIX)].map((m) => ({ prefix: m[1], entry: e })));
+  const misses: KbConfigMiss[] = [];
+  for (const key of new Set(keys)) {
+    if (prefixes.some((p) => key.startsWith(`${p.prefix}.`))) continue;
+    for (const { prefix, entry } of prefixes) {
+      const segs = prefix.split(".");
+      const t = segs.slice(1).findIndex((_, i) => key.startsWith(`${segs.slice(i + 1).join(".")}.`));
+      if (t < 0) continue;
+      misses.push({ ...toDoc(cwd, entry.stem, entry), key, bound: `${segs.slice(0, t + 1).join(".")}.${key}` });
+      break;
+    }
+  }
+  return misses;
 }
 
 // ── prefetch ─────────────────────────────────────────────────────

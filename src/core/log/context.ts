@@ -104,6 +104,13 @@ export function shownKbDocs(text: string, plan: LogPlan): string[] {
 /** Which suspects actually survived into the rendered text (budget cuts can
  * drop the "나머지 용의 파일" section, in whole or in part) — these count as
  * "seen" for the gap check even though the analyst never re-`f_log_read` them. */
+/** KB pages the analyst saw, union'd across rounds and the submit-time KB
+ * bounce — the report lists them as the materials the analysis rests on. */
+export function recordKbShown(runId: string, cwd: string, paths: string[]): void {
+  const prev = readRunJson<string[]>(runId, cwd, "kbShown.json") ?? [];
+  writeRunJson(runId, cwd, "kbShown.json", [...new Set([...prev, ...paths])]);
+}
+
 export function injectedSuspects(text: string, suspects: Suspect[]): string[] {
   return suspects.filter((s) => text.includes(`### ${s.path}`)).map((s) => s.path);
 }
@@ -170,6 +177,7 @@ export function logContext(runId: string, sessionId: string, cwd: string): strin
   });
   writeRunText(runId, cwd, `context-${round}.md`, text);
   st.kbShown = shownKbDocs(text, plan);
+  recordKbShown(runId, cwd, st.kbShown);
   // Finalize needs which suspects were actually shown, union'd across rounds
   // (a rework round's "이전 라운드와 동일" rules/KB replacement still injects suspects).
   const prevInjected = readRunJson<string[]>(runId, cwd, "injected.json") ?? [];

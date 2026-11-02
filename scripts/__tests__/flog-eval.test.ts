@@ -1,5 +1,8 @@
-import { describe, expect, test } from "bun:test";
-import { matchesCaseSelector, score, splitSections, type GoldenCase } from "../flog-eval";
+import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { hideCases, matchesCaseSelector, score, splitSections, type GoldenCase } from "../flog-eval";
 
 const REPORT = `# f-log 리포트
 
@@ -40,6 +43,10 @@ const CASE: GoldenCase = {
   rule: "npe",
 };
 
+const tmps: string[] = [];
+const tmp = (prefix: string) => { const d = mkdtempSync(join(tmpdir(), prefix)); tmps.push(d); return d; };
+afterEach(() => { while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true }); });
+
 describe("flog-eval", () => {
   test("splitSections keys by '## ' header and keeps body until the next header", () => {
     const s = splitSections(REPORT);
@@ -49,7 +56,7 @@ describe("flog-eval", () => {
   });
 
   test("score passes every check on a matching report", () => {
-    expect(score(CASE, REPORT)).toEqual({ exception: true, cause_file: true, cause_symbol: true, fix: true, fix_code: true, rule: true });
+    expect(score(CASE, REPORT)).toEqual({ exception: true, cause_file: true, cause_symbol: true, fix: true, fix_code: true, fix_forbid: true, rule: true });
   });
 
   test("cause_file accepts a basename-only mention, case-insensitively", () => {
@@ -92,10 +99,31 @@ describe("flog-eval", () => {
     expect(score({ ...CASE, fix_code_any: ['re:create\\("\\d{5}"'] }, REPORT).fix_code).toBe(false);
   });
 
+  // Framework style: the fix must not fall back to the plain-Java way the framework replaces.
+  test("fix_forbid_any fails when a forbidden fragment appears in fix code, prose and @-prefixed lookalikes aside", () => {
+    expect(score({ ...CASE, fix_forbid_any: ["new RuntimeException"] }, REPORT).fix_forbid).toBe(true);
+    expect(score({ ...CASE, fix_forbid_any: ["throw PBOnlineException .create("] }, REPORT).fix_forbid).toBe(false);
+    // prose outside the code block does not count
+    expect(score({ ...CASE, fix_forbid_any: ["null 검사"] }, REPORT).fix_forbid).toBe(true);
+    const ext = REPORT.replace("if (row == null)", "@ExtTransactional\nif (row == null)");
+    expect(score({ ...CASE, fix_forbid_any: ["@Transactional"] }, ext).fix_forbid).toBe(true);
+    expect(score({ ...CASE, fix_forbid_any: ['re:row==null\\)\\{throw'] }, REPORT).fix_forbid).toBe(false);
+  });
+
+  // Squashing drops indentation, so a top-level yml key and a nested one look the same; raw: sees lines.
+  test("a raw: entry is a multiline regex over the code as written", () => {
+    const yml = (body: string) => REPORT.replace(/```java[\s\S]*?```/, "```yml\n" + body + "```");
+    const top = yml("fico:\n  crypto:\n    enabled: true\ncubeone:\n  default-crypto-id: ACNT\n");
+    const nested = yml("fico:\n  crypto:\n    enabled: true\n    cubeone:\n      default-crypto-id: ACNT\n");
+    expect(score({ ...CASE, fix_forbid_any: ["raw:^cubeone:"] }, top).fix_forbid).toBe(false);
+    expect(score({ ...CASE, fix_forbid_any: ["raw:^cubeone:"] }, nested).fix_forbid).toBe(true);
+    expect(score({ ...CASE, fix_code_any: ["raw:^\\s+cubeone:"] }, nested).fix_code).toBe(true);
+  });
+
   test("rule check passes when the case declares no rule; english headers are recognised", () => {
     const en = `## Summary\nNPE\n## Entry point → cause path\nTLABQ001Service.java tlabq001\n## Cause and evidence\nnull\n## Resolution\nadd a null check\n## Run info\n- rules: none\n`;
     const { rule, ...rest } = CASE;
-    expect(score(rest, en)).toEqual({ exception: false, cause_file: true, cause_symbol: true, fix: true, fix_code: false, rule: true });
+    expect(score(rest, en)).toEqual({ exception: false, cause_file: true, cause_symbol: true, fix: true, fix_code: false, fix_forbid: true, rule: true });
   });
 
   test("matchesCaseSelector: comma-separated exact ids", () => {
@@ -118,5 +146,36 @@ describe("flog-eval", () => {
 
   test("matchesCaseSelector: no selector (undefined) matches everything", () => {
     expect(matchesCaseSelector("case-99-anything", undefined)).toBe(true);
+  });
+
+  test("hideCases moves f-log-cases/ out of the project and restore puts it back once", () => {
+    const target = tmp("flog-hide-");
+    const away = tmp("flog-away-");
+    mkdirSync(join(target, "f-log-cases"));
+    writeFileSync(join(target, "f-log-cases", "case-01.yaml"), "log: x");
+    const restore = hideCases(target, join(away, "cases"));
+    expect(existsSync(join(target, "f-log-cases"))).toBe(false);
+    expect(existsSync(join(away, "cases", "case-01.yaml"))).toBe(true);
+    restore();
+    restore();
+    expect(existsSync(join(target, "f-log-cases", "case-01.yaml"))).toBe(true);
+  });
+
+  test("hideCases first recovers a set left hidden by an interrupted run", () => {
+    const target = tmp("flog-hide-");
+    const away = join(tmp("flog-away-"), "cases");
+    mkdirSync(away);
+    writeFileSync(join(away, "case-01.yaml"), "log: x");
+    const restore = hideCases(target, away);
+    expect(existsSync(join(away, "case-01.yaml"))).toBe(true);
+    restore();
+    expect(existsSync(join(target, "f-log-cases", "case-01.yaml"))).toBe(true);
+  });
+
+  test("hideCases is a no-op when there is no golden set anywhere", () => {
+    const target = tmp("flog-hide-");
+    const away = join(tmp("flog-away-"), "cases");
+    hideCases(target, away)();
+    expect(existsSync(away) || existsSync(join(target, "f-log-cases"))).toBe(false);
   });
 });

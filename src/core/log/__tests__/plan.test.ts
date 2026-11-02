@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseStackTrace } from "../parse";
 import { classifyFrames, rankSuspects, findEntry, buildObservations, searchStackless, planLog, MAX_SUSPECTS, MAX_OBSERVATIONS, parseLogCommandArgs } from "../plan";
-import { readRunJson, runDir } from "../run-store";
+import { readRunJson, runDir, type RunMeta } from "../run-store";
 import type { LogPlan } from "../plan";
 
 function repo(): string {
@@ -123,6 +123,13 @@ describe("plan", () => {
     expect(plan.ruleFiles).toContain("fico_error_code.md");
     expect(out).toContain("f-log-analyst");
     expect(planLog({ log: LOG }, cwd)).toContain(id); // idempotent within the window
+  });
+
+  test("planLog: a --file input records its path so the report can name the analyzed log", () => {
+    mkdirSync(join(cwd, "logs"), { recursive: true });
+    writeFileSync(join(cwd, "logs/src-test.log"), `${LOG}\n# file`);
+    const id = /runId[:=]\s*(\S+)/.exec(planLog({ file: "logs/src-test.log" }, cwd))![1];
+    expect(readRunJson<RunMeta>(id, cwd, "run.json")!.source).toBe("logs/src-test.log");
   });
 
   test("planLog: no exception in input → refusal, no run created", () => {
