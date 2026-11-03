@@ -7,7 +7,7 @@
  * submission when the model simply stops (spec §13 #12).
  */
 import { z } from "zod";
-import { capped, strayHan } from "../review/contract";
+import { capped, describeScripts, strayScript } from "../review/contract";
 import { kbConfigMisses, kbDocsForCode, type KbDoc } from "../kb/framework-kb";
 import { KB_DOC_MAX_CHARS, recordKbShown } from "./context";
 import { normalizeRepoPath } from "../review/imports";
@@ -181,7 +181,7 @@ export function submitLog(payload: unknown, sessionId: string): string {
     return store(st, sub, sessionId, { forced: " — after repeated evidence on unread files" });
   }
 
-  // Gate 3: Chinese characters slipped into the prose. Only text the analyst
+  // Gate 3: words of another script (Chinese, Arabic, Cyrillic…) slipped into the prose. Only text the analyst
   // wrote (observation strings are verbatim log text). Past the cap it is stored
   // as written, not forced — the analysis is sound, and finalize's report check
   // still names the characters.
@@ -193,9 +193,9 @@ export function submitLog(payload: unknown, sessionId: string): string {
     ...sub.observations.map((o) => o.how ?? ""),
     ...sub.alternatives.flatMap((a) => [a.hypothesis, a.rejectedBecause]),
   ];
-  const han = [...new Set(prose.flatMap((t) => strayHan(t, language)))];
-  if (han.length) {
-    const bounce = reject(`Chinese characters in your text: ${han.slice(0, 10).join(", ")}. Rewrite those words in ${languageName(language)} and resubmit.`);
+  const foreign = [...new Set(prose.flatMap((t) => strayScript(t, language)))];
+  if (foreign.length) {
+    const bounce = reject(`Non-${languageName(language)} script in your text: ${describeScripts(foreign.slice(0, 10))}. Rewrite those words in ${languageName(language)} and resubmit.`);
     if (bounce) return bounce;
   }
 

@@ -7,6 +7,7 @@
  * round, so a stale prompt would carry a token that no longer validates.
  */
 
+import { languageName } from "../contract";
 import { buildReviewPrompt, targetVars } from "../evidence/template";
 import { fileRead } from "../tools/read";
 import { reviewEvidence } from "../evidence/dossier";
@@ -16,18 +17,14 @@ import { dbgOnce } from "../debug";
 import { currentFile, otherFiles, type ReviewState } from "./state";
 import { renderExtraRules } from "../evidence/rubric";
 
-const LANG_NAMES: Record<string, string> = { ko: "Korean", en: "English", ja: "Japanese" };
+export { languageName };
 
-export function languageName(code: string): string {
-  return LANG_NAMES[code] ?? code;
-}
-
-/** Small models drift into Chinese mid-sentence; say it outright. Empty for
- * Japanese/Chinese, where Han is the language itself. */
-export function noHanLine(code: string): string {
+/** Small models drift into Chinese — or Russian, Arabic, Japanese — mid-sentence;
+ * say it outright. Empty for Japanese/Chinese, where Han is the language itself. */
+export function scriptLine(code: string): string {
   return code.startsWith("zh") || code.startsWith("ja")
     ? ""
-    : ` Never write Chinese characters (Hanzi) — use ${languageName(code)} words only.`;
+    : ` Write only in ${languageName(code)} — no Hanzi, kana, Cyrillic, Arabic or other scripts.`;
 }
 
 /** The per-file review prompt for the target currently under review. */
@@ -104,6 +101,6 @@ export function reviewPromptFor(st: ReviewState): string | null {
 export function languageInstructionFor(st: ReviewState): string {
   return (
     `Write every finding's \`message\` and \`rule\` text in ${languageName(st.language)}. ` +
-    `Keep enum values (category, severity) and code identifiers as-is.${noHanLine(st.language)}`
+    `Keep enum values (category, severity) and code identifiers as-is.${scriptLine(st.language)}`
   );
 }

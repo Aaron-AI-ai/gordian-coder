@@ -6,7 +6,7 @@
  */
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join } from "node:path";
-import { reportHanWarning } from "../review/contract";
+import { reportScriptWarning } from "../review/contract";
 import { esc, fill } from "../review/report/html";
 import { htmlReportPath } from "../review/report/output";
 import { readFileAt, renderFileContent } from "../review/tools/read";
@@ -517,9 +517,9 @@ export function finalizeRun(runId: string, cwd: string): string {
     ...fixLine(best.submission),
     `Gaps: ${g === "0 / 0 / 0" ? "none" : `${g} (unexplained exceptions / unread suspects / unresolved observations)`}`,
     ...(collisionNote ? [collisionNote] : []),
-    // Post-write check: Gate 3 bounces Chinese characters, but past its cap
+    // Post-write check: Gate 3 bounces foreign-script words, but past its cap
     // they are stored as written — the reader must hear about it here.
-    ...[reportHanWarning(md, lang)].filter(Boolean),
+    ...[reportScriptWarning(md, lang)].filter(Boolean),
   ].join("\n");
   writeRunJson(runId, cwd, "finalize.json", { response, reportPath: rel, badge, gaps } satisfies FinalizeRecord);
   return response;

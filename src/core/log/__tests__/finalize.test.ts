@@ -243,7 +243,7 @@ describe("finalizeRun end-to-end", () => {
     expect(out).toContain("f-log finished — PASS");
     expect(out).toContain(`log-${runId}.md`);
     expect(out).toContain("Gaps: none");
-    expect(out).not.toContain("Chinese characters");
+    expect(out).not.toContain("script in report prose");
     // The relayed summary carries the resolution too, on ONE line, with the files to change.
     expect(out).toContain("Fix (root-cause): map.get(k) 결과가 null이면 빈 값을 반환하도록 가드한다 [src/a/Svc.java, src/a/Other.java]");
     const path = join(cwd, ".fico/report/f-log/", `log-${runId}.md`);
@@ -296,7 +296,7 @@ describe("finalizeRun end-to-end", () => {
     expect(readFileSync(join(cwd, "out/same.md"), "utf8")).toContain(first.runId);
   });
 
-  test("a report whose prose still carries Chinese characters gets a warning line naming them", () => {
+  test("a report whose prose still carries a foreign script gets a warning line naming it", () => {
     const cwd = mkdtempSync(join(tmpdir(), "f-log-fin-han-"));
     mkdirSync(join(cwd, "src/a"), { recursive: true });
     writeFileSync(join(cwd, "src/a/Svc.java"), "class Svc {\n  void run() { map.get(k).size(); }\n}\n");
@@ -312,8 +312,8 @@ describe("finalizeRun end-to-end", () => {
     stored.cause.mechanism = "k가 返回되지 않음";
     writeFileSync(subPath, JSON.stringify(stored));
     const out = finalizeRun(runId, cwd);
-    expect(out).toContain("Chinese characters in report prose");
-    expect(out).toContain("返回");
+    expect(out).toContain("Non-Korean script in report prose");
+    expect(out).toContain("返回 (Han)");
   });
 
   test("no submission yet → refusal naming the analyst", () => {
