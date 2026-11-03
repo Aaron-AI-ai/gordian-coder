@@ -260,6 +260,14 @@ describe("submitLog constant-into-framework-call check on fix code", () => {
     expect(submitLog(withConst(runId, st.submitToken, 'static final String LABEL = "mobile";'), "s-const2")).toContain("✅");
   });
 
+  test("a long KB page bounces with the passage on the method the constant reaches, not just its head", () => {
+    const cwd = constRepo();
+    const filler = Array.from({ length: 200 }, (_, n) => `- note ${n} on padding`).join("\n");
+    writeFileSync(join(cwd, ".fico/kb/core/utils/StringUtils.md"), `# StringUtils\n${filler}\n- masking(str, types): DEEPRULE "1" or "2"\n${filler}`);
+    const { runId, st } = start(cwd, "s-const4");
+    expect(submitLog(withConst(runId, st.submitToken, 'static final String MASK_TYPE = "9";'), "s-const4")).toContain('DEEPRULE "1" or "2"');
+  });
+
   test("a change pointing outside the repo is never read", () => {
     const cwd = constRepo();
     const outside = mkdtempSync(join(tmpdir(), "f-log-submit-out-"));

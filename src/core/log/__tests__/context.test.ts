@@ -68,6 +68,16 @@ describe("renderContext", () => {
     expect(out).toContain(`K${KB_MAX_DOCS}, K${KB_MAX_DOCS + 1}`);
   });
 
+  test("KB: a long page shows the passage on the method the suspect code calls, not only its head", () => {
+    const c = repo();
+    writeFileSync(join(c, "src/a/Svc.java"), Array.from({ length: 120 }, (_, i) => (i === 59 ? "return StringUtils.masking(p, MASK_TYPE);" : `line ${i + 1}`)).join("\n"));
+    const filler = Array.from({ length: 200 }, (_, n) => `- note ${n} on padding`).join("\n");
+    const kbDocs = [{ specifier: "x.StringUtils", path: ".fico/kb/utils/StringUtils.md", content: `# StringUtils\n${filler}\n- masking(str, types): MASKRULE "1" or "2"\n${filler}` }];
+    const base = input(c);
+    const out = renderContext({ ...base, plan: { ...base.plan, kbDocs } });
+    expect(out).toContain('MASKRULE "1" or "2"');
+  });
+
   test("raw log is trimmed to RAW_MAX_CHARS with a pointer to input.log", () => {
     const raw = LOG + "x".repeat(RAW_MAX_CHARS * 2);
     const out = renderContext(input(cwd, { raw }));

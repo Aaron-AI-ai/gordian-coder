@@ -471,6 +471,46 @@ export function kbDocsForCode(cwd: string, code: string, max = KB_MAX_DOCS): KbD
   return docs;
 }
 
+const EXCERPT_HEAD_CHARS = 800;
+const EXCERPT_BEFORE = 200;
+const EXCERPT_AFTER = 700;
+
+/**
+ * `doc` within `max` chars for a reader who calls it from `code`: the page's
+ * head, then the passages naming a method `code` calls on the page's class
+ * (`StringUtils.masking(` → `masking(`), in page order. A page cut at its head
+ * hides exactly that API when it sits deep in the page (case-27: masking's
+ * allowed types). Reads the full page from the KB, since `doc.content` may
+ * already be cut at KB_DOC_MAX_CHARS. Nothing named → the head alone.
+ */
+export function kbExcerpt(cwd: string, doc: KbDoc, code: string, max: number): string {
+  const text = kbEntries(cwd).find((e) => relative(cwd, e.path).split(sep).join(posix.sep) === doc.path)?.text ?? doc.content;
+  if (text.length <= max) return text;
+  const cls = posix.basename(doc.path, ".md");
+  const methods = [...new Set([...code.matchAll(new RegExp(`\\b${cls}\\.(\\w+)\\s*\\(`, "g"))].map((m) => m[1]))];
+  const hits = methods.flatMap((m) => [...text.matchAll(new RegExp(`\\b${m}\\s*\\(`, "g"))].map((h) => h.index!)).sort((a, b) => a - b);
+  if (!hits.length) return `${text.slice(0, max - 20)}\n… (KB 문서 일부)`;
+  const head = text.slice(0, EXCERPT_HEAD_CHARS);
+  // windows around each hit, widened to whole lines when the line ends are near, merged when they touch
+  const windows: [number, number][] = [];
+  for (const h of hits) {
+    const ls = text.lastIndexOf("\n", h - EXCERPT_BEFORE) + 1;
+    const start = Math.max(EXCERPT_HEAD_CHARS, ls >= h - 2 * EXCERPT_BEFORE ? ls : h - EXCERPT_BEFORE);
+    const nl = text.indexOf("\n", h + EXCERPT_AFTER);
+    const end = nl >= 0 && nl <= h + 2 * EXCERPT_AFTER ? nl : Math.min(text.length, h + EXCERPT_AFTER);
+    const last = windows.at(-1);
+    if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+    else windows.push([start, end]);
+  }
+  let out = head;
+  for (const [s, e] of windows) {
+    const room = max - out.length - 30;
+    if (room <= 0) break;
+    out += `\n…\n${text.slice(s, s + Math.min(e - s, room))}`;
+  }
+  return `${out}\n… (KB 문서 발췌)`;
+}
+
 function toDoc(cwd: string, specifier: string, entry: KbEntry): KbDoc {
   return {
     specifier,

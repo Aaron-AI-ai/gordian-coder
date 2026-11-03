@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { clearKbCache, frameworkKbDocs, kbClues, kbConfigMisses, kbDocsForCode, kbPrefetch, kbSearch, resolveKbDoc, KB_DOC_MAX_CHARS } from "../framework-kb";
+import { clearKbCache, frameworkKbDocs, kbClues, kbConfigMisses, kbDocsForCode, kbExcerpt, kbPrefetch, kbSearch, resolveKbDoc, KB_DOC_MAX_CHARS } from "../framework-kb";
 
 const tmps: string[] = [];
 afterEach(() => {
@@ -412,5 +412,40 @@ describe("kbConfigMisses", () => {
     expect(kbConfigMisses(d, yml("# fix\ncubeone.default-crypto-id = AES256\n", "src/main/resources/application.properties")).map((m) => m.key))
       .toEqual(["cubeone.default-crypto-id"]);
     expect(kbConfigMisses(d, yml("cubeone: [unclosed\n"))).toEqual([]);
+  });
+});
+
+// A long page cut at its head hides the API the code calls (case-27: StringUtils.masking's
+// allowed types sat past the cap); keep the head and add the passages naming the called methods.
+describe("kbExcerpt", () => {
+  const doc = (content: string) => ({ specifier: "kr.co.openlabs.fico.framework.utils.StringUtils", path: ".fico/kb/core/utils/StringUtils.md", content });
+  const filler = (n: number) => Array.from({ length: n }, (_, i) => `- line ${i} about padding and trimming`).join("\n");
+  const page = `# StringUtils\nINTRO\n${filler(150)}\n- masking(String str, String types): types "1" or "2" only\n${filler(150)}\nTAIL`;
+
+  it("returns a page within the cap untouched", () => {
+    expect(kbExcerpt("/nonexistent", doc("short"), "StringUtils.masking(p, T)", 100)).toBe("short");
+  });
+
+  it("keeps the head and the passage naming a method the code calls on that class, within the cap", () => {
+    const out = kbExcerpt("/nonexistent", doc(page), 'return StringUtils.masking(phoneNo, PHONE_MASK_TYPE);', 2_500);
+    expect(out).toContain("INTRO");
+    expect(out).toContain('masking(String str, String types): types "1" or "2" only');
+    expect(out).not.toContain("TAIL");
+    expect(out.length).toBeLessThanOrEqual(2_500);
+  });
+
+  it("matches the class in an FQCN stack frame and falls back to the head when nothing is named", () => {
+    expect(kbExcerpt("/nonexistent", doc(page), "kr.co.openlabs.fico.framework.utils.StringUtils.masking(", 2_500)).toContain('"1" or "2" only');
+    const head = kbExcerpt("/nonexistent", doc(page), "OtherUtils.masking(x)", 2_500);
+    expect(head).toContain("INTRO");
+    expect(head).not.toContain('"1" or "2" only');
+    expect(head.length).toBeLessThanOrEqual(2_500);
+  });
+
+  it("reads the page in full from the KB, past the copy toDoc already cut at KB_DOC_MAX_CHARS", () => {
+    const long = `# StringUtils\nINTRO\n${"x".repeat(KB_DOC_MAX_CHARS + 500)}\n- masking(String str, String types): types "1" or "2" only\n`;
+    const d = project({ ".fico/kb/fico-fwk-core/utils/StringUtils.md": long });
+    const cut = { ...doc(""), path: ".fico/kb/fico-fwk-core/utils/StringUtils.md", content: `${long.slice(0, KB_DOC_MAX_CHARS)}\n… (doc truncated)` };
+    expect(kbExcerpt(d, cut, "StringUtils.masking(p, T)", 2_500)).toContain('"1" or "2" only');
   });
 });

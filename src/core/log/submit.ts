@@ -8,7 +8,7 @@
  */
 import { z } from "zod";
 import { capped, strayHan } from "../review/contract";
-import { kbConfigMisses, kbDocsForCode, type KbDoc } from "../kb/framework-kb";
+import { kbConfigMisses, kbDocsForCode, kbExcerpt, type KbDoc } from "../kb/framework-kb";
 import { KB_DOC_MAX_CHARS, recordKbShown } from "./context";
 import { normalizeRepoPath } from "../review/imports";
 import { readFileAt } from "../review/tools/read";
@@ -212,7 +212,7 @@ export function submitLog(payload: unknown, sessionId: string): string {
       const bounce = reject([
         `resolution.changes[].code uses framework classes whose KB guide you have not seen: ${unseen.map((d) => d.specifier).join(", ")}.`,
         "Check each call/annotation against the page below (factory and constructor signatures, required arguments, error-code rules), correct the code, and resubmit the full payload.",
-        ...unseen.map((d) => `### ${d.specifier} (${d.path})\n${d.content.slice(0, KB_DOC_MAX_CHARS)}`),
+        ...unseen.map((d) => `### ${d.specifier} (${d.path})\n${kbExcerpt(st.cwd, d, code, KB_DOC_MAX_CHARS)}`),
       ].join("\n\n"));
       if (bounce) return bounce;
     }
@@ -232,7 +232,7 @@ export function submitLog(payload: unknown, sessionId: string): string {
         "resolution.changes[].code changes constants that are passed to framework methods. Check each new value against what the KB page says that method accepts:",
         ...uses.map((u) => `- \`${u.decl}\` → \`${u.use}\` (${u.where})`),
         "Correct the value if the page does not list it, and resubmit the full payload.",
-        ...pages.map((d) => `### ${d.specifier} (${d.path})\n${d.content.slice(0, KB_DOC_MAX_CHARS)}`),
+        ...pages.map((d) => `### ${d.specifier} (${d.path})\n${kbExcerpt(st.cwd, d, uses.map((u) => u.use).join("\n"), KB_DOC_MAX_CHARS)}`),
       ].join("\n"));
       if (bounce) return bounce;
     }
@@ -251,7 +251,7 @@ export function submitLog(payload: unknown, sessionId: string): string {
         "resolution.changes[].code sets config keys that no KB @ConfigurationProperties class binds — Spring ignores them:",
         ...misses.map((m) => `- \`${m.key}\` → ${m.specifier} binds \`${m.bound}\``),
         "Fix the key paths (or explain in the description why the short key is right), and resubmit the full payload.",
-        ...pages.map((m) => `### ${m.specifier} (${m.path})\n${m.content.slice(0, KB_DOC_MAX_CHARS)}`),
+        ...pages.map((m) => `### ${m.specifier} (${m.path})\n${kbExcerpt(st.cwd, m, "", KB_DOC_MAX_CHARS)}`),
       ].join("\n"));
       if (bounce) return bounce;
     }
