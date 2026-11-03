@@ -189,6 +189,15 @@ describe(`kbSearch (${kbSearchMode})`, () => {
     expect(out).toContain("Foo3.md"); // listed
     expect(out).not.toContain("c-body-unique"); // beyond the full-text hits
   });
+
+  it("returns as many full pages as kbSearchFull asks for", () => {
+    const files: Record<string, string> = {};
+    for (let i = 1; i <= 6; i++) files[`.fico/kb/fico-fwk-core/a/Foo${i}.md`] = ext(`Foo${i}`, "foo", [], `foo body-${i}`);
+    const fullBodies = (out: string) => [...out.matchAll(/foo body-\d/g)].length;
+    expect(fullBodies(kbSearch(projectFor(files), "foo"))).toBe(2);
+    const five = project(files, { kbSearch: kbSearchMode, kbSearchFull: 5 });
+    expect(fullBodies(kbSearch(five, "foo"))).toBe(5);
+  });
 });
 
 describe("kbSearch ranking: bm25 vs keyword", () => {

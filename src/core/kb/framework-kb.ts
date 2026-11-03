@@ -31,6 +31,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, posix, relative, sep } from "node:path";
 import { loadConfig } from "../review/config";
+import { dbg } from "../review/debug";
 
 /** Per-document cap. KB pages are hand-written prose; a runaway one must not
  * crowd out the code under review. */
@@ -208,8 +209,8 @@ interface KbEntry extends EntryFields {
   lower: EntryFields & { body: string };
   /** The page as written — returned in full, and tokenized for bm25. */
   text: string;
-  /** bm25 view per field, built on the first bm25 search. */
-  terms?: Record<Bm25Field, { tf: Map<string, number>; length: number }>;
+  /** bm25 view per field, built on the first bm25 search with `split`. */
+  terms?: { split: HangulSplit; fields: Record<Bm25Field, { tf: Map<string, number>; length: number }> };
 }
 
 /** Parsed pages by absolute path, reused while the file's mtime holds. A search
@@ -341,46 +342,55 @@ const BM25_FIELDS = Object.keys(BM25_WEIGHTS) as Bm25Field[];
  * Lowercased tokens of `text`: each identifier whole AND, when camelCase, its
  * parts, acronym prefixes included (PBTransactionAspect → pb, transaction,
  * aspect) — "SimpleDateFormat" meets both the identifier and prose about dates,
- * while "format" no longer matches inside "FormatterUtils". Hangul words also
- * yield bigrams so 트랜잭션 meets 트랜잭션을.
+ * while "format" no longer matches inside "FormatterUtils". Hangul words go
+ * through `split` instead (bigrams by default, so 트랜잭션 meets 트랜잭션을).
  */
-function tokens(text: string): string[] {
+function tokens(text: string, split: HangulSplit = hangulBigrams): string[] {
   const out: string[] = [];
   for (const raw of text.split(/[^\p{L}\p{N}]+/u)) {
     const whole = raw.toLowerCase();
-    if (whole.length >= 2) out.push(whole);
+    if (/\p{Script=Hangul}/u.test(whole)) out.push(...split(whole));
+    else if (whole.length >= 2) out.push(whole);
     const parts = raw
       .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
       .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2") // acronym prefix: PBTransaction → PB Transaction
       .toLowerCase()
       .split(" ");
     if (parts.length > 1) for (const p of parts) if (p.length >= 2) out.push(p);
-    if (whole.length > 2 && /\p{Script=Hangul}/u.test(whole)) {
-      for (let i = 0; i + 2 <= whole.length; i++) out.push(whole.slice(i, i + 2));
-    }
   }
   return out;
 }
 
-function bm25Terms(entry: KbEntry): NonNullable<KbEntry["terms"]> {
-  if (entry.terms) return entry.terms;
+/** Tokens of one lowercased word that contains Hangul. */
+export type HangulSplit = (word: string) => string[];
+
+/** The word whole plus its two-syllable slices. */
+export const hangulBigrams: HangulSplit = (whole) => {
+  const out = whole.length >= 2 ? [whole] : [];
+  if (whole.length > 2) for (let i = 0; i + 2 <= whole.length; i++) out.push(whole.slice(i, i + 2));
+  return out;
+};
+
+function bm25Terms(entry: KbEntry, split: HangulSplit): NonNullable<KbEntry["terms"]>["fields"] {
+  if (entry.terms?.split === split) return entry.terms.fields;
   // body without the frontmatter, so a name is counted in its own field only
   const body = entry.text.replace(/^---\r?\n[\s\S]*?\r?\n---/, "");
-  const terms = {} as NonNullable<KbEntry["terms"]>;
+  const fields = {} as NonNullable<KbEntry["terms"]>["fields"];
   for (const field of BM25_FIELDS) {
-    const list = tokens(field === "body" ? body : entry[field]);
+    const list = tokens(field === "body" ? body : entry[field], split);
     const tf = new Map<string, number>();
     for (const t of list) tf.set(t, (tf.get(t) ?? 0) + 1);
-    terms[field] = { tf, length: list.length };
+    fields[field] = { tf, length: list.length };
   }
-  return (entry.terms = terms);
+  entry.terms = { split, fields };
+  return fields;
 }
 
 /** `entries` ranked by per-field Okapi BM25 over whole tokens, best first. */
-function rankBm25(entries: KbEntry[], query: string): KbEntry[] {
-  const words = [...new Set(tokens(query))];
+function rankBm25(entries: KbEntry[], query: string, split: HangulSplit = hangulBigrams): KbEntry[] {
+  const words = [...new Set(tokens(query, split))];
   if (words.length === 0 || entries.length === 0) return [];
-  const docs = entries.map((entry) => ({ entry, terms: bm25Terms(entry) }));
+  const docs = entries.map((entry) => ({ entry, terms: bm25Terms(entry, split) }));
   const avgLength = Object.fromEntries(
     BM25_FIELDS.map((f) => [f, docs.reduce((sum, d) => sum + d.terms[f].length, 0) / docs.length || 1])
   ) as Record<Bm25Field, number>;
@@ -409,6 +419,14 @@ function rankBm25(entries: KbEntry[], query: string): KbEntry[] {
     .map((s) => s.entry);
 }
 
+/** Absolute paths of the KB pages `query` finds, best first — for measuring
+ * rankers offline (scripts/kb-search-bench.ts). */
+export function rankKbPaths(cwd: string, query: string, mode: "keyword" | "bm25", split?: HangulSplit): string[] {
+  const entries = kbEntries(cwd);
+  const ranked = mode === "bm25" ? rankBm25(entries, query, split) : rankKbDocs(entries, query).map((r) => r.entry);
+  return ranked.map((e) => e.path);
+}
+
 /**
  * Search the configured framework KB directories and return the best pages.
  *
@@ -429,20 +447,23 @@ export function kbSearch(cwd: string, query: string): string {
   if (!configured) return "No framework KB is configured for this project.";
   if (queryWords(query).length === 0) return "No KB documents match: give at least one keyword.";
 
+  const config = loadConfig(cwd);
   const entries = kbEntries(cwd);
   const ranked =
-    loadConfig(cwd).kbSearch === "bm25"
+    config.kbSearch === "bm25"
       ? rankBm25(entries, query)
       : rankKbDocs(entries, query).map((r) => r.entry);
   if (ranked.length === 0) return `No KB documents match "${query}". Do NOT retry variations; move on.`;
 
+  const full = config.kbSearchFull ?? KB_SEARCH_FULL;
   const rel = (p: string) => relative(cwd, p).split(sep).join(posix.sep);
+  dbg("kb_search", `${config.kbSearch ?? "keyword"} full=${full} "${query}" → ${ranked.slice(0, 5).map((e) => e.stem).join(", ")}`);
   return ranked
-    .slice(0, KB_SEARCH_LISTED)
+    .slice(0, Math.max(KB_SEARCH_LISTED, full))
     .map((entry, i) => {
       // `lower` keeps the listing line in the casing it has always had
       const head = `==== ${rel(entry.path)} — ${entry.lower.title || entry.lower.stem}: ${entry.lower.description}`;
-      if (i >= KB_SEARCH_FULL) return head;
+      if (i >= full) return head;
       const { text } = entry;
       const body = text.length > KB_DOC_MAX_CHARS ? `${text.slice(0, KB_DOC_MAX_CHARS)}\n… (doc truncated)` : text;
       return `${head}\n${body}`;
