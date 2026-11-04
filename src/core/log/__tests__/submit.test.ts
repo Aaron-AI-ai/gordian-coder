@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { submitLog, onLogSessionIdle, type StoredSubmission } from "../submit";
 import { planLog } from "../plan";
 import { logContext } from "../context";
@@ -172,12 +172,112 @@ describe("submitLog KB check on fix code", () => {
     expect(first).toContain("PBOnlineException");
     expect(first).toContain("KBBODY: create(String code, Object... args)");
     expect(submitLog(withFix(runId, st.submitToken), "s-kb")).toContain("✅"); // once only
+    // the page served by the bounce counts as consulted material for the report
+    expect(readRunJson<string[]>(runId, cwd, "kbShown.json")).toContain(".fico/kb/site-ext/exception/PBOnlineException.md");
   });
 
   test("the page was already in the context → no bounce", () => {
     const cwd = kbRepo(true);
     const { runId, st } = start(cwd, "s-kb2");
     expect(submitLog(withFix(runId, st.submitToken), "s-kb2")).toContain("✅");
+    expect(readRunJson<string[]>(runId, cwd, "kbShown.json")).toEqual([".fico/kb/site-ext/exception/PBOnlineException.md"]);
+  });
+});
+
+describe("submitLog config-key check on fix code", () => {
+  function cfgRepo(): string {
+    const cwd = mkdtempSync(join(tmpdir(), "f-log-submit-cfg-"));
+    const w = (rel: string, body: string) => { mkdirSync(join(cwd, rel, ".."), { recursive: true }); writeFileSync(join(cwd, rel), body); };
+    w("src/a/Svc.java", "class Svc {\n  void run() { map.get(k).size(); }\n}\n");
+    w(".fico/config/fico_ai.json", JSON.stringify({ review: { frameworkKb: { "kr.co.koscom.pb.framework.site.ext.*": ".fico/kb/site-ext/" } } }));
+    w(".fico/kb/site-ext/crypto/CubeOneProperties.md", '# CubeOneProperties\n@ConfigurationProperties(prefix = "fico.crypto.cubeone")');
+    const git = (args: string[]) => Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd });
+    git(["init", "-q"]); git(["add", "."]); git(["commit", "-qm", "init"]);
+    return cwd;
+  }
+  const withYml = (runId: string, token: string, code: string) => {
+    const p = valid(runId, token);
+    p.resolution.changes = [{ file: "src/main/resources/application.yml", description: "기본 암호화 ID", code } as never];
+    return p;
+  };
+
+  test("a yml key outside the KB prefix → one bounce naming the bound key and carrying the page", () => {
+    const cwd = cfgRepo();
+    const { runId, st } = start(cwd, "s-cfg");
+    const first = submitLog(withYml(runId, st.submitToken, "cubeone:\n  default-crypto-id: AES256\n"), "s-cfg");
+    expect(first).toContain("cubeone.default-crypto-id");
+    expect(first).toContain("fico.crypto.cubeone.default-crypto-id");
+    expect(first).toContain("@ConfigurationProperties(prefix");
+    expect(readRunJson<string[]>(runId, cwd, "kbShown.json")).toContain(".fico/kb/site-ext/crypto/CubeOneProperties.md");
+    expect(submitLog(withYml(runId, st.submitToken, "cubeone:\n  default-crypto-id: AES256\n"), "s-cfg")).toContain("✅"); // once only
+  });
+
+  test("keys under the full prefix → no bounce", () => {
+    const cwd = cfgRepo();
+    const { runId, st } = start(cwd, "s-cfg2");
+    expect(submitLog(withYml(runId, st.submitToken, "fico:\n  crypto:\n    cubeone:\n      default-crypto-id: AES256\n"), "s-cfg2")).toContain("✅");
+  });
+});
+
+describe("submitLog constant-into-framework-call check on fix code", () => {
+  function constRepo(): string {
+    const cwd = mkdtempSync(join(tmpdir(), "f-log-submit-const-"));
+    const w = (rel: string, body: string) => { mkdirSync(join(cwd, rel, ".."), { recursive: true }); writeFileSync(join(cwd, rel), body); };
+    w("src/a/Svc.java", [
+      "import kr.co.openlabs.fico.framework.utils.StringUtils;",
+      "class Svc {",
+      '  static final String MASK_TYPE = "8";',
+      '  static final String LABEL = "phone";',
+      "  String run(String p) { map.get(k).size(); return StringUtils.masking(p, MASK_TYPE) + LABEL.length(); }",
+      "}",
+      "",
+    ].join("\n"));
+    w(".fico/config/fico_ai.json", JSON.stringify({ review: { frameworkKb: { "kr.co.openlabs.fico.framework.*": ".fico/kb/core/" } } }));
+    w(".fico/kb/core/utils/StringUtils.md", '# StringUtils\nKBBODY: masking types "1" or "2" only');
+    const git = (args: string[]) => Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd });
+    git(["init", "-q"]); git(["add", "."]); git(["commit", "-qm", "init"]);
+    return cwd;
+  }
+  const withConst = (runId: string, token: string, code: string) => {
+    const p = valid(runId, token);
+    p.resolution.changes = [{ file: "src/a/Svc.java", description: "마스킹 유형", code } as never];
+    return p;
+  };
+
+  test("a changed constant passed to a KB class's method → one bounce naming the call, page attached even if seen", () => {
+    const cwd = constRepo();
+    const { runId, st } = start(cwd, "s-const");
+    const first = submitLog(withConst(runId, st.submitToken, 'static final String MASK_TYPE = "9";'), "s-const");
+    expect(first).toContain('MASK_TYPE = "9"');
+    expect(first).toContain("StringUtils.masking(p, MASK_TYPE)");
+    expect(first).toContain('KBBODY: masking types "1" or "2" only');
+    expect(submitLog(withConst(runId, st.submitToken, 'static final String MASK_TYPE = "9";'), "s-const")).toContain("✅"); // once only
+  });
+
+  test("a constant that reaches no KB class's method → no bounce", () => {
+    const cwd = constRepo();
+    const { runId, st } = start(cwd, "s-const2");
+    expect(submitLog(withConst(runId, st.submitToken, 'static final String LABEL = "mobile";'), "s-const2")).toContain("✅");
+  });
+
+  test("a long KB page bounces with the passage on the method the constant reaches, not just its head", () => {
+    const cwd = constRepo();
+    const filler = Array.from({ length: 200 }, (_, n) => `- note ${n} on padding`).join("\n");
+    writeFileSync(join(cwd, ".fico/kb/core/utils/StringUtils.md"), `# StringUtils\n${filler}\n- masking(str, types): DEEPRULE "1" or "2"\n${filler}`);
+    const { runId, st } = start(cwd, "s-const4");
+    expect(submitLog(withConst(runId, st.submitToken, 'static final String MASK_TYPE = "9";'), "s-const4")).toContain('DEEPRULE "1" or "2"');
+  });
+
+  test("a change pointing outside the repo is never read", () => {
+    const cwd = constRepo();
+    const outside = mkdtempSync(join(tmpdir(), "f-log-submit-out-"));
+    writeFileSync(join(outside, "Svc.java"), "class Svc { String r(String p) { return StringUtils.masking(p, MASK_TYPE); } }");
+    const { runId, st } = start(cwd, "s-const3");
+    for (const file of [join(outside, "Svc.java"), `../${basename(outside)}/Svc.java`]) {
+      const p = withConst(runId, st.submitToken, 'static final String MASK_TYPE = "9";');
+      p.resolution.changes[0].file = file;
+      expect(submitLog(p, "s-const3")).not.toContain("StringUtils.masking(p, MASK_TYPE)");
+    }
   });
 });
 

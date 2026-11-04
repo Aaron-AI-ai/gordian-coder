@@ -15,8 +15,8 @@ powershell -ExecutionPolicy Bypass -File .\install-opencode.ps1
 
 - **apiKey**는 **AX 추진실에 요청하여 발급**받으세요.
 - **모델 관련 정보**(`provider id`, `name`, `baseURL`, `model id`, `context`, `output`)는
-  기본값이 예시일 뿐이므로, **AX 추진실에서 서비스 중인 모델 정보로 변경하여** 사용하세요.
-  기본값 그대로 두면 예시 엔드포인트를 가리켜 실제 호출이 되지 않습니다.
+기본값이 예시일 뿐이므로, **AX 추진실에서 서비스 중인 모델 정보로 변경하여** 사용하세요.
+기본값 그대로 두면 예시 엔드포인트를 가리켜 실제 호출이 되지 않습니다.
 
 ```
 1/4 설치할 플랫폼 선택
@@ -110,15 +110,17 @@ apiKey는 평문으로 두지 않고 `{env:...}` 참조만 저장합니다. 실�
 
 ### 환경변수 (사용자 범위, HKCU)
 
-| 변수 | 값 | 목적 |
-|---|---|---|
-| `Path` | `...\.opencode\bin` 추가 | 실행 |
-| `OPENCODE_DISABLE_MODELS_FETCH` | `1` | 모델 카탈로그 조회 차단 (~20초) |
-| `OPENCODE_DISABLE_LSP_DOWNLOAD` | `1` | 언어 서버 다운로드 차단 |
-| `OPENCODE_DISABLE_AUTOUPDATE` | `1` | 버전 확인 차단 |
-| `OPENCODE_DISABLE_SHARE` | `1` | 세션 공유 업로드 차단 |
-| `OPENCODE_CONFIG` | 설정 파일 절대경로 | 셸 간 설정 통일 |
-| `OPENCODE_INTERNAL_API_KEY` | apiKey | 인증 |
+
+| 변수                              | 값                      | 목적                    |
+| ------------------------------- | ---------------------- | --------------------- |
+| `Path`                          | `...\.opencode\bin` 추가 | 실행                    |
+| `OPENCODE_DISABLE_MODELS_FETCH` | `1`                    | 모델 카탈로그 조회 차단 (\~20초) |
+| `OPENCODE_DISABLE_LSP_DOWNLOAD` | `1`                    | 언어 서버 다운로드 차단         |
+| `OPENCODE_DISABLE_AUTOUPDATE`   | `1`                    | 버전 확인 차단              |
+| `OPENCODE_DISABLE_SHARE`        | `1`                    | 세션 공유 업로드 차단          |
+| `OPENCODE_CONFIG`               | 설정 파일 절대경로             | 셸 간 설정 통일             |
+| `OPENCODE_INTERNAL_API_KEY`     | apiKey                 | 인증                    |
+
 
 ---
 
@@ -181,16 +183,18 @@ $env:ALL=1; $env:WITH_DATA=1; $env:WITH_BUN=1
 powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
 ```
 
-| 대상 | `ALL=1` 기본 | 비고 |
-|---|---|---|
-| `gordian-coder\` + bun link | 삭제 | |
-| `.opencode\` (exe, .npmrc) | 삭제 | |
-| `.config\opencode\` (설정, **apiKey**) | 삭제 | |
-| `.cache\opencode\` | 삭제 | |
-| `.local\share\opencode\` (세션, auth) | **유지** | `WITH_DATA=1`로 삭제 |
-| `.bun\` | **유지** | `WITH_BUN=1`로 삭제 |
-| PATH · `OPENCODE_*` · `BUN_INSTALL` | 삭제 | |
-| `.bashrc` 블록 | 삭제 | 수정 전 백업 |
+
+| 대상                                   | `ALL=1` 기본 | 비고                |
+| ------------------------------------ | ---------- | ----------------- |
+| `gordian-coder\` + bun link          | 삭제         |                   |
+| `.opencode\` (exe, .npmrc)           | 삭제         |                   |
+| `.config\opencode\` (설정, **apiKey**) | 삭제         |                   |
+| `.cache\opencode\`                   | 삭제         |                   |
+| `.local\share\opencode\` (세션, auth)  | **유지**     | `WITH_DATA=1`로 삭제 |
+| `.bun\`                              | **유지**     | `WITH_BUN=1`로 삭제  |
+| PATH · `OPENCODE_*` · `BUN_INSTALL`  | 삭제         |                   |
+| `.bashrc` 블록                         | 삭제         | 수정 전 백업           |
+
 
 세션 기록과 Bun은 일부러 남깁니다 — 인증이 날아가고, Bun은 다른 도구가 쓸 수 있습니다.
 
@@ -209,14 +213,16 @@ Get-ChildItem "$env:USERPROFILE" -Force -Filter "*opencode*"
 
 ## 부록: 경로 요약
 
-| 대상 | 경로 |
-|---|---|
-| 실행 파일 | `%USERPROFILE%\.opencode\bin\opencode.exe` |
-| 설정 | `%USERPROFILE%\.config\opencode\opencode.json` |
-| apiKey | 사용자 환경변수 `OPENCODE_INTERNAL_API_KEY` + `.config\opencode\env` |
+
+| 대상     | 경로                                                                        |
+| ------ | ------------------------------------------------------------------------- |
+| 실행 파일  | `%USERPROFILE%\.opencode\bin\opencode.exe`                                |
+| 설정     | `%USERPROFILE%\.config\opencode\opencode.json`                            |
+| apiKey | 사용자 환경변수 `OPENCODE_INTERNAL_API_KEY` + `.config\opencode\env`             |
 | npm 설정 | `%USERPROFILE%\.opencode\.npmrc`, `%USERPROFILE%\.config\opencode\.npmrc` |
-| 세션·인증 | `%USERPROFILE%\.local\share\opencode\` |
-| 캐시 | `%USERPROFILE%\.cache\opencode\` |
+| 세션·인증  | `%USERPROFILE%\.local\share\opencode\`                                    |
+| 캐시     | `%USERPROFILE%\.cache\opencode\`                                          |
+
 
 진단 명령:
 
@@ -228,4 +234,39 @@ opencode models            # 사용 가능한 모델
 
 ---
 
-> **설치와 사용 모두 PowerShell 사용을 권장합니다.**
+> **설치는 PowerShell, 사용(OpenCode 실행)은 Git Bash를 권장합니다.**
+
+## 부록: 실행 터미널 선택 — Git Bash 권장
+
+### Windows PowerShell 사용 시 제약
+
+Windows PowerShell에서 OpenCode를 실행하면 아래 이슈 때문에 **사용상 제약이 있습니다.**
+OpenCode의 Windows 버그로, 2026-11 기준 확정된 수정 버전이 확인되지 않았습니다.
+
+
+| 증상                                            | 원인                                                                                                                                                                                     |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/exit` 또는 Ctrl+C로 종료하면 **PowerShell 창까지 닫힘** | ConPTY 기반 터미널(Windows Terminal, VS Code 등)에서 부모 셸이 함께 종료됨 ([#26480](https://github.com/anomalyco/opencode/issues/26480), [#26038](https://github.com/anomalyco/opencode/issues/26038)) |
+| 다른 프로그램에서 복사한 텍스트가 **Ctrl+V로 붙지 않음**          | Windows 터미널이 bracketed paste 신호를 안정적으로 보내지 않음 ([#13800](https://github.com/anomalyco/opencode/issues/13800))                                                                           |
+
+
+- 창이 닫히면 작업하던 디렉토리의 셸도 사라지므로, 매번 새 창을 열고 디렉토리로 다시 이동해야 합니다.
+- OpenCode 안에서 Ctrl+C는 복사가 아니라 중단/종료입니다. 복사하려고 누르면 OpenCode가 종료되고
+위 버그로 창까지 닫힐 수 있습니다. 복사는 마우스 드래그(자동 복사)로 하세요.
+- PowerShell을 꼭 써야 한다면 붙여넣기는 마우스 우클릭을 사용하세요. 창 닫힘은 클래식 콘솔(conhost)에서는
+발생하지 않는다는 보고가 있습니다(미검증): `conhost.exe powershell -NoExit -Command opencode`
+
+### 권장: Git Bash
+
+그래서 OpenCode는 **Git Bash에서 실행하는 것을 권장합니다.** 설치 스크립트가 `.bashrc`에
+PATH와 환경변수를 넣어 두므로, 설치 후 새 Git Bash 창을 열면 바로 `opencode`로 실행됩니다.
+
+```bash
+cd /c/work/my-project
+opencode            # 같은 디렉토리의 이전 세션 이어가기: opencode -c
+```
+
+### Git Bash에서 알아둘 점
+
+- **서브에이전트 진행 확인**: 서브에이전트는 별도 자식 세션으로 실행됩니다. 기본 키는
+`Ctrl+X` → `↓`(첫 서브에이전트), `←`/`→`(이전/다음), `↑`(부모 세션)입니다.

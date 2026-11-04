@@ -102,6 +102,35 @@ describe("renderLogReport", () => {
     const fix = md.split("## 해결 방안")[1].split("## 검토한 대안")[0];
     expect(fix).toContain("````java\n// example:\n```java\nfoo();\n```\n````");
   });
+  const REQ_LOG = "[ERROR:t9:user01][host1:2026-07-01 15:32:08.194][http-nio-8080-exec-1][ext.aspect.PBExceptionHandlerAspect:handle:59] 고정길이 전문 CommonException: URI=/ON/SONAQ001, svcId=SONAQ001, errorCode=1001\njava.lang.NullPointerException: x\n\tat a.Svc.run(Svc.java:2)\n";
+  const sourced: FinalizeInput = {
+    ...input, input: REQ_LOG, source: "logs/app.log",
+    kbShown: [".fico/kb/Fw.md", ".fico/kb/Other.md"], readFiles: ["src/a/Svc.java"],
+    submission: { ...sub, resolution: { ...sub.resolution, changes: [{ file: "src/a/Svc.java", description: "d", code: "throw Fw.create(\"1001\");" }] } },
+  };
+
+  test("the report opens with the request it analyzed: log file, time, URI, service, error code, trace", () => {
+    const md = renderLogReport(sourced, gaps, "PASS", "ko", new Date());
+    const target = md.slice(md.indexOf("## 분석 대상"), md.indexOf("## 요약"));
+    for (const v of ["logs/app.log", "2026-07-01 15:32:08.194", "host1", "http-nio-8080-exec-1", "/ON/SONAQ001", "SONAQ001", "1001", "t9", "user01", "java.lang.NullPointerException: x"]) expect(target).toContain(v);
+    expect(md.indexOf("## 분석 대상")).toBeLessThan(md.indexOf("## 요약"));
+    // pasted input without a log prefix: says so, and lists only what it knows
+    const pasted = renderLogReport(input, gaps, "PASS", "ko", new Date());
+    const t2 = pasted.slice(pasted.indexOf("## 분석 대상"), pasted.indexOf("## 요약"));
+    expect(t2).toContain("직접 붙여넣은 로그");
+    expect(t2).not.toContain("URI");
+  });
+
+  test("the cause section lists the materials it rests on: KB pages (marked when the fix uses them), rules, files read", () => {
+    const md = renderLogReport(sourced, gaps, "PASS", "ko", new Date());
+    const refs = md.slice(md.indexOf("### 근거 자료"), md.indexOf("## 해결 방안"));
+    expect(refs).toContain("Fw — .fico/kb/Fw.md (수정 코드에 사용)");
+    expect(refs).toContain("Other — .fico/kb/Other.md");
+    expect(refs).not.toContain("Other — .fico/kb/Other.md (");
+    expect(refs).toContain("npe.md");
+    expect(refs).toContain("src/a/Svc.java");
+  });
+
   test("en labels, mitigation warning, envCause line, empty gaps text", () => {
     const md = renderLogReport({ ...input, submission: { ...sub, envCause: true, resolution: { ...sub.resolution, kind: "mitigation" } } }, { unexplainedExceptions: [], unreadSuspects: [], unresolvedObservations: [] }, "PASS", "en", new Date());
     expect(md).toContain("## Summary");
@@ -141,6 +170,36 @@ describe("renderLogHtml", () => {
     expect(html).toContain(`data-copy="fix-0"`);
     expect(html).toContain(`data-copy="fix-all"`);
     expect(html).toContain("- src/a/Svc.java: null 가드\n```java\nif (v == null) {");
+  });
+  test("the request block sits above the verdict and the cause step carries the evidence materials", () => {
+    const html = renderLogHtml({
+      ...input, source: "logs/app.log", kbShown: [".fico/kb/Fw.md"], readFiles: ["src/a/Svc.java"],
+      input: "[ERROR:t9:u1][host1:2026-07-01 15:32:08.194][exec-1][a.B:m:1] PB CommonException: URI=/ON/SONAQ001, code=1001\njava.lang.NullPointerException: x\n\tat a.Svc.run(Svc.java:2)\n",
+    }, noGaps, "PASS", "ko", new Date());
+    expect(html).toContain("분석 대상");
+    expect(html).toContain("<code>/ON/SONAQ001</code>");
+    expect(html).toContain("logs/app.log");
+    expect(html.indexOf("/ON/SONAQ001")).toBeLessThan(html.indexOf(`<div class="verdict`));
+    const cause = html.slice(html.indexOf(`id="cause"`), html.indexOf(`id="fix"`));
+    expect(cause).toContain("근거 자료");
+    expect(cause).toContain(".fico/kb/Fw.md");
+    expect(cause).toContain("npe.md");
+  });
+  test("the cause path shows each frame once and does not repeat the entry point", () => {
+    const dup = { ...input, input: "java.lang.NullPointerException: x\n\tat a.Svc.run(Svc.java:2)\n\tat a.Svc.run(Svc.java:2)\n\tat a.Ctl.go(Ctl.java:3)\n" };
+    const html = renderLogHtml(dup, noGaps, "PASS", "ko", new Date());
+    const md = renderLogReport(dup, noGaps, "PASS", "ko", new Date());
+    // the path section only: the raw trace below keeps every line as logged
+    for (const out of [html.slice(html.indexOf(`<ul class="path">`), html.indexOf("</ul>", html.indexOf(`<ul class="path">`))), md.slice(md.indexOf("## 진입점"), md.indexOf("## 원인 상세"))]) {
+      expect(out.split("a.Svc.run(Svc.java:2)").length - 1).toBe(1);
+      expect(out).not.toContain("a.Ctl.go(Ctl.java:3)");
+      expect(out).toContain("a.Ctl.go:3");
+    }
+  });
+
+  test("KB pages the fix code uses are listed first", () => {
+    const html = renderLogHtml({ ...input, kbShown: [".fico/kb/Other.md", ".fico/kb/Fw.md"], submission: { ...withCode, resolution: { ...withCode.resolution, changes: [{ file: "src/a/Svc.java", description: "d", code: "Fw.create()" }] } } }, noGaps, "PASS", "ko", new Date());
+    expect(html.indexOf(".fico/kb/Fw.md")).toBeLessThan(html.indexOf(".fico/kb/Other.md"));
   });
   test("log text is escaped", () => {
     const html = renderLogHtml(input, noGaps, "PASS", "ko", new Date());

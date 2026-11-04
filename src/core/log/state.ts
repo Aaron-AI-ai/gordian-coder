@@ -19,6 +19,8 @@ export interface LogSession extends GuardState {
   readFiles?: Record<string, true>; // repo-relative paths seen via f_log_read/f_log_blame
   kbShown?: string[]; // KB page paths whose body was in the rendered context
   kbNudged?: boolean; // the fix-code KB check has bounced once
+  constNudged?: boolean; // the fix-code constant-use check has bounced once
+  configNudged?: boolean; // the fix-code config-key check has bounced once
 }
 
 const MAX_SESSIONS = 50;

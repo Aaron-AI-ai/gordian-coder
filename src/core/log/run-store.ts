@@ -15,6 +15,8 @@ export interface RunMeta {
   judge: boolean;
   output?: string;
   language: string;
+  /** The --file path; absent when the log was pasted. */
+  source?: string;
 }
 export interface LogJudgeAttempt {
   round: number;

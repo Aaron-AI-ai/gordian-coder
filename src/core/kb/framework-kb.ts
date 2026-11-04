@@ -486,14 +486,111 @@ export function kbDocsForCode(cwd: string, code: string, max = KB_MAX_DOCS): KbD
   for (const name of names) {
     const entry = byStem.get(name);
     if (!entry || !entry.text.trim()) continue;
-    docs.push({
-      specifier: name,
-      path: relative(cwd, entry.path).split(sep).join(posix.sep),
-      content: entry.text.length > KB_DOC_MAX_CHARS ? `${entry.text.slice(0, KB_DOC_MAX_CHARS)}\n… (doc truncated)` : entry.text,
-    });
+    docs.push(toDoc(cwd, name, entry));
     if (docs.length >= max) break;
   }
   return docs;
+}
+
+const EXCERPT_HEAD_CHARS = 800;
+const EXCERPT_BEFORE = 200;
+const EXCERPT_AFTER = 700;
+
+/**
+ * `doc` within `max` chars for a reader who calls it from `code`: the page's
+ * head, then the passages naming a method `code` calls on the page's class
+ * (`StringUtils.masking(` → `masking(`), in page order. A page cut at its head
+ * hides exactly that API when it sits deep in the page (case-27: masking's
+ * allowed types). Reads the full page from the KB, since `doc.content` may
+ * already be cut at KB_DOC_MAX_CHARS. Nothing named → the head alone.
+ */
+export function kbExcerpt(cwd: string, doc: KbDoc, code: string, max: number): string {
+  const text = kbEntries(cwd).find((e) => relative(cwd, e.path).split(sep).join(posix.sep) === doc.path)?.text ?? doc.content;
+  if (text.length <= max) return text;
+  const cls = posix.basename(doc.path, ".md");
+  const methods = [...new Set([...code.matchAll(new RegExp(`\\b${cls}\\.(\\w+)\\s*\\(`, "g"))].map((m) => m[1]))];
+  const hits = methods.flatMap((m) => [...text.matchAll(new RegExp(`\\b${m}\\s*\\(`, "g"))].map((h) => h.index!)).sort((a, b) => a - b);
+  if (!hits.length) return `${text.slice(0, max - 20)}\n… (KB 문서 일부)`;
+  const head = text.slice(0, EXCERPT_HEAD_CHARS);
+  // windows around each hit, widened to whole lines when the line ends are near, merged when they touch
+  const windows: [number, number][] = [];
+  for (const h of hits) {
+    const ls = text.lastIndexOf("\n", h - EXCERPT_BEFORE) + 1;
+    const start = Math.max(EXCERPT_HEAD_CHARS, ls >= h - 2 * EXCERPT_BEFORE ? ls : h - EXCERPT_BEFORE);
+    const nl = text.indexOf("\n", h + EXCERPT_AFTER);
+    const end = nl >= 0 && nl <= h + 2 * EXCERPT_AFTER ? nl : Math.min(text.length, h + EXCERPT_AFTER);
+    const last = windows.at(-1);
+    if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+    else windows.push([start, end]);
+  }
+  let out = head;
+  for (const [s, e] of windows) {
+    const room = max - out.length - 30;
+    if (room <= 0) break;
+    out += `\n…\n${text.slice(s, s + Math.min(e - s, room))}`;
+  }
+  return `${out}\n… (KB 문서 발췌)`;
+}
+
+function toDoc(cwd: string, specifier: string, entry: KbEntry): KbDoc {
+  return {
+    specifier,
+    path: relative(cwd, entry.path).split(sep).join(posix.sep),
+    content: entry.text.length > KB_DOC_MAX_CHARS ? `${entry.text.slice(0, KB_DOC_MAX_CHARS)}\n… (doc truncated)` : entry.text,
+  };
+}
+
+export interface KbConfigMiss extends KbDoc {
+  /** The key as the fix wrote it. */
+  key: string;
+  /** The key the KB class actually binds. */
+  bound: string;
+}
+
+const CONFIG_PREFIX = /@ConfigurationProperties\(\s*(?:(?:prefix|value)\s*=\s*)?"([^"]+)"/g;
+
+/** Dotted keys a config change sets: `a.b=c` lines in .properties, indentation
+ * nesting in yml. Leaves only — a parent key is a step on the way, not a setting.
+ * ponytail: indentation walk, not a YAML parser; flow maps and multi-line scalars are skipped. */
+function configKeys(file: string, code: string): string[] {
+  const keys: string[] = [];
+  if (/\.properties$/i.test(file)) {
+    for (const m of code.matchAll(/^\s*([\w.-]+)\s*[=:]/gm)) keys.push(m[1]);
+  } else if (/\.ya?ml$/i.test(file)) {
+    const stack: { indent: number; key: string }[] = [];
+    for (const line of code.split(/\r?\n/)) {
+      const m = /^(\s*)([\w.-]+)\s*:(?:\s|$)/.exec(line);
+      if (!m) continue;
+      while (stack.length && stack.at(-1)!.indent >= m[1].length) stack.pop();
+      stack.push({ indent: m[1].length, key: m[2] });
+      keys.push(stack.map((s) => s.key).join("."));
+    }
+  }
+  return keys.filter((k) => !keys.some((o) => o.startsWith(`${k}.`)));
+}
+
+/**
+ * Config keys in fix code that a KB `@ConfigurationProperties` class would bind
+ * only under its full prefix: `cubeone.default-crypto-id` against prefix
+ * `fico.crypto.cubeone` starts with the prefix's tail but never binds. Keys
+ * under the full prefix, or sharing no tail with any prefix, pass.
+ */
+export function kbConfigMisses(cwd: string, changes: { file: string; code?: string }[]): KbConfigMiss[] {
+  const keys = changes.flatMap((c) => configKeys(c.file, c.code ?? ""));
+  if (!keys.length) return [];
+  const prefixes = kbEntries(cwd).flatMap((e) => [...e.text.matchAll(CONFIG_PREFIX)].map((m) => ({ prefix: m[1], entry: e })));
+  const misses: KbConfigMiss[] = [];
+  for (const key of new Set(keys)) {
+    if (prefixes.some((p) => key.startsWith(`${p.prefix}.`))) continue;
+    for (const { prefix, entry } of prefixes) {
+      const segs = prefix.split(".");
+      const t = segs.slice(1).findIndex((_, i) => key.startsWith(`${segs.slice(i + 1).join(".")}.`));
+      if (t < 0) continue;
+      misses.push({ ...toDoc(cwd, entry.stem, entry), key, bound: `${segs.slice(0, t + 1).join(".")}.${key}` });
+      break;
+    }
+  }
+  return misses;
 }
 
 // ── prefetch ─────────────────────────────────────────────────────

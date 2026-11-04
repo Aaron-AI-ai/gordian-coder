@@ -46,7 +46,7 @@ OpenCode에서 대상 프로젝트를 연 뒤:
 
 리포트 순서: 요약 → 스택 원문 → 진입점→원인 경로 → 원인 상세와 근거(실제 코드 인용) → 해결 방안(변경 파일별 수정 후 코드·설정 조각 포함) → 검토한 대안 → **못 본 것** → 심사 이력 → 실행 정보. 배지: `PASS` / `TERMINAL`(임계값 미달, 최고점 채택) / `FORCED` / `PARTIAL` / `JUDGE SKIPPED`.
 
-HTML 리포트는 판정 배너(배지·신뢰도·원인 한 줄) 아래에 **1. 로그 분석**(진입점→원인 경로, 로그 관측, 스택 원문) → **2. 원인**(메커니즘, 근거 코드 — 원인 줄 강조) → **3. 해결 방안**(변경마다 `복사` 버튼, `해결 방안 전체 복사`는 markdown으로 복사) 순서로 보여주고, 검토한 대안·못 본 것·심사 이력·실행 정보는 접어 둔다. 채팅 요약에 `HTML:` 줄로 경로가 나온다.
+HTML 리포트는 맨 위 **분석 대상**(로그 파일, 발생 시각, URI·서비스 ID·에러 코드, 추적 ID·사용자, 호스트·스레드, 로그 메시지, 예외 — 로그에 있는 항목만)과 판정 배너(배지·신뢰도·원인 한 줄) 아래에 **1. 로그 분석**(진입점→원인 경로, 로그 관측, 스택 원문) → **2. 원인**(메커니즘, 근거 코드 — 원인 줄 강조, **근거 자료** — 참고한 프레임워크 KB(수정 코드에 쓰인 문서 표시)·적용한 분석 룰·분석 중 읽은 파일) → **3. 해결 방안**(변경마다 `복사` 버튼, `해결 방안 전체 복사`는 markdown으로 복사) 순서로 보여주고, 검토한 대안·못 본 것·심사 이력·실행 정보는 접어 둔다. 채팅 요약에 `HTML:` 줄로 경로가 나온다.
 
 ## 룰 파일 — `log/rules/*.md`
 
@@ -80,7 +80,7 @@ bun scripts/flog-eval.ts /path/to/target [--model provider/model] [--case <selec
 --case 'case-01-npe,case-2*'                     # 정확한 ID + glob 혼용
 ```
 
-정답 YAML 필드: `log`(로그 경로), `exception`(체인 중 하나의 FQCN), `cause_files`(하나 이상 등장), `cause_symbol`(메서드/SQL id), `fix_keywords_any`(해결 방안 절에 하나 이상), `rule`(선택, 실행 정보의 적용 룰). 첫 대상 프로젝트는 `on-test-lab-online`이며 `gradle test`가 케이스 로그를 다시 만든다. 설계: `docs/superpowers/specs/2026-09-17-f-log-eval-testbed-design.md`.
+정답 YAML 필드: `log`(로그 경로), `exception`(체인 중 하나의 FQCN), `cause_files`(하나 이상 등장), `cause_symbol`(메서드/SQL id), `fix_keywords_any`(해결 방안 절에 하나 이상), `fix_code_any`(선택, 수정 코드 블록에 하나 이상), `fix_forbid_any`(선택, 수정 코드 블록에 하나도 없어야 함 — 프레임워크가 대체하는 plain-Java 방식), `rule`(선택, 실행 정보의 적용 룰). 코드 조각은 공백·대소문자를 무시하고, `re:`로 시작하면 공백을 뺀 코드에 거는 정규식, `raw:`로 시작하면 원문 그대로(줄·들여쓰기 유지, 멀티라인)에 거는 정규식이다 — yml 중첩처럼 들여쓰기가 의미일 때 쓴다. 첫 대상 프로젝트는 `on-test-lab-online`이며 `gradle test`가 케이스 로그를 다시 만든다. 설계: `docs/superpowers/specs/2026-09-17-f-log-eval-testbed-design.md`.
 
 1차 실행 결과와 발견한 개선점은 `docs/reports/f-log-eval-testbed-run1-20260917.md` 참조.
 

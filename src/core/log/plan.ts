@@ -249,6 +249,7 @@ export function planLog(opts: PlanOptions, cwd: string): string {
   const meta: RunMeta = {
     runId, createdAt: new Date().toISOString(), cwd,
     judge: opts.judge ?? cfg.judge, output: opts.output, language: cfg.language,
+    ...(!opts.log && opts.file ? { source: opts.file } : {}),
   };
   writeRunText(runId, cwd, "input.log", raw);
   writeRunJson(runId, cwd, "run.json", meta);

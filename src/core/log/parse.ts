@@ -36,10 +36,21 @@ export interface HandlerInfo {
   exceptionType?: string;
   exceptionMessage?: string;
 }
+/** The first log line before the trace: when, where and for whom the failure happened. */
+export interface LogHead {
+  level?: string;
+  traceId?: string;
+  user?: string;
+  host?: string;
+  time?: string;
+  thread?: string;
+  message?: string;
+}
 export interface ParsedLog {
   chain: ExceptionBlock[];
   suppressed: ExceptionBlock[];
   handler: HandlerInfo;
+  head: LogHead;
   raw: string;
 }
 
@@ -49,6 +60,10 @@ const FICO_PREFIX = /^\[(?:TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\s*:[^\]]*\]\s*\[[^
 const GENERIC_PREFIX = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}[.,]?\d*Z?\s+(?:\S+\s+)*?(?:TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\b[^:]*?(?:\s[-:]\s|:\s)/;
 // bracketed everything: [2026-09-17T09:47:07.352912] [] [host] [ERROR] [main] [logger.method:857] msg
 const BRACKET_PREFIX = /^\[\d{4}-\d{2}-\d{2}[ T][^\]]*\]\s*(?:\[[^\]]*\]\s*)*\[(?:TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\]\s*\[[^\]]*\]\s*\[([^\]:]+)(?::[^\]]*)?\]\s*/;
+// fico prefix split into its fields: [LEVEL:trace:user][host:ts][thread]
+const FICO_FIELDS = /^\[(\w+)\s*:([^:\]]*):?([^\]]*)\]\s*\[([^:\]]*):([^\]]*)\]\s*\[([^\]]*)\]/;
+const TIMESTAMP = /\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?/;
+const LEVEL = /\b(TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\b/;
 const FRAME = /^\s*at\s+(?:[\w.$]+\/)?([\w$.]+)\.([\w$<>]+)\((?:([^:)]+):(\d+)|[^)]*)\)/;
 const SUFFIX = /\s*~?\[[^\]]*\]\s*$/;
 const MORE = /^\s*\.\.\.\s*(\d+)\s+more\s*$/;
@@ -132,10 +147,20 @@ function extractHandler(text: string, into: HandlerInfo): void {
   }
 }
 
+function lineHead(line: string, text: string): LogHead {
+  const f = FICO_FIELDS.exec(line);
+  const fields: LogHead = f
+    ? { level: f[1], traceId: f[2], user: f[3], host: f[4], time: f[5], thread: f[6] }
+    : { level: LEVEL.exec(line)?.[1], time: TIMESTAMP.exec(line)?.[0] };
+  fields.message = text.trim();
+  return Object.fromEntries(Object.entries(fields).filter(([, v]) => v)) as LogHead;
+}
+
 export function parseStackTrace(raw: string): ParsedLog {
   const chain: ExceptionBlock[] = [];
   const suppressed: ExceptionBlock[] = [];
   const handler: HandlerInfo = {};
+  let head: LogHead = {};
   let current: ExceptionBlock | null = null;
   let currentIsSuppressed = false;
   let lastHandlerText: string | undefined;
@@ -157,6 +182,7 @@ export function parseStackTrace(raw: string): ParsedLog {
       continue;
     }
     const { text, logger, found } = stripLinePrefix(rawLine);
+    if (found && !current && !Object.keys(head).length) head = lineHead(rawLine, text);
     const h = HEADER.exec(text.trim());
     if (h) {
       const block: ExceptionBlock = { type: h[2], message: (h[3] ?? "").trim(), frames: [], omitted: 0 };
@@ -208,5 +234,5 @@ export function parseStackTrace(raw: string): ParsedLog {
     chain.push({ type, message: handler.exceptionMessage ?? lastHandlerText ?? "", frames: [], omitted: 0 });
   }
 
-  return { chain, suppressed, handler, raw };
+  return { chain, suppressed, handler, head, raw };
 }

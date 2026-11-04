@@ -42,6 +42,40 @@ OpenCode 내장 도구는 전부 차단되어 있어 **리뷰 중 코드가 수�
 
 ## 2. 기본 사용법
 
+### OpenCode 실행 위치 — 반드시 루트 프로젝트에서
+
+f-review는 **OpenCode를 실행한 디렉토리를 프로젝트 루트로 봅니다.** 설정(`.fico/config/fico_ai.json`),
+KB(`.fico/kb/`), `--files` 경로, 리포트 위치가 모두 이 디렉토리 기준입니다.
+루트 아래에 서브 프로젝트가 있는 Gradle 멀티 프로젝트라면 **`settings.gradle`이 있는 루트에서 실행하세요.**
+
+```
+pb-online/                    ← 여기서 opencode 실행
+├── settings.gradle
+├── build.gradle
+├── .fico/config/fico_ai.json
+├── pb-online-common/         (서브 프로젝트)
+│   └── src/main/java/...
+└── pb-online-stk/            (서브 프로젝트)
+    └── src/main/java/...
+```
+
+```bash
+cd /c/workspace/pb-online
+opencode
+```
+
+서브 프로젝트만 리뷰할 때도 루트에서 실행하고, 경로로 범위를 좁힙니다.
+
+```
+/f-review --files=pb-online-stk
+/f-review --files=pb-online-stk/src/main/java,pb-online-common/src/main/java
+```
+
+> 서브 프로젝트 디렉토리(`pb-online-stk/`)에서 실행하면 루트의 `.fico` 설정과 KB를 찾지 못해
+> **설정이 적용되지 않은 채** 리뷰되고, 리포트도 서브 프로젝트 안에 생깁니다.
+
+### 리뷰 대상 지정
+
 OpenCode TUI에서 **리뷰할 파일을 지정**합니다.
 
 ```

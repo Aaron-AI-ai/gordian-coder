@@ -8,9 +8,10 @@
  */
 import { z } from "zod";
 import { capped, strayHan } from "../review/contract";
-import { kbDocsForCode } from "../kb/framework-kb";
-import { KB_DOC_MAX_CHARS } from "./context";
+import { kbConfigMisses, kbDocsForCode, kbExcerpt, type KbDoc } from "../kb/framework-kb";
+import { KB_DOC_MAX_CHARS, recordKbShown } from "./context";
 import { normalizeRepoPath } from "../review/imports";
+import { readFileAt } from "../review/tools/read";
 import { MAX_FAILED_SUBMITS, MAX_RESUMES } from "../review/pipeline/loop";
 import { languageName } from "../review/pipeline/prompt";
 import { MAX_OBSERVATIONS, type LogPlan } from "./plan";
@@ -88,6 +89,41 @@ function store(st: LogSession, sub: LogSubmission, sessionId: string, extra: { f
 
 /** KB pages one fix-code check may hand back — the bounce rides in a tool result. */
 const KB_FIX_MAX_DOCS = 3;
+
+interface ConstantUse {
+  decl: string;
+  /** The repository line that hands the constant to a framework method. */
+  use: string;
+  where: string;
+  docs: KbDoc[];
+}
+
+/**
+ * Constants the fix code (re)declares whose repository use site passes them to
+ * a KB class's method: `MASK_TYPE = "8"` means nothing until
+ * `StringUtils.masking(p, MASK_TYPE)` says which values that method accepts.
+ * ponytail: use sites in the changed file only; constants shared across files are missed.
+ */
+function constantUses(cwd: string, changes: { file: string; code?: string }[]): ConstantUse[] {
+  const uses: ConstantUse[] = [];
+  for (const ch of changes) {
+    const decls = [...(ch.code ?? "").matchAll(/\bfinal\s+[\w.<>[\]]+\s+([A-Z][A-Z0-9_]*)\s*=\s*([^;]+);/g)];
+    if (!decls.length) continue;
+    const text = readFileAt(cwd, null, ch.file); // contained in the repo, like every other f-log read
+    if (text === null) continue;
+    const lines = text.split(/\r?\n/);
+    for (const [, name, value] of decls) {
+      // the constant as an argument of `Cls.method(` — up to the first `)`, so nested calls before it are missed
+      const call = new RegExp(`\\b([A-Z]\\w*)\\.\\w+\\s*\\([^;)]*\\b${name}\\b`, "g");
+      lines.forEach((line, i) => {
+        const classes = [...line.matchAll(call)].map((m) => m[1]).join(" ");
+        const docs = classes ? kbDocsForCode(cwd, classes, KB_FIX_MAX_DOCS) : [];
+        if (docs.length) uses.push({ decl: `${name} = ${value.trim()}`, use: line.trim(), where: `${ch.file}:${i + 1}`, docs });
+      });
+    }
+  }
+  return uses;
+}
 
 export function submitLog(payload: unknown, sessionId: string): string {
   const st = getLogState(sessionId);
@@ -172,11 +208,51 @@ export function submitLog(payload: unknown, sessionId: string): string {
     if (unseen.length) {
       st.kbNudged = true;
       st.kbShown = [...(st.kbShown ?? []), ...unseen.map((d) => d.path)];
+      recordKbShown(st.runId, st.cwd, st.kbShown);
       const bounce = reject([
         `resolution.changes[].code uses framework classes whose KB guide you have not seen: ${unseen.map((d) => d.specifier).join(", ")}.`,
         "Check each call/annotation against the page below (factory and constructor signatures, required arguments, error-code rules), correct the code, and resubmit the full payload.",
-        ...unseen.map((d) => `### ${d.specifier} (${d.path})\n${d.content.slice(0, KB_DOC_MAX_CHARS)}`),
+        ...unseen.map((d) => `### ${d.specifier} (${d.path})\n${kbExcerpt(st.cwd, d, code, KB_DOC_MAX_CHARS)}`),
       ].join("\n\n"));
+      if (bounce) return bounce;
+    }
+  }
+
+  // Gate 4b: a constant the fix changes is checked only where it is declared,
+  // never against the framework method it feeds. Point at that call and its
+  // page once, seen before or not — the value was written from memory anyway.
+  if (!st.constNudged) {
+    const uses = constantUses(st.cwd, sub.resolution.changes);
+    if (uses.length) {
+      st.constNudged = true;
+      const pages = [...new Map(uses.flatMap((u) => u.docs).map((d) => [d.path, d])).values()];
+      st.kbShown = [...new Set([...(st.kbShown ?? []), ...pages.map((d) => d.path)])];
+      recordKbShown(st.runId, st.cwd, st.kbShown);
+      const bounce = reject([
+        "resolution.changes[].code changes constants that are passed to framework methods. Check each new value against what the KB page says that method accepts:",
+        ...uses.map((u) => `- \`${u.decl}\` → \`${u.use}\` (${u.where})`),
+        "Correct the value if the page does not list it, and resubmit the full payload.",
+        ...pages.map((d) => `### ${d.specifier} (${d.path})\n${kbExcerpt(st.cwd, d, uses.map((u) => u.use).join("\n"), KB_DOC_MAX_CHARS)}`),
+      ].join("\n"));
+      if (bounce) return bounce;
+    }
+  }
+
+  // Gate 5: a config key the fix sets outside the prefix its KB
+  // @ConfigurationProperties class binds is silently ignored at runtime.
+  if (!st.configNudged) {
+    const misses = kbConfigMisses(st.cwd, sub.resolution.changes);
+    if (misses.length) {
+      st.configNudged = true;
+      const pages = [...new Map(misses.map((m) => [m.path, m])).values()];
+      st.kbShown = [...new Set([...(st.kbShown ?? []), ...pages.map((m) => m.path)])];
+      recordKbShown(st.runId, st.cwd, st.kbShown);
+      const bounce = reject([
+        "resolution.changes[].code sets config keys that no KB @ConfigurationProperties class binds — Spring ignores them:",
+        ...misses.map((m) => `- \`${m.key}\` → ${m.specifier} binds \`${m.bound}\``),
+        "Fix the key paths (or explain in the description why the short key is right), and resubmit the full payload.",
+        ...pages.map((m) => `### ${m.specifier} (${m.path})\n${kbExcerpt(st.cwd, m, "", KB_DOC_MAX_CHARS)}`),
+      ].join("\n"));
       if (bounce) return bounce;
     }
   }

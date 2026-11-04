@@ -44,6 +44,19 @@ describe("parseStackTrace", () => {
     expect(p.chain[0].frames[5].method).toBe("sonaq001");
   });
 
+  test("the first log line before the trace says when, where and for whom it happened", () => {
+    expect(parseStackTrace(PB_ONLINE).head).toEqual({
+      level: "ERROR", traceId: "a1b2c3", user: "user01", host: "host1", time: "2026-07-01 15:32:08.194",
+      thread: "http-nio-8080-exec-1", message: "고정길이 전문 CommonException: errorCode=1001",
+    });
+    // empty trace/user fields stay absent; other prefix shapes still give time and level
+    expect(parseStackTrace("[ERROR::][h:2026-09-23 14:35:55.873][Test worker][a.B:m:1] boom\njava.lang.IllegalStateException: x\n").head)
+      .toEqual({ level: "ERROR", host: "h", time: "2026-09-23 14:35:55.873", thread: "Test worker", message: "boom" });
+    expect(parseStackTrace("2026-01-01 00:00:00.000 ERROR 1 --- [main] a.b.C : failed\njava.lang.IllegalStateException: x\n").head)
+      .toMatchObject({ level: "ERROR", time: "2026-01-01 00:00:00.000", message: "failed" });
+    expect(parseStackTrace("java.lang.NullPointerException: x\n\tat a.B.c(B.java:1)\n").head).toEqual({});
+  });
+
   test("stack-less PBGlobalExceptionAdvice warn line → synthesized block with 0 frames", () => {
     const p = parseStackTrace(
       "[WARN :t1:u1][h:2026-07-01 10:00:00.000][exec-2][ext.aspect.PBGlobalExceptionAdvice:handleCommonException:201] PB CommonException: URI=/ON/SONAQ001, code=1002, msg=null\n"

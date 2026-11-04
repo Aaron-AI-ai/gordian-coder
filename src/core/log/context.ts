@@ -4,6 +4,7 @@
  * suspect's code, the rules, the KB pages, the other suspects' code, the
  * instructions. Rework rounds drop rules and KB to a pointer line.
  */
+import { kbExcerpt } from "../kb/framework-kb";
 import { readFileAt, renderFileContent } from "../review/tools/read";
 import { loadLogConfig } from "./config";
 import { parseStackTrace, type ParsedLog } from "./parse";
@@ -18,7 +19,7 @@ export const OBS_MAX_CHARS = 3_000;
 export const PRIMARY_SNIPPET_MAX_CHARS = 4_000;
 export const RULES_MAX_CHARS = 6_000;
 // ponytail: 5 × 2.5k keeps KB under the 40k default beside the other sections;
-// a page past the cap is named, and the submit check serves it if the fix uses it.
+// a longer page is excerpted (head + passages on the methods called), not cut at its head.
 export const KB_MAX_DOCS = 5;
 export const KB_DOC_MAX_CHARS = 2_500;
 export const OTHER_SNIPPETS_MAX_CHARS = 8_000;
@@ -88,9 +89,14 @@ function kbSection(i: ContextInput): string {
   const docs = i.plan.kbDocs.slice(0, KB_MAX_DOCS);
   if (!docs.length) return "";
   const rest = i.plan.kbDocs.slice(KB_MAX_DOCS).map((d) => d.specifier.replace(/^search: /, ""));
+  // the calls the suspects and the stack make, so each page shows the methods actually used
+  const calls = [
+    ...i.plan.suspects.map((s) => readFileAt(i.cwd, null, s.path) ?? ""),
+    ...i.parsed.chain.flatMap((b) => b.frames.map((f) => `${f.cls}.${f.method}(`)),
+  ].join("\n");
   return [
     "## 프레임워크 KB (이미 주입됨 — 다시 읽지 마라. 해결 방안 code 는 이 가이드를 따른다)",
-    ...docs.map((d) => `### ${d.specifier} (${d.path})\n${cut(d.content, KB_DOC_MAX_CHARS, "(KB 문서 일부)")}`),
+    ...docs.map((d) => `### ${d.specifier} (${d.path})\n${kbExcerpt(i.cwd, d, calls, KB_DOC_MAX_CHARS)}`),
     ...(rest.length ? [`그 밖의 관련 KB: ${rest.join(", ")}`] : []),
   ].join("\n\n");
 }
@@ -104,6 +110,13 @@ export function shownKbDocs(text: string, plan: LogPlan): string[] {
 /** Which suspects actually survived into the rendered text (budget cuts can
  * drop the "나머지 용의 파일" section, in whole or in part) — these count as
  * "seen" for the gap check even though the analyst never re-`f_log_read` them. */
+/** KB pages the analyst saw, union'd across rounds and the submit-time KB
+ * bounce — the report lists them as the materials the analysis rests on. */
+export function recordKbShown(runId: string, cwd: string, paths: string[]): void {
+  const prev = readRunJson<string[]>(runId, cwd, "kbShown.json") ?? [];
+  writeRunJson(runId, cwd, "kbShown.json", [...new Set([...prev, ...paths])]);
+}
+
 export function injectedSuspects(text: string, suspects: Suspect[]): string[] {
   return suspects.filter((s) => text.includes(`### ${s.path}`)).map((s) => s.path);
 }
@@ -170,6 +183,7 @@ export function logContext(runId: string, sessionId: string, cwd: string): strin
   });
   writeRunText(runId, cwd, `context-${round}.md`, text);
   st.kbShown = shownKbDocs(text, plan);
+  recordKbShown(runId, cwd, st.kbShown);
   // Finalize needs which suspects were actually shown, union'd across rounds
   // (a rework round's "이전 라운드와 동일" rules/KB replacement still injects suspects).
   const prevInjected = readRunJson<string[]>(runId, cwd, "injected.json") ?? [];

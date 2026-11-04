@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { clearKbCache, frameworkKbDocs, kbClues, kbDocsForCode, kbPrefetch, kbSearch, resolveKbDoc, KB_DOC_MAX_CHARS } from "../framework-kb";
+import { clearKbCache, frameworkKbDocs, kbClues, kbConfigMisses, kbDocsForCode, kbExcerpt, kbPrefetch, kbSearch, resolveKbDoc, KB_DOC_MAX_CHARS } from "../framework-kb";
 
 const tmps: string[] = [];
 afterEach(() => {
@@ -389,5 +389,72 @@ describe("kbDocsForCode", () => {
     const code = '@FixedData(length = 20)\nprivate String a;\nif (x == null) throw PBOnlineException.create("1002");\nString s = new String();';
     expect(kbDocsForCode(d, code).map((x) => x.path.split("/").at(-1))).toEqual(["FixedData.md", "PBOnlineException.md"]);
     expect(kbDocsForCode(d, "int a = 1;")).toEqual([]);
+  });
+});
+
+describe("kbConfigMisses", () => {
+  const props = {
+    ".fico/kb/framework-site-ext/crypto/CubeOneProperties.md":
+      '# CubeOneProperties\n```java\n@ConfigurationProperties(prefix = "fico.crypto.cubeone")\npublic class CubeOneProperties {}\n```',
+  };
+  const yml = (code: string, file = "src/main/resources/application.yml") => [{ file, code }];
+
+  it("flags a config key that starts with the tail of a KB prefix but drops the rest, and names the bound key", () => {
+    const d = project(props);
+    const [miss, ...rest] = kbConfigMisses(d, yml("cubeone:\n  default-crypto-id: AES256\n  log-type: INFO\n"));
+    expect(rest).toHaveLength(1);
+    expect(miss).toMatchObject({ key: "cubeone.default-crypto-id", bound: "fico.crypto.cubeone.default-crypto-id", specifier: "CubeOneProperties" });
+    expect(miss.path).toBe(".fico/kb/framework-site-ext/crypto/CubeOneProperties.md");
+    expect(miss.content).toContain("fico.crypto.cubeone");
+  });
+
+  it("passes keys under the full prefix, unrelated keys, .properties under the prefix, and non-config files", () => {
+    const d = project(props);
+    expect(kbConfigMisses(d, yml("fico:\n  crypto:\n    cubeone:\n      default-crypto-id: AES256\n"))).toEqual([]);
+    expect(kbConfigMisses(d, yml("spring:\n  application:\n    name: x\n"))).toEqual([]);
+    expect(kbConfigMisses(d, yml("fico.crypto.cubeone.default-crypto-id=AES256\n", "application.properties"))).toEqual([]);
+    expect(kbConfigMisses(d, yml("cubeone:\n  x: 1\n", "src/main/java/A.java"))).toEqual([]);
+  });
+
+  it("reads .properties keys and survives a yaml fragment that does not parse", () => {
+    const d = project(props);
+    expect(kbConfigMisses(d, yml("# fix\ncubeone.default-crypto-id = AES256\n", "src/main/resources/application.properties")).map((m) => m.key))
+      .toEqual(["cubeone.default-crypto-id"]);
+    expect(kbConfigMisses(d, yml("cubeone: [unclosed\n"))).toEqual([]);
+  });
+});
+
+// A long page cut at its head hides the API the code calls (case-27: StringUtils.masking's
+// allowed types sat past the cap); keep the head and add the passages naming the called methods.
+describe("kbExcerpt", () => {
+  const doc = (content: string) => ({ specifier: "kr.co.openlabs.fico.framework.utils.StringUtils", path: ".fico/kb/core/utils/StringUtils.md", content });
+  const filler = (n: number) => Array.from({ length: n }, (_, i) => `- line ${i} about padding and trimming`).join("\n");
+  const page = `# StringUtils\nINTRO\n${filler(150)}\n- masking(String str, String types): types "1" or "2" only\n${filler(150)}\nTAIL`;
+
+  it("returns a page within the cap untouched", () => {
+    expect(kbExcerpt("/nonexistent", doc("short"), "StringUtils.masking(p, T)", 100)).toBe("short");
+  });
+
+  it("keeps the head and the passage naming a method the code calls on that class, within the cap", () => {
+    const out = kbExcerpt("/nonexistent", doc(page), 'return StringUtils.masking(phoneNo, PHONE_MASK_TYPE);', 2_500);
+    expect(out).toContain("INTRO");
+    expect(out).toContain('masking(String str, String types): types "1" or "2" only');
+    expect(out).not.toContain("TAIL");
+    expect(out.length).toBeLessThanOrEqual(2_500);
+  });
+
+  it("matches the class in an FQCN stack frame and falls back to the head when nothing is named", () => {
+    expect(kbExcerpt("/nonexistent", doc(page), "kr.co.openlabs.fico.framework.utils.StringUtils.masking(", 2_500)).toContain('"1" or "2" only');
+    const head = kbExcerpt("/nonexistent", doc(page), "OtherUtils.masking(x)", 2_500);
+    expect(head).toContain("INTRO");
+    expect(head).not.toContain('"1" or "2" only');
+    expect(head.length).toBeLessThanOrEqual(2_500);
+  });
+
+  it("reads the page in full from the KB, past the copy toDoc already cut at KB_DOC_MAX_CHARS", () => {
+    const long = `# StringUtils\nINTRO\n${"x".repeat(KB_DOC_MAX_CHARS + 500)}\n- masking(String str, String types): types "1" or "2" only\n`;
+    const d = project({ ".fico/kb/fico-fwk-core/utils/StringUtils.md": long });
+    const cut = { ...doc(""), path: ".fico/kb/fico-fwk-core/utils/StringUtils.md", content: `${long.slice(0, KB_DOC_MAX_CHARS)}\n… (doc truncated)` };
+    expect(kbExcerpt(d, cut, "StringUtils.masking(p, T)", 2_500)).toContain('"1" or "2" only');
   });
 });

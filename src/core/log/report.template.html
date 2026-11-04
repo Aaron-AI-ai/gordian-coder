@@ -22,7 +22,7 @@
 * { box-sizing:border-box; }
 [hidden] { display:none !important; }
 body { margin:0; font-family:var(--sans); background:var(--paper); color:var(--ink); -webkit-font-smoothing:antialiased; }
-.wrap { max-width:1000px; margin:0 auto; padding:0 22px 64px; }
+.wrap { max-width:1000px; margin:0 auto; padding:0 22px 64px; overflow-wrap:anywhere; } /* long FQCNs and URIs must not widen the page */
 .eyebrow { font-family:var(--mono); font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--graphite); }
 header { padding:34px 0 22px; border-bottom:1px solid var(--line); }
 .topline { display:flex; justify-content:space-between; align-items:baseline; gap:16px; flex-wrap:wrap; }
@@ -33,7 +33,11 @@ h1 { font-size:30px; font-weight:800; letter-spacing:-.01em; margin:10px 0 12px;
 .dim { color:var(--graphite); font-size:12px; }
 code { font-family:var(--mono); background:#f1efe8; padding:1px 6px; border-radius:5px; font-size:12px; word-break:break-all; }
 
-/* verdict: the one-line answer, before anything else */
+/* target: which request this log is about — read before the answer */
+.target { margin:20px 0 0; padding:14px 16px; background:var(--card); border:1px solid var(--line); border-radius:10px; }
+.target .eyebrow { display:block; margin-bottom:10px; }
+
+/* verdict: the one-line answer */
 .verdict { margin:20px 0 0; padding:14px 16px; border-radius:9px; border:1px solid; }
 .verdict.pass { background:#eef5ee; border-color:#cfe3cf; }
 .verdict.warn { background:#fdf7ea; border-color:#eedfb8; }
@@ -70,7 +74,12 @@ section.step > h2 .no { font-family:var(--mono); font-size:12px; color:var(--pap
 .path li.root { color:var(--fail); font-weight:700; }
 .obs { list-style:none; margin:0; padding:0 !important; font-size:13px; }
 .obs li { padding:4px 0; display:flex; gap:8px; align-items:baseline; }
+.obs li > span:last-child { min-width:0; }
 .obs .ok { color:var(--pass); font-weight:700; } .obs .no { color:var(--fail); font-weight:700; }
+.refs { list-style:none; margin:0 0 10px; padding:0; font-size:13px; }
+.refs:last-child { margin-bottom:0; }
+.refs li { padding:2px 0; word-break:break-all; }
+.refs .badge { margin-left:6px; }
 
 /* code boxes: evidence (context, muted) and fix (the answer, accented + copyable) */
 .codebox { position:relative; margin:8px 0 0; border-radius:0 6px 6px 0; border-left:3px solid var(--line); background:#faf9f6; }
@@ -113,6 +122,8 @@ details.more .codebox { margin:0; }
     <h1>{{HEADING}}</h1>
     {{RUNINFO}}
   </header>
+
+  {{TARGET}}
 
   {{VERDICT}}
 
