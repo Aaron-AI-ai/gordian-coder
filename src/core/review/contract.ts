@@ -251,31 +251,70 @@ export function repetitiveText(s: string): boolean {
   return new Set(chunks).size / chunks.length < 0.6;
 }
 
-/** True when `s` is largely Han (Chinese) characters while the review language
- * isn't Han-based — the classic small-model "suddenly answers in Chinese" glitch.
- * Japanese/Chinese reviews legitimately contain Han, so they are exempt. */
-export function scriptMismatch(s: string, language: string): boolean {
-  if (language.startsWith("zh") || language.startsWith("ja")) return false;
-  const letters = s.replace(/\s/g, "");
-  if (letters.length < 20) return false; // too short to judge
-  const han = letters.match(/[一-鿿]/g)?.length ?? 0;
-  return han / letters.length > 0.3;
+const LANG_NAMES: Record<string, string> = { ko: "Korean", en: "English", ja: "Japanese", zh: "Chinese" };
+
+export function languageName(code: string): string {
+  return LANG_NAMES[code] ?? code;
 }
 
-/** Han runs in prose outside backtick code spans. scriptMismatch only sees a
- * wholesale switch; a small model also slips a few Chinese characters into
- * otherwise Korean text ("메서드入口处 최소한"), which a ko/en report never
- * needs. Quoted code/log text in backticks may legitimately carry Han. */
-export function strayHan(s: string, language: string): string[] {
-  if (language.startsWith("zh") || language.startsWith("ja")) return [];
-  return s.replace(/`[^`\n]*`/g, "").match(/\p{Script=Han}+/gu) ?? [];
+/** Scripts a report in each language writes in, on top of the ones every
+ * report may use: Latin (code identifiers, English terms), Greek (λ, μ, Δ are
+ * technical symbols, not a language slip) and Hangul (the codebases and their
+ * comments are Korean, so an English review still quotes Korean terms). A
+ * language missing here is not checked — a false bounce costs more than a
+ * missed slip. */
+export const REPORT_SCRIPTS: Record<string, string[]> = {
+  ko: [],
+  en: [],
+  ja: ["Hiragana", "Katakana", "Han"],
+  zh: ["Han"],
+};
+
+/** Letters outside the language's scripts, as one regex; null when unchecked. */
+function foreignLetters(language: string): RegExp | null {
+  const scripts = REPORT_SCRIPTS[language.split(/[-_]/)[0]];
+  if (!scripts) return null;
+  // Common/Inherited letters (ー, combining marks) belong to no one language
+  const allowed = ["Common", "Inherited", "Latin", "Greek", "Hangul", ...scripts].map((s) => `\\p{Script=${s}}`).join("");
+  return new RegExp(`[^\\P{L}${allowed}]+`, "gu");
+}
+
+/** True when `s` is largely written in a script the review language doesn't
+ * use — the classic small-model "suddenly answers in Chinese" glitch. */
+export function scriptMismatch(s: string, language: string): boolean {
+  const re = foreignLetters(language);
+  if (!re) return false;
+  const letters = s.replace(/\s/g, "");
+  if (letters.length < 20) return false; // too short to judge
+  const foreign = (letters.match(re) ?? []).join("").length;
+  return foreign / letters.length > 0.3;
+}
+
+/** Foreign-script runs in prose outside backtick code spans. scriptMismatch
+ * only sees a wholesale switch; a small model also slips a few words of another
+ * script into otherwise Korean text ("메서드入口处 최소한", "이유가 همین입니다"),
+ * which the report never needs. Quoted code/log text in backticks may
+ * legitimately carry any script. */
+export function strayScript(s: string, language: string): string[] {
+  const re = foreignLetters(language);
+  if (!re) return [];
+  return s.replace(/`[^`\n]*`/g, "").match(re) ?? [];
+}
+
+const SCRIPT_NAMES = ["Han", "Hiragana", "Katakana", "Hangul", "Cyrillic", "Arabic", "Hebrew", "Thai", "Devanagari"];
+
+/** "همین (Arabic), 不得使用 (Han)" — tells the model what to rewrite. */
+export function describeScripts(runs: string[]): string {
+  return runs
+    .map((r) => `${r} (${SCRIPT_NAMES.find((s) => new RegExp(`\\p{Script=${s}}`, "u").test(r)) ?? "other script"})`)
+    .join(", ");
 }
 
 /** Post-write check of a markdown report: lines whose prose (fenced blocks and
- * inline code excluded) still carries stray Han. "" when clean. A fence closes
- * only on the same character at least as long, so a 4-backtick block holding a
- * 3-backtick example stays code throughout. */
-export function reportHanWarning(md: string, language: string): string {
+ * inline code excluded) still carries a foreign script. "" when clean. A fence
+ * closes only on the same character at least as long, so a 4-backtick block
+ * holding a 3-backtick example stays code throughout. */
+export function reportScriptWarning(md: string, language: string): string {
   const hits: string[] = [];
   let fence = "";
   md.split("\n").forEach((line, i) => {
@@ -285,11 +324,11 @@ export function reportHanWarning(md: string, language: string): string {
       return;
     }
     if (fence) return;
-    const runs = strayHan(line, language);
-    if (runs.length) hits.push(`L${i + 1} "${[...new Set(runs)].join(", ")}"`);
+    const runs = strayScript(line, language);
+    if (runs.length) hits.push(`L${i + 1} "${describeScripts([...new Set(runs)])}"`);
   });
   if (!hits.length) return "";
-  return `⚠️ Chinese characters in report prose (${hits.length} line(s)): ${hits.slice(0, 5).join("; ")}${hits.length > 5 ? "; …" : ""}`;
+  return `⚠️ Non-${languageName(language)} script in report prose (${hits.length} line(s)): ${hits.slice(0, 5).join("; ")}${hits.length > 5 ? "; …" : ""}`;
 }
 
 /** Why a finding's prose reads as degenerate model output, or null when clean.

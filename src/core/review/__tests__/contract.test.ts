@@ -10,8 +10,9 @@ import {
   degenerateReason,
   repetitiveText,
   scriptMismatch,
-  strayHan,
-  reportHanWarning,
+  strayScript,
+  describeScripts,
+  reportScriptWarning,
   verdict,
   dedupeFindings,
   findingSource,
@@ -208,27 +209,49 @@ describe("degenerate-output detection", () => {
     expect(repetitiveText(prose)).toBe(false);
   });
 
-  it("scriptMismatch flags Chinese output in a ko/en review but not in ja", () => {
+  it("scriptMismatch flags a wholesale switch to another script in a ko/en review but not in ja", () => {
     const zh = "这个代码存在严重的安全问题，需要立即修复。这个函数没有验证输入参数。";
     expect(scriptMismatch(zh, "ko")).toBe(true);
     expect(scriptMismatch(zh, "en")).toBe(true);
     expect(scriptMismatch(zh, "ja")).toBe(false); // kanji is legitimate Japanese
+    expect(scriptMismatch("Этот код не проверяет входные параметры и может упасть.", "ko")).toBe(true);
     expect(scriptMismatch("이 코드는 입력 검증이 누락되어 보안 문제가 있습니다.", "ko")).toBe(false);
     expect(scriptMismatch("短い", "ko")).toBe(false); // under the judgment floor
   });
 
-  it("strayHan catches a few Chinese characters inside Korean prose, skipping backtick code and ja/zh", () => {
+  it("strayScript catches a few foreign-script words inside Korean prose, skipping backtick code and ja/zh", () => {
     // the real case: below scriptMismatch's 30% floor, still wrong
     const s = "서비스 메서드入口处 최소한 null/빈 값 검증을 추가하세요.";
     expect(scriptMismatch(s, "ko")).toBe(false);
-    expect(strayHan(s, "ko")).toEqual(["入口处"]);
-    expect(strayHan(s, "en")).toEqual(["入口处"]);
-    expect(strayHan(s, "ja")).toEqual([]);
-    expect(strayHan("로그의 `error=조회 失败` 문자열을 그대로 인용", "ko")).toEqual([]);
-    expect(strayHan("정상적인 한국어 문장입니다.", "ko")).toEqual([]);
+    expect(strayScript(s, "ko")).toEqual(["入口处"]);
+    expect(strayScript(s, "en")).toEqual(["入口处"]);
+    expect(strayScript(s, "ja")).toEqual([]);
+    expect(strayScript("로그의 `error=조회 失败` 문자열을 그대로 인용", "ko")).toEqual([]);
+    expect(strayScript("정상적인 한국어 문장입니다.", "ko")).toEqual([]);
   });
 
-  it("reportHanWarning names report lines with Han in prose, ignoring fenced and inline code", () => {
+  it("strayScript catches Arabic, Cyrillic and kana slips seen in real reports", () => {
+    expect(strayScript("로깅하는 이유가 همین입니다", "ko")).toEqual(["همین"]);
+    expect(strayScript("결과를 материализ 하지 않는다", "ko")).toEqual(["материализ"]);
+    expect(strayScript("값을 검증しています", "ko")).toEqual(["しています"]);
+    expect(strayScript("Validate before 返回", "en")).toEqual(["返回"]);
+    expect(strayScript("한국어 업무 용어 계좌잔고 quoted", "en")).toEqual([]); // Korean terms stay allowed in an en review
+  });
+
+  it("strayScript lets technical symbols through: Greek letters, digits, arrows, emoji", () => {
+    expect(strayScript("λ 표현식과 μs 단위, Δ 변화량 → 정상 ✅ 100%", "ko")).toEqual([]);
+    expect(strayScript("ja レビュー 漢字 ok", "ja")).toEqual([]);
+    expect(strayScript("中文 审查", "zh")).toEqual([]);
+    expect(strayScript("anything همین goes", "fr")).toEqual([]); // unlisted language: not checked
+  });
+
+  it("describeScripts names each run's script for the bounce message", () => {
+    expect(describeScripts(["همین", "不得使用", "материализ", "しています"])).toBe(
+      "همین (Arabic), 不得使用 (Han), материализ (Cyrillic), しています (Hiragana)"
+    );
+  });
+
+  it("reportScriptWarning names report lines with a foreign script in prose, ignoring fenced and inline code", () => {
     const md = [
       "# 리포트",
       "원인은 返回 값이 null이라서",
@@ -242,14 +265,16 @@ describe("degenerate-output detection", () => {
       "````",
       "인용 `中文` 은 제외, 本文 은 포함",
     ].join("\n");
-    const w = reportHanWarning(md, "ko");
-    expect(w).toContain("2 line(s)");
-    expect(w).toContain('L2 "返回"');
-    expect(w).toContain('L11 "本文"');
+    const w = reportScriptWarning(`${md}\n이유가 همین 입니다`, "ko");
+    expect(w).toContain("Non-Korean script in report prose");
+    expect(w).toContain("3 line(s)");
+    expect(w).toContain('L2 "返回 (Han)"');
+    expect(w).toContain('L11 "本文 (Han)"');
+    expect(w).toContain('L12 "همین (Arabic)"');
     expect(w).not.toContain("中文");
     expect(w).not.toContain("嵌套");
-    expect(reportHanWarning("깨끗한 리포트\n```\n中文\n```", "ko")).toBe("");
-    expect(reportHanWarning(md, "ja")).toBe("");
+    expect(reportScriptWarning("깨끗한 리포트\n```\n中文\n```", "ko")).toBe("");
+    expect(reportScriptWarning(md, "ja")).toBe("");
   });
 
   it("degenerateReason checks rule/message but not suggestion", () => {

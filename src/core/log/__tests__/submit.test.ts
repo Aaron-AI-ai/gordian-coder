@@ -60,16 +60,17 @@ describe("submitLog", () => {
     expect(readRunJson(runId, cwd, "callLog.json")).toBeTruthy();
   });
 
-  test("Chinese characters in Korean prose → rejected naming them; past the cap stored as written, not forced", () => {
+  test("foreign-script words in Korean prose → rejected naming them; past the cap stored as written, not forced", () => {
     const cwd = repo();
     const { runId, st } = start(cwd, "s-han");
     const p = valid(runId, st.submitToken);
-    p.cause.mechanism = "k가 삽入되지 않아 返回 값이 null";
+    p.cause.mechanism = "k가 삽入되지 않아 返回 값이 null, Тест 기준";
     p.resolution.changes[0].description = "`中文` 인용은 허용";
     for (let i = 1; i <= MAX_FAILED_SUBMITS; i++) {
       const out = submitLog(p, "s-han");
-      expect(out).toContain("Chinese characters");
-      expect(out).toContain("返回");
+      expect(out).toContain("Non-Korean script in your text");
+      expect(out).toContain("返回 (Han)");
+      expect(out).toContain("Тест (Cyrillic)");
       expect(out).not.toContain("中文");
     }
     expect(submitLog(p, "s-han")).toContain("✅");

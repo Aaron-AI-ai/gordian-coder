@@ -14,7 +14,7 @@
  */
 
 import { isAbsolute, join } from "node:path";
-import { REQUIRED_CATEGORIES, SubmitSchema, coverage, degenerateReason, fixAddsThrow, reportHanWarning, strayHan, verdict, type Finding, type Severity,
+import { REQUIRED_CATEGORIES, SubmitSchema, coverage, degenerateReason, fixAddsThrow, describeScripts, reportScriptWarning, strayScript, verdict, type Finding, type Severity,
   dedupeFindings, hasFix,
 } from "../contract";
 
@@ -315,13 +315,14 @@ export async function submitReview(payload: unknown, sessionId: string): Promise
     st.forcedNotes[file] = " — forced after repeated degenerate outputs (invalid findings dropped)";
   }
 
-  // Script slip: a few Chinese characters inside otherwise Korean text. The
-  // finding itself is sound, so past the cap it is kept as written (unlike
-  // degenerate output above) — finalize's report check still names it.
-  const han = [...new Set(findings.flatMap((f) => strayHan(`${f.rule} ${f.message}`, st.language)))];
-  if (han.length) {
+  // Script slip: a few words of another script (Chinese, Arabic, Cyrillic…)
+  // inside otherwise Korean text. The finding itself is sound, so past the cap
+  // it is kept as written (unlike degenerate output above) — finalize's report
+  // check still names it.
+  const foreign = [...new Set(findings.flatMap((f) => strayScript(`${f.rule} ${f.message}`, st.language)))];
+  if (foreign.length) {
     const bounce = reject(
-      `❌ Chinese characters in finding text: ${han.slice(0, 10).join(", ")}. ` +
+      `❌ Non-${languageName(st.language)} script in finding text: ${describeScripts(foreign.slice(0, 10))}. ` +
         `Rewrite those words in ${languageName(st.language)} and resubmit the full set for ${file}.`
     );
     if (bounce) return bounce;
@@ -365,9 +366,9 @@ export async function submitReview(payload: unknown, sessionId: string): Promise
 
   // A complete, non-degenerate submission proves recovery from earlier schema,
   // file, or coverage mistakes. Bound consecutive malformed output without
-  // penalizing one corrected mistake in each legitimate review round. Han text
-  // that outlived the cap must not reset it either, or the bounces restart.
-  if (!degenerate.length && !han.length) st.failedSubmits[file] = 0;
+  // penalizing one corrected mistake in each legitimate review round. Foreign-
+  // script text that outlived the cap must not reset it either, or the bounces restart.
+  if (!degenerate.length && !foreign.length) st.failedSubmits[file] = 0;
 
   // Deep-pass gate: with deepPasses > 1, the first (deepPasses - 1) clean
   // submissions for a target are NOT accepted — each one bounces back with a
@@ -558,8 +559,8 @@ async function finalizeReport(
     : forcedTargets.length
       ? `⚠️ Review incomplete — bounded recovery force-advanced ${forcedTargets.length} target(s); ${fileCount} file(s), ${all.length} issue(s) salvaged.`
       : `✅ Review complete — ${fileCount} file(s), ${all.length} issue(s).`;
-  const han = reportHanWarning(await Bun.file(isAbsolute(path) ? path : join(st.cwd, path)).text(), st.language);
-  return `${head}${gate}${audit}${forcedWarn} Report: ${path}${han ? `\n${han}` : ""}`;
+  const scriptWarn = reportScriptWarning(await Bun.file(isAbsolute(path) ? path : join(st.cwd, path)).text(), st.language);
+  return `${head}${gate}${audit}${forcedWarn} Report: ${path}${scriptWarn ? `\n${scriptWarn}` : ""}`;
 }
 
 /** Turn-end watchdog. Called when the session goes idle (the LLM stopped). If a
