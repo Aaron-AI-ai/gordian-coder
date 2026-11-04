@@ -10,7 +10,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, isAbsolute, basename } from "node:path";
 import { REQUIRED_CATEGORIES, type Category } from "../contract";
-import { loadConfig } from "../config";
+import { loadConfig, projectRulesDirs } from "../config";
 import FRAMEWORK_DEFAULT from "./knowledge/framework.md" with { type: "text" };
 import FRAMEWORK_KB_RULE from "./rules/framework_kb.md" with { type: "text" };
 import JAVA_RULE from "./rules/java.md" with { type: "text" };
@@ -113,26 +113,23 @@ export function rubricSources(cwd: string = process.cwd()): Record<string, strin
     if (!src) continue;
     out[cat] = checklistFor(src, baseDir).fromFile ? src.label : "built-in defaults";
   }
-  const rel = rulesDirOf(cwd);
-  const extraDir = join(cwd, rel);
-  if (existsSync(extraDir)) {
-    const n = readdirSync(extraDir, { recursive: true, encoding: "utf8" }).filter((f) =>
-      f.endsWith(".md")
-    ).length;
-    if (n) out["project-rules"] = `${rel} (${n} file(s))`;
-  }
+  const counts = rulesDirsOf(cwd)
+    .map((rel) => ({ rel, n: ruleFiles(cwd, rel).length }))
+    .filter((x) => x.n)
+    .map((x) => `${x.rel} (${x.n} file(s))`);
+  if (counts.length) out["project-rules"] = counts.join(", ");
   return out;
 }
 
 // ponytail: total cap on injected project rules per file; split/scope your md files if you hit it.
 const MAX_EXTRA_RULES_CHARS = 20_000;
 
-/** One project rule file from `review/rules/`: `globs` gates which review
+/** One project rule file from the project rules dir (`.fico/rules/`): `globs` gates which review
  * targets it applies to (empty = every file). `reference: true` lists the file
  * as a pointer the reviewer reads on demand (file_read) instead of injecting
  * its content into the prompt. */
 export interface ExtraRule {
-  file: string; // path relative to review/rules
+  file: string; // root-relative path (bundled rules: bare file name)
   globs: string[];
   content: string;
   reference?: boolean;
@@ -228,29 +225,40 @@ export function frameworkKbRule(cwd: string): ExtraRule {
   return { ...base, content: `${content.trimEnd()}\n${KB_INJECTION_NOTICE}\n` };
 }
 
-/** Project rules directory, relative to the project root: `.f-review.json`
- * `rulesDir` if set, else `review/rules`. */
-function rulesDirOf(cwd: string): string {
-  return loadConfig(cwd).rulesDir ?? "review/rules";
+/** Project rules directories, relative to the project root. The flattened
+ * config's `rulesDir` is `review.rulesDir`, else the top-level one; unset →
+ * `.fico/rules` plus the legacy `review/rules` (see projectRulesDirs). */
+function rulesDirsOf(cwd: string): string[] {
+  return projectRulesDirs(loadConfig(cwd).rulesDir, "review/rules");
+}
+
+/** `.md` files under one rules dir (recursive, sorted); [] when it is absent. */
+function ruleFiles(cwd: string, rel: string): string[] {
+  const dir = join(cwd, rel);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".md")).sort();
 }
 
 /**
  * Load review rules: the bundled set, then every `.md` under the project's
- * rules directory (recursive, sorted by path). Project rule `file` paths are
+ * rules directories (recursive, sorted by path, in rulesDirsOf order). Project rule `file` paths are
  * root-relative so reference-mode entries are directly file_read-able. Loaded
  * once per session; which rules actually reach the prompt is decided per file
  * by `renderExtraRules`.
  */
 export function loadExtraRules(cwd: string = process.cwd()): ExtraRule[] {
-  const rel = rulesDirOf(cwd);
-  const dir = join(cwd, rel);
-  const bundled = [frameworkKbRule(cwd), ...BUNDLED_RULES];
-  if (!existsSync(dir)) return bundled;
-  const project = readdirSync(dir, { recursive: true, encoding: "utf8" })
-    .filter((f) => f.endsWith(".md"))
-    .sort()
-    .map((f) => ({ file: `${rel}/${f}`, ...parseRule(readFileSync(join(dir, f), "utf8")) }));
-  return [...bundled, ...project];
+  // The rules dir is shared with f-log. A rule gated only by f-log's
+  // `exceptions:`/`handler:` is about one runtime error; with no `globs:` it
+  // would otherwise reach every reviewed file.
+  const project = rulesDirsOf(cwd).flatMap((rel) =>
+    ruleFiles(cwd, rel).flatMap((f) => {
+      const raw = readFileSync(join(cwd, rel, f), "utf8");
+      const rule = { file: `${rel}/${f}`, ...parseRule(raw) };
+      const fm = FRONTMATTER.exec(raw.replace(/^\uFEFF/, ""))?.[1] ?? "";
+      return !rule.globs.length && /^(exceptions|handler):/m.test(fm) ? [] : [rule];
+    })
+  );
+  return [frameworkKbRule(cwd), ...BUNDLED_RULES, ...project];
 }
 
 /** First heading (or first line) of a rule body — the index blurb for
@@ -276,7 +284,7 @@ export function renderExtraRules(rules: ExtraRule[], filePath: string): string {
   if (inject.length) {
     let out = inject.map((r) => `**${r.file}**\n${r.content}`).join("\n\n");
     if (out.length > MAX_EXTRA_RULES_CHARS) {
-      out = `${out.slice(0, MAX_EXTRA_RULES_CHARS)}\n\n… (truncated: applicable review/rules exceed ${MAX_EXTRA_RULES_CHARS} chars)`;
+      out = `${out.slice(0, MAX_EXTRA_RULES_CHARS)}\n\n… (truncated: applicable project rules exceed ${MAX_EXTRA_RULES_CHARS} chars)`;
     }
     sections.push(`**Project review rules**\n\n${out}`);
   }

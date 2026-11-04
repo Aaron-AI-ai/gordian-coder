@@ -5,7 +5,7 @@
  *   bun scripts/flog-eval.ts <target-dir> [--model <provider/model>] [--case <selector>] [--no-run]
  *
  * <target-dir>/f-log-cases/<id>.yaml 마다 target-dir에서 `opencode run --command f-log`를 돌려
- * .fico/report/f-log/<id>.md 를 만들고, 리포트 절을 정답과 대조해 PASS/FAIL 표를 찍는다.
+ * .fico/eval/f-log/<id>.md 를 만들고(실제 리포트 .fico/report/ 와 분리), 리포트 절을 정답과 대조해 PASS/FAIL 표를 찍는다.
  * FAIL 또는 리포트 없음이 하나라도 있으면 exit 1. --no-run 은 기존 리포트만 채점한다.
  * 실행 중에는 f-log-cases/ 를 프로젝트 밖(tmpdir)으로 옮겨 분석 에이전트가 정답을 못 읽게 하고, 종료 시 되돌린다.
  * exit 2: 사용법 오류(target 누락) 또는 케이스 없음(f-log-cases/ 없거나 비어 있음).
@@ -140,7 +140,7 @@ export function hideCases(target: string, away: string): () => void {
 function runFLog(target: string, c: GoldenCase, report: string, model?: string): void {
   // finalize는 같은 --output 이 이미 있으면 log-<runId>.md 로 비켜 쓴다(I-5). 미리 지운다.
   rmSync(join(target, report), { force: true });
-  mkdirSync(join(target, ".fico/report/f-log"), { recursive: true });
+  mkdirSync(join(target, ".fico/eval/f-log"), { recursive: true });
   const cmd = ["opencode", "run", "--command", "f-log", ...(model ? ["-m", model] : []), "--", `--file=${c.log} --output=${report}`];
   console.log(`\n$ ${cmd.join(" ")}`);
   // opencode resolves its project root from the inherited PWD env var, not getcwd();
@@ -169,7 +169,7 @@ async function main(): Promise<void> {
   const rows: string[] = [];
   let failed = 0;
   for (const c of cases) {
-    const report = `.fico/report/f-log/${c.id}.md`;
+    const report = `.fico/eval/f-log/${c.id}.md`;
     if (!noRun) runFLog(target, c, report, model);
     const full = join(target, report);
     if (!existsSync(full)) { rows.push(`| ${c.id} | – | – | – | – | – | – | – | 리포트 없음 |`); failed++; continue; }

@@ -195,6 +195,43 @@ describe("extra rules (review/rules)", () => {
     expect(loadExtraRules(d2)[0].file).toBe("framework_kb.md");
   });
 
+  it("reads the project rules in .fico/rules by default, and the legacy review/rules beside it", () => {
+    const d = tmp();
+    mkdirSync(join(d, ".fico", "rules"), { recursive: true });
+    mkdirSync(join(d, "review", "rules"), { recursive: true });
+    writeFileSync(join(d, ".fico", "rules", "a.md"), "project rule");
+    writeFileSync(join(d, "review", "rules", "b.md"), "legacy rule");
+    const files = loadExtraRules(d).map((r) => r.file);
+    expect(files.slice(-2)).toEqual([".fico/rules/a.md", "review/rules/b.md"]);
+    expect(rubricSources(d)["project-rules"]).toBe(".fico/rules (1 file(s)), review/rules (1 file(s))");
+  });
+
+  it("skips a shared rule gated only by f-log's exceptions:/handler: — it is about one error, not every file", () => {
+    const d = tmp();
+    mkdirSync(join(d, ".fico", "rules"), { recursive: true });
+    writeFileSync(join(d, ".fico", "rules", "tx.md"), '---\nexceptions: "*TransactionException"\n---\nrollback note');
+    writeFileSync(join(d, ".fico", "rules", "code.md"), '---\nhandler: errorCode\n---\nerror code note');
+    writeFileSync(join(d, ".fico", "rules", "both.md"), '---\nexceptions: "*SQLException"\nglobs: "*Mapper.xml"\n---\nsql note');
+    writeFileSync(join(d, ".fico", "rules", "plain.md"), "always");
+    expect(loadExtraRules(d).map((r) => r.file).slice(4)).toEqual([".fico/rules/both.md", ".fico/rules/plain.md"]);
+  });
+
+  it("takes the top-level rulesDir of fico_ai.json; review.rulesDir still wins when set", () => {
+    const d = tmp();
+    mkdirSync(join(d, ".fico", "config"), { recursive: true });
+    mkdirSync(join(d, "team-rules"), { recursive: true });
+    mkdirSync(join(d, "fcq", "rules"), { recursive: true });
+    mkdirSync(join(d, ".fico", "rules"), { recursive: true });
+    writeFileSync(join(d, "team-rules", "t.md"), "team");
+    writeFileSync(join(d, "fcq", "rules", "f.md"), "fcq");
+    writeFileSync(join(d, ".fico", "rules", "default.md"), "default");
+    const cfg = join(d, ".fico", "config", "fico_ai.json");
+    writeFileSync(cfg, JSON.stringify({ rulesDir: "team-rules", review: {} }));
+    expect(loadExtraRules(d).map((r) => r.file).slice(4)).toEqual(["team-rules/t.md"]);
+    writeFileSync(cfg, JSON.stringify({ rulesDir: "team-rules", review: { rulesDir: "fcq/rules" } }));
+    expect(loadExtraRules(d).map((r) => r.file).slice(4)).toEqual(["fcq/rules/f.md"]);
+  });
+
   it("loads from a custom rulesDir set in .f-review.json", () => {
     const d = tmp();
     mkdirSync(join(d, "fcq", "config", "rules"), { recursive: true });

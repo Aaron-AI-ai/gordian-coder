@@ -73,15 +73,15 @@ export function bundledLogRules(cwd: string): LogRule[] {
 }
 
 export function loadLogRules(cwd: string): LogRule[] {
-  const rel = loadLogConfig(cwd).rulesDir;
-  const dir = join(cwd, rel);
-  const bundled = bundledLogRules(cwd);
-  if (!existsSync(dir)) return bundled;
-  const project = readdirSync(dir, { recursive: true, encoding: "utf8" })
-    .filter((f) => f.endsWith(".md"))
-    .sort()
-    .map((f) => parseLogRule(`${rel}/${f}`, readFileSync(join(dir, f), "utf8")));
-  return [...bundled, ...project];
+  const project = loadLogConfig(cwd).rulesDirs.flatMap((rel) => {
+    const dir = join(cwd, rel);
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir, { recursive: true, encoding: "utf8" })
+      .filter((f) => f.endsWith(".md"))
+      .sort()
+      .map((f) => parseLogRule(`${rel}/${f}`, readFileSync(join(dir, f), "utf8")));
+  });
+  return [...bundledLogRules(cwd), ...project];
 }
 
 function globMatch(pattern: string, value: string): boolean {

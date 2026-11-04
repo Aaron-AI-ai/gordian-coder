@@ -1225,7 +1225,7 @@ describe("corrupt on-disk state", () => {
   it("treats an unreadable judgment file as never-judged", async () => {
     const d = gitRepo();
     const meta = await createRun(baseMeta(), d);
-    const jdir = join(d, "fcq/f-review/runs", meta.runId, "judgments");
+    const jdir = join(d, ".fico/f-review/runs", meta.runId, "judgments");
     mkdirSync(jdir, { recursive: true });
     writeFileSync(join(jdir, "a.ts.json"), "{not json");
     expect(loadJudgment(meta.runId, "a.ts", d).attempts).toEqual([]);
@@ -1234,7 +1234,7 @@ describe("corrupt on-disk state", () => {
   it("treats a shape-corrupt judgment (valid JSON, wrong fields) as never-judged", async () => {
     const d = gitRepo();
     const meta = await createRun(baseMeta(), d);
-    const jdir = join(d, "fcq/f-review/runs", meta.runId, "judgments");
+    const jdir = join(d, ".fico/f-review/runs", meta.runId, "judgments");
     mkdirSync(jdir, { recursive: true });
     // an attempt missing coverageGaps/feedback would crash judgeFeedbackFor at .at(-1)
     writeFileSync(
@@ -1290,7 +1290,7 @@ describe("corrupt on-disk state", () => {
   it("treats an unreadable review json as not-yet-submitted", async () => {
     const d = gitRepo();
     const meta = await createRun(baseMeta(), d);
-    const rdir = join(d, "fcq/f-review/runs", meta.runId, "reviews");
+    const rdir = join(d, ".fico/f-review/runs", meta.runId, "reviews");
     mkdirSync(rdir, { recursive: true });
     writeFileSync(join(rdir, "a.ts.json"), "{not json");
     expect(judgeContext(meta.runId, "a.ts", d)).toContain("No submitted review");

@@ -31,7 +31,7 @@ export interface ReviewState {
   fcqFix?: boolean; // config `fcqFix`: demand a TO-BE fix for EVERY fcq hit, not just CRITICAL/MAJOR
   systemRule: string;
   frameworkRules: string; // authoritative framework conventions (always injected)
-  extraRules: ExtraRule[]; // review/rules/*.md; glob-gated per file at prompt render
+  extraRules: ExtraRule[]; // bundled + project rules (.fico/rules/*.md); glob-gated per file at prompt render
   evidenceCache: Record<string, string>; // related-code + git-history dossier per target
   requirementBackground: string;
   planGuidance: string;

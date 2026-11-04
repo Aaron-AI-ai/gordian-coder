@@ -216,15 +216,15 @@ describe("injected import sources and framework KB", () => {
     // A run's review json embeds the reviewed class name, so the symbol-reference
     // signal used to surface a previous review above the real callers.
     const cwd = repo();
-    mkdirSync(join(cwd, "fcq/f-review/runs/r1/reviews"), { recursive: true });
+    mkdirSync(join(cwd, ".fico/f-review/runs/r1/reviews"), { recursive: true });
     writeFileSync(
-      join(cwd, "fcq/f-review/runs/r1/reviews/src__user-service.ts.json"),
+      join(cwd, ".fico/f-review/runs/r1/reviews/src__user-service.ts.json"),
       JSON.stringify({ file: "src/user-service.ts", findings: [{ rule: "createUser" }] })
     );
     Bun.spawnSync(["git", "add", "-A"], { cwd });
     Bun.spawnSync(["git", "commit", "-qm", "run artifact"], { cwd });
     const ev = reviewEvidence(cwd, "HEAD", "src/user-service.ts");
-    expect(ev.text).not.toContain("fcq/f-review/runs");
+    expect(ev.text).not.toContain(".fico/f-review/runs");
     expect(ev.text).toContain("src/controller.ts"); // real caller still ranked
   });
 });

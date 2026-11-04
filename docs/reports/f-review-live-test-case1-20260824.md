@@ -1,5 +1,7 @@
 # f-review 실환경 테스트 — Case 1: working-tree 병렬 리뷰 (judge 게이트 포함)
 
+> **경로 안내 (2026-11-04)**: 이 문서의 리포트·작업 데이터·평가 자산 경로는 작성 당시 기준입니다. 현재는 f-review·f-log·fcq 산출물이 모두 `.fico/` 아래에 생기고(`.fico/report/<도구>/report-*/`, `.fico/f-review/runs/`, `.fico/f-log/runs/`), 평가 자산(`f-log-cases/`, `f-review-cases/`, `.fico/config/`)은 `test-projects/on-test-lab/`(Gradle 루트)에 있습니다. 자세한 내용은 `docs/guides/0.2.5-release.md`를 보세요.
+
 - 일시: 2026-08-24 10:06~10:41 KST (약 34분)
 - 대상: `/Users/koscom/workspace/fico/on-stk-ord` (리뷰 범위: `on-stk-ord-online` 하위만)
 - 실행: `opencode run --command f-review -m openrouter/qwen/qwen3.8-27b -- "--exclude=on-stk-ord-bsm/**,build.gradle,fcq/**"`

@@ -90,7 +90,10 @@ const REPORT = {
 /** Install a fake `fcq` that honours --report-output, like the real CLI. No
  * fcq.yaml is written: the point of --report-output is that the target needs
  * no `report:` section of its own. */
-function fakeFcq(d: string, opts: { exit?: number; noReport?: boolean } = {}): void {
+// fcq >= 0.2.6 writes each run into its own report-<stamp>/ under --report-output.
+const FCQ_RUN = "report-20261104-101010";
+
+function fakeFcq(d: string, opts: { exit?: number; noReport?: boolean; flat?: boolean } = {}): void {
   const bin = join(d, "fcq-bin");
   const script = [
     "#!/bin/sh",
@@ -100,7 +103,7 @@ function fakeFcq(d: string, opts: { exit?: number; noReport?: boolean } = {}): v
     'for a in "$@"; do case "$a" in --report-output=*) out="${a#--report-output=}";; esac; done',
     ...(opts.noReport
       ? []
-      : [`mkdir -p "$out" && cat > "$out/report.json" <<'EOF'\n${JSON.stringify(REPORT)}\nEOF`]),
+      : [`out="$out${opts.flat ? "" : `/${FCQ_RUN}`}"`, `mkdir -p "$out" && cat > "$out/report.json" <<'EOF'\n${JSON.stringify(REPORT)}\nEOF`]),
     `exit ${opts.exit ?? 1}`,
   ].join("\n");
   writeFileSync(bin, script);
@@ -149,6 +152,14 @@ describe("runFcq", () => {
     const d = dir();
     fakeFcq(d);
     expect(existsSync(join(d, "fcq/config/fcq.yaml"))).toBe(false);
+    const status = await runFcq(d, ["src/A.java"], join(d, "run"));
+    expect(status.status).toBe("ok");
+    expect(status.reportPath).toBe(join(d, `run/fcq/raw/${FCQ_RUN}/report.json`));
+  });
+
+  it("still reads the flat report.json an fcq older than 0.2.6 writes", async () => {
+    const d = dir();
+    fakeFcq(d, { flat: true });
     const status = await runFcq(d, ["src/A.java"], join(d, "run"));
     expect(status.status).toBe("ok");
     expect(status.reportPath).toBe(join(d, "run/fcq/raw/report.json"));

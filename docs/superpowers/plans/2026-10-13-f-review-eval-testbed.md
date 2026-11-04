@@ -1,5 +1,7 @@
 # f-review 평가 테스트베드 Implementation Plan
 
+> **경로 안내 (2026-11-04)**: 이 문서의 리포트·작업 데이터·평가 자산 경로는 작성 당시 기준입니다. 현재는 f-review·f-log·fcq 산출물이 모두 `.fico/` 아래에 생기고(`.fico/report/<도구>/report-*/`, `.fico/f-review/runs/`, `.fico/f-log/runs/`), 평가 자산(`f-log-cases/`, `f-review-cases/`, `.fico/config/`)은 `test-projects/on-test-lab/`(Gradle 루트)에 있습니다. 자세한 내용은 `docs/guides/0.2.5-release.md`를 보세요.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** f-review(코드 리뷰 기능)가 10개의 숨겨둔 잠재 버그(Java/웹 빈출 4 + fico KB 위배 4 + 롬복 규약 2) + 대조군 2개를 whole-file 모드와 commit-diff 모드 양쪽에서 얼마나 정확히 찾아내는지 자동으로 채점하는 테스트베드를 만든다.

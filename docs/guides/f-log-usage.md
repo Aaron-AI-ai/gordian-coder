@@ -18,12 +18,12 @@ OpenCode에서 대상 프로젝트를 연 뒤:
 
 ```json
 {
+  "rulesDir": ".fico/rules",
   "frameworkKb": { "kr.co.openlabs.fico.framework.*": ".fico/kb/fico_framework/fico-fwk-core/" },
   "review": { "language": "ko", "maxToolCalls": 20 },
   "log": {
     "output": ".fico/report/f-log/",
     "runsDir": ".fico/f-log/runs/",
-    "rulesDir": "log/rules",
     "judgeThreshold": 70,
     "judgeRounds": 2,
     "contextMaxChars": 40000,
@@ -34,13 +34,15 @@ OpenCode에서 대상 프로젝트를 연 뒤:
 
 `log` 섹션이 없으면 위 값이 기본이다. `judge`는 f-review와 같이 기본 꺼짐이며, `--judge`로 실행마다 켜거나 `log.judge`(또는 `review.judge`)를 `true`로 두면 켜진다. `frameworkKb`·`language`·`maxToolCalls`·`maxIter`는 `review`의 값을 그대로 쓴다.
 
+`rulesDir`(이 프로젝트가 따라야 할 규칙, 기본 `.fico/rules`)도 f-review와 공유하는 최상위 키다. `log.rulesDir`을 두면 f-log에서는 그 값이 우선하고, 아무것도 설정하지 않으면 `.fico/rules`와 예전 기본 위치 `log/rules`를 둘 다 읽는다.
+
 `frameworkKb`는 f-review·f-log가 공유하므로 위처럼 최상단에 두는 것을 권장한다. 기존처럼 `review.frameworkKb`에 둬도 동작하며, 둘 다 있으면 `review` 쪽이 우선한다.
 
 ## 산출물
 
 ```
-.fico/report/f-log/log-<runId>.md      리포트 (덮어쓰지 않음)
-.fico/report/f-log/log-<runId>.html    같은 내용의 HTML 화면 (브라우저로 열기)
+.fico/report/f-log/report-<runId>/log.md      리포트 (실행마다 디렉터리 하나, 덮어쓰지 않음)
+.fico/report/f-log/report-<runId>/log.html    같은 내용의 HTML 화면 (브라우저로 열기)
 .fico/f-log/runs/<runId>/               input.log · plan.json · context-<n>.md · submission-<n>.json · judgments.json · finalize.json
 ```
 
@@ -48,7 +50,7 @@ OpenCode에서 대상 프로젝트를 연 뒤:
 
 HTML 리포트는 맨 위 **분석 대상**(로그 파일, 발생 시각, URI·서비스 ID·에러 코드, 추적 ID·사용자, 호스트·스레드, 로그 메시지, 예외 — 로그에 있는 항목만)과 판정 배너(배지·신뢰도·원인 한 줄) 아래에 **1. 로그 분석**(진입점→원인 경로, 로그 관측, 스택 원문) → **2. 원인**(메커니즘, 근거 코드 — 원인 줄 강조, **근거 자료** — 참고한 프레임워크 KB(수정 코드에 쓰인 문서 표시)·적용한 분석 룰·분석 중 읽은 파일) → **3. 해결 방안**(변경마다 `복사` 버튼, `해결 방안 전체 복사`는 markdown으로 복사) 순서로 보여주고, 검토한 대안·못 본 것·심사 이력·실행 정보는 접어 둔다. 채팅 요약에 `HTML:` 줄로 경로가 나온다.
 
-## 룰 파일 — `log/rules/*.md`
+## 룰 파일 — `.fico/rules/*.md`
 
 f-review 룰과 같은 형식이며 게이트만 예외 타입이다:
 
@@ -66,6 +68,21 @@ mode: reference                    # 선택: 본문 대신 목록만 주고 f_lo
 ## 평가 테스트베드
 
 `scripts/flog-eval.ts`는 대상 프로젝트의 `f-log-cases/<id>.yaml`(정답)마다 f-log를 실행해 리포트를 자동 채점한다.
+채점용 리포트는 실제 리포트(`.fico/report/`)와 섞이지 않게 `.fico/eval/f-log/<id>.md`에 쓴다.
+기본 대상(`scripts/run-flog-eval.sh`)은 Gradle 루트 `test-projects/on-test-lab/`이며, 정답의 파일 경로는 그 루트 기준(`on-test-lab-online/src/...`)이다.
+
+**프로젝트 규칙 반영 검증**: `on-test-lab/.fico/rules/`의 규칙이 실제로 쓰이는지 보는 케이스가 따로 있다.
+
+| 케이스 | 도구 | 규칙 | 통과 조건 |
+|---|---|---|---|
+| `f-log-cases/case-102-project-rule-null-result` | f-log | `otl-null-result.md` ([OTL-R01]) | 실행 정보 '적용 룰'에 `otl-null-result`, 수정 코드에 규칙의 코드 `"1404"` |
+| `f-review-cases/rule-01` | f-review | `otl-null-result.md` ([OTL-R01]) | NPE 지적의 TO-BE에 `1404` |
+| `f-review-cases/rule-02` | f-review | `otl-coding-style.md` ([OTL-S01]) | `System.out.println` 줄 지적 메시지에 `OTL-S01` |
+
+```bash
+./scripts/run-flog-eval.sh --case case-102-project-rule-null-result
+./scripts/run-freview-eval.sh --mode whole --case 'rule-*'
+```
 
 ```bash
 bun scripts/flog-eval.ts /path/to/target [--model provider/model] [--case <selector>] [--no-run]

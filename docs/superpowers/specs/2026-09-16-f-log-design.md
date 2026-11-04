@@ -1,5 +1,7 @@
 # f-log — 에러 로그 분석 설계 스펙
 
+> **경로 안내 (2026-11-04)**: 이 문서의 리포트·작업 데이터·평가 자산 경로는 작성 당시 기준입니다. 현재는 f-review·f-log·fcq 산출물이 모두 `.fico/` 아래에 생기고(`.fico/report/<도구>/report-*/`, `.fico/f-review/runs/`, `.fico/f-log/runs/`), 평가 자산(`f-log-cases/`, `f-review-cases/`, `.fico/config/`)은 `test-projects/on-test-lab/`(Gradle 루트)에 있습니다. 자세한 내용은 `docs/guides/0.2.5-release.md`를 보세요.
+
 상위 그림은 `docs/design/error-log-analysis-design.md`(4단계 파이프라인, 추후 항목)를 따른다.
 이 문서는 그 그림을 구현 가능한 수준으로 확정한 것이다. 상위 문서와 다른 결정은 §16에 모았다.
 

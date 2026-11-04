@@ -6,12 +6,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { CONFIG_PATHS, loadConfig, resolveMaxIter, resolveMaxToolCalls } from "../review/config";
+import { CONFIG_PATHS, loadConfig, projectRulesDirs, resolveMaxIter, resolveMaxToolCalls } from "../review/config";
 
 export interface LogConfig {
   output: string;
   runsDir: string;
-  rulesDir: string;
+  /** Project rules dirs (log.rulesDir > top-level rulesDir > .fico/rules + legacy log/rules). */
+  rulesDirs: string[];
   judgeThreshold: number;
   judgeRounds: number;
   contextMaxChars: number;
@@ -25,7 +26,7 @@ export interface LogConfig {
 export const LOG_DEFAULTS = {
   output: ".fico/report/f-log/",
   runsDir: ".fico/f-log/runs/",
-  rulesDir: "log/rules",
+  rulesDir: "log/rules", // legacy default, still read when nothing is configured
   judgeThreshold: 70,
   judgeRounds: 2,
   contextMaxChars: 40_000,
@@ -45,14 +46,17 @@ const LogSectionSchema = z.object({
   language: field(z.string()),
 });
 
-/** The raw `log` section of the first parseable config file, or {}. */
+/** The raw `log` section of the first parseable config file, or {}. A
+ * top-level `rulesDir` (the project rules, shared with f-review) fills the
+ * section's `rulesDir` when the section has none. */
 function logSection(cwd: string): z.infer<typeof LogSectionSchema> {
   for (const rel of CONFIG_PATHS) {
     const p = join(cwd, rel);
     if (!existsSync(p)) continue;
     try {
-      const raw = JSON.parse(readFileSync(p, "utf8")) as { log?: unknown };
-      const parsed = LogSectionSchema.safeParse(raw?.log ?? {});
+      const raw = JSON.parse(readFileSync(p, "utf8")) as { log?: unknown; rulesDir?: unknown };
+      const section = typeof raw?.log === "object" && raw.log !== null ? raw.log : {};
+      const parsed = LogSectionSchema.safeParse({ rulesDir: raw?.rulesDir, ...section });
       return parsed.success ? parsed.data : {};
     } catch {
       /* fall through */
@@ -67,7 +71,7 @@ export function loadLogConfig(cwd: string): LogConfig {
   return {
     output: log.output ?? LOG_DEFAULTS.output,
     runsDir: log.runsDir ?? LOG_DEFAULTS.runsDir,
-    rulesDir: log.rulesDir ?? LOG_DEFAULTS.rulesDir,
+    rulesDirs: projectRulesDirs(log.rulesDir, LOG_DEFAULTS.rulesDir),
     judgeThreshold: log.judgeThreshold ?? review.judgeThreshold ?? LOG_DEFAULTS.judgeThreshold,
     judgeRounds: log.judgeRounds ?? review.judgeRounds ?? LOG_DEFAULTS.judgeRounds,
     contextMaxChars: log.contextMaxChars ?? LOG_DEFAULTS.contextMaxChars,

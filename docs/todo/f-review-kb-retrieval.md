@@ -1,7 +1,7 @@
 # TODO: f-review KB 검색 근본 개선
 
 > 상태: **보류** (2026-10-21 기준). 현재 구현을 유지하고, 아래 항목은 추후 개발한다.
-> 근거: 평가 케이스 case-01~100 whole 모드 실행 결과 (`on-test-lab-online/f-review-cases`).
+> 근거: 평가 케이스 case-01~100 whole 모드 실행 결과 (`on-test-lab/f-review-cases`, 2026-11-04 이전에는 `on-test-lab-online/f-review-cases`).
 
 ## 1. 현재 구현 (유지)
 
@@ -158,5 +158,5 @@ PoC 코드 기준이 이렇다. 실제 업무 코드는 import·단서·줄 수�
 ## 6. 관련
 
 - 설계 메모: 메모리 `p_freview_kb_prefetch_idea`
-- 평가 케이스: `test-projects/on-test-lab/on-test-lab-online/f-review-cases/`
+- 평가 케이스: `test-projects/on-test-lab/f-review-cases/` (Gradle 루트 기준, 채점 리포트는 `on-test-lab/.fico/eval/f-review/`)
 - 평가 실행: `scripts/run-freview-eval.sh --mode whole --case <선택자>`

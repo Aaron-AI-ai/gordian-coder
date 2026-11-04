@@ -2,12 +2,12 @@
  * Output location resolution + report rendering/writing.
  *
  * Reports and manifests live in separate trees:
- *   report   → --output param > .f-review.json "output" > fcq/report/f-review/
- *   manifest → fcq/f-review/manifest/ (fixed)
- * A directory report target gets an auto-named `review-<label>.md`; every
- * caller's label carries its runId or session id, so one run/session owns one
- * file and a re-finalize rewrites that file in place. A file target is used
- * as-is (and is overwritten). Nothing else in the folder is moved or touched.
+ *   report   → --output param > .f-review.json "output" > .fico/report/f-review/
+ *   manifest → .fico/f-review/manifest/ (fixed)
+ * A directory report target gets its own `report-<date>-<label>/review.md`;
+ * every caller's label carries its runId or session id, so one run/session
+ * owns one directory and a re-finalize rewrites it in place. A file target is
+ * used as-is (and is overwritten). Nothing else in the folder is moved or touched.
  */
 
 import { existsSync, statSync, readdirSync, readFileSync } from "node:fs";
@@ -17,8 +17,11 @@ import { localFileStamp, localTimestamp } from "../../time";
 import { SEVERITIES, dedentCode, findingSource, splitFix, verdict, type Finding, type FindingSource, type Severity } from "../contract";
 import { renderHtmlReport, type ReportContext } from "./html";
 
-const DEFAULT_REPORT_DIR = "fcq/report/f-review/";
-const DEFAULT_MANIFEST_DIR = "fcq/f-review/manifest/";
+const DEFAULT_REPORT_DIR = ".fico/report/f-review/";
+const DEFAULT_MANIFEST_DIR = ".fico/f-review/manifest/";
+// Reports lived here before everything moved under .fico; the baseline still
+// reads it until the first report lands in the new default.
+const LEGACY_REPORT_DIR = "fcq/report/f-review/";
 
 function isDirSync(p: string): boolean {
   return existsSync(p) && statSync(p).isDirectory();
@@ -37,17 +40,25 @@ export function defaultLabel(d: Date = new Date()): string {
   return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}_${s.slice(9, 11)}-${s.slice(11, 13)}-${s.slice(13, 15)}`;
 }
 
+/** `report-<id>`, with the local `yyyymmdd` of `d` in front unless `id`
+ * already starts with a date (an f-log run id or a no-git label). Shared by
+ * f-review and f-log so every run writes into a directory of its own. */
+export function reportDirName(id: string, d: Date = new Date()): string {
+  return /^\d{4}-?\d{2}-?\d{2}/.test(id) ? `report-${id}` : `report-${localFileStamp(d).slice(0, 8)}-${id}`;
+}
+
+/** `d` dates the directory (pass the run's start so a re-finalize lands in
+ * the same one); only the day is used, the label already names the run. */
 export function resolveOutputPath(
   opt: string | undefined,
   label: string,
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
+  d: Date = new Date()
 ): string {
   const p = opt ?? loadConfig(cwd).output ?? DEFAULT_REPORT_DIR;
   const full = isAbsolute(p) ? p : join(cwd, p);
   const looksDir = p.endsWith("/") || isDirSync(full);
-  // No write-time stamp: the label already names the run/session, and a stamp
-  // turned every re-finalize of the same run into a second report file.
-  return looksDir ? join(p, `review-${label}.md`) : p;
+  return looksDir ? join(p, reportDirName(label, d), "review.md") : p;
 }
 
 /** Manifest path — its own fixed tree, independent of the report location. */
@@ -220,31 +231,39 @@ export function parseReportKeys(md: string): Set<string> {
 
 /**
  * Load the baseline: finding keys from the most recent prior report at the
- * output location (same resolution as resolveOutputPath). Missing dir/file →
- * empty set. Target manifests (`*-targets.md`) are ignored.
+ * output location (same resolution as resolveOutputPath): `report-<id>/review.md`
+ * or a legacy flat `review-*.md`. Missing dir/file → empty set. Target
+ * manifests (`*-targets.md`) are ignored.
  */
 export function loadBaseline(
   opt: string | undefined,
   cwd: string = process.cwd()
 ): Set<string> {
-  const p = opt ?? loadConfig(cwd).output ?? DEFAULT_REPORT_DIR;
-  const full = isAbsolute(p) ? p : join(cwd, p);
-  let report: string | null = null;
-  if (isDirSync(full)) {
-    const latest = readdirSync(full)
-      .filter((f) => /^review-.*\.md$/.test(f) && !f.endsWith("-targets.md"))
-      .map((f) => join(full, f))
-      .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
-    report = latest ?? null;
-  } else if (!p.endsWith("/") && existsSync(full)) {
-    report = full;
-  }
+  const p = opt ?? loadConfig(cwd).output;
+  const report = p
+    ? latestReport(isAbsolute(p) ? p : join(cwd, p), p.endsWith("/"))
+    : latestReport(join(cwd, DEFAULT_REPORT_DIR), true) ?? latestReport(join(cwd, LEGACY_REPORT_DIR), true);
   if (!report) return new Set();
   try {
     return parseReportKeys(readFileSync(report, "utf8"));
   } catch {
     return new Set();
   }
+}
+
+/** Newest `report-<id>/review.md` or legacy flat `review-*.md` in a report
+ * directory; a file target is itself. null when there is none. */
+function latestReport(full: string, dirOnly: boolean): string | null {
+  if (isDirSync(full)) {
+    return readdirSync(full)
+      .flatMap((f) =>
+        /^report-/.test(f) ? [join(full, f, "review.md")]
+        : /^review-.*\.md$/.test(f) && !f.endsWith("-targets.md") ? [join(full, f)]
+        : [])
+      .filter((f) => existsSync(f))
+      .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0] ?? null;
+  }
+  return !dirOnly && existsSync(full) ? full : null;
 }
 
 export function renderReport(

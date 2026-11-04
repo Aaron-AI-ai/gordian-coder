@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { reportDirName } from "../../report/output";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -623,7 +624,7 @@ describe("run-mode session (startReview/submitReview with runId)", () => {
     );
     expect(md).toContain("## a.ts");
     // Aggregate report dir untouched by the subagent:
-    expect(existsSync(join(d, "fcq/report/f-review"))).toBe(false);
+    expect(existsSync(join(d, ".fico/report/f-review"))).toBe(false);
   });
 
   it("joins one segment unit of a split file and writes a unit-keyed artifact", async () => {
@@ -830,12 +831,11 @@ describe("finalizeRun", () => {
     const second = /Report: (.+)$/.exec(await finalizeRun(meta.runId, d))![1];
 
     expect(second).toBe(first);
-    expect(first).toBe(`fcq/report/f-review/review-${meta.runId}.md`);
-    expect(readdirSync(join(d, "fcq/report"))).toEqual(["f-review"]);
-    expect(readdirSync(join(d, "fcq/report/f-review")).sort()).toEqual([
-      `review-${meta.runId}.html`,
-      `review-${meta.runId}.md`,
-    ]);
+    const dir = reportDirName(meta.runId, new Date(meta.createdAt));
+    expect(first).toBe(`.fico/report/f-review/${dir}/review.md`);
+    expect(readdirSync(join(d, ".fico/report"))).toEqual(["f-review"]);
+    expect(readdirSync(join(d, ".fico/report/f-review"))).toEqual([dir]);
+    expect(readdirSync(join(d, ".fico/report/f-review", dir)).sort()).toEqual(["review.html", "review.md"]);
     expect(readFileSync(join(d, second), "utf8")).toContain("## b.ts");
   });
 
@@ -1059,7 +1059,7 @@ describe("finalizeRun", () => {
     // A prior report exists with rule "old-rule" on a.ts.
     const { writeReport } = await import("../../report/output");
     await writeReport(
-      "fcq/report/f-review/review-prev.md",
+      ".fico/report/f-review/review-prev.md",
       { "a.ts": [{ category: "correctness", severity: "major", file: "a.ts", rule: "old-rule", message: "m" }] },
       "prev",
       d,

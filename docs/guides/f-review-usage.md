@@ -3,6 +3,8 @@
 gordian-coder를 OpenCode 플러그인으로 붙이면 `/f-review` 명령이 생깁니다.
 커밋이나 파일 묶음을 **파일 단위로 병렬 리뷰**하고, 마크다운·HTML 리포트를 남깁니다.
 
+> 이 문서의 명령과 경로는 모두 **Windows Git Bash** 기준입니다 (`C:\workspace` → `/c/workspace`).
+
 ---
 
 ## 1. 개요
@@ -20,7 +22,7 @@ gordian-coder를 OpenCode 플러그인으로 붙이면 `/f-review` 명령이 생
                         │
                         │ ② f_review_finalize    집계 · 리포트 생성 · 판정
                         ▼
-                  fcq/report/f-review/review-<runId>-<시각>.md (+ .html)
+                  .fico/report/f-review/report-<날짜>-<runId>/review.md (+ .html)
 ```
 
 **오케스트레이터는 코드를 직접 읽지 않습니다.** 계획하고, 서브에이전트를 띄우고, 마무리만 합니다.
@@ -162,11 +164,11 @@ OpenCode TUI에서 **리뷰할 파일을 지정**합니다.
 **`.fico/config/fico_ai.json`** 을 사용합니다. 프로젝트 루트 기준 상대 경로입니다.
 
 ```
-C:\workspace\내프로젝트\.fico\config\fico_ai.json
+/c/workspace/내프로젝트/.fico/config/fico_ai.json
 ```
 
 f-review 설정은 **`review` 키 아래**에 넣습니다. `review` 섹션의 값이 최상위
-동명 키보다 우선합니다.
+동명 키보다 우선합니다. 여러 도구가 함께 쓰는 값(`rulesDir`, `frameworkKb`, `wikiKb`)은 최상위에 둡니다.
 
 ```json
 {
@@ -187,8 +189,8 @@ f-review 설정은 **`review` 키 아래**에 넣습니다. `review` 섹션의 �
 
 ```json
 {
+  "rulesDir": ".fico/rules",
   "review": {
-    "rulesDir": "fcq/rules",
     "language": "ko",
     "frameworkKb": {
       "kr.co.openlabs.fico.framework.extension.*": ".fico/kb/fico_framework/fico-fwk-extension/",
@@ -222,7 +224,7 @@ f-review 설정은 **`review` 키 아래**에 넣습니다. `review` 섹션의 �
 | -------------- | -------- | ---------------------- | --------------------------------------------------- |
 | `language`     | string   | `"ko"`                 | 리포트·지적 언어. `ko` / `en` / `ja`                       |
 | `failOn`       | string   | 없음                     | CI 게이트 기준. `blocker` | `major` | `minor` | `nit`    |
-| `output`       | string   | `fcq/report/f-review/` | 리포트 경로. `/`로 끝나거나 기존 디렉터리면 디렉터리 모드                  |
+| `output`       | string   | `.fico/report/f-review/` | 리포트 경로. `/`로 끝나거나 기존 디렉터리면 그 아래 실행별 `report-*/` 생성|
 | `exclude`      | string[] | 없음                     | 제외 글롭. **리뷰 대상에서만** 빠지고, 탐색 도구는 저장소 전체를 검색합니다       |
 | `deepPasses`   | number   | `1` (1~5)              | 파일당 리뷰 라운드. 2 이상이면 반박·심화·보정 패스 추가                   |
 | `maxToolCalls` | number   | `10` (최소 3)            | 리뷰어 세션당 총 도구 호출 수. 파일이나 라운드가 바뀌어도 리셋되지 않음           |
@@ -231,25 +233,154 @@ f-review 설정은 **`review` 키 아래**에 넣습니다. `review` 섹션의 �
 | `judgeRounds`  | number   | `2` (0~5)              | 파일당 최대 재작업 횟수. 0이면 채점만 하고 재리뷰 없음                    |
 | `fcq`          | boolean  | `false`                | 정적 분석 실행                                            |
 | `fcqFix`       | boolean  | `false`                | f-fixer 패스 추가 (MINOR 포함 전 위반에 TO-BE 작성)             |
-| `rulesDir`     | string   | `review/rules`         | 프로젝트 규칙 디렉터리                                        |
+| `rulesDir`     | string   | `.fico/rules`          | **최상위 키.** 이 프로젝트가 따라야 할 규칙 디렉터리 (f-review·f-log 공용). 아래 참고 |
 | `frameworkKb`  | object   | 없음                     | import 접두사 → KB 디렉터리 맵. `framework_kb` 규칙의 기본 표를 대체 |
 | `kbSearch`     | string   | `"keyword"`            | `kb_search` 도구의 순위 방식. `keyword`(부분 문자열 일치) / `bm25`(단어 단위 + 희귀도 가중). 사전 검색은 항상 `keyword` |
 | `wikiKb`       | object   | 없음                     | git wiki → KB 미러링 (`gdc kb-sync`)                   |
 
+### 프로젝트 규칙 (`rulesDir`)
+
+**이 프로젝트가 따라야 할 규칙**을 `.md` 파일로 `.fico/rules/`에 넣어 두면 f-review와 f-log가 함께 참고합니다.
+기본 내장 규칙(Java, Mapper XML 등)에 **추가로** 적용됩니다.
+
+```
+내프로젝트/
+└── .fico/rules/
+    ├── naming.md          # 예: 명명 규칙
+    ├── transaction.md     # 예: 트랜잭션 처리 규칙
+    └── mapper/
+        └── sql.md         # 하위 폴더도 모두 읽음
+```
+
+```markdown
+---
+globs: "*.java"
+---
+
+#### 트랜잭션 규칙
+- Service 의 쓰기 메서드에는 @Transactional 을 붙인다
+- Controller 에서 트랜잭션을 시작하지 않는다
+```
+
+- 다른 위치를 쓰려면 `fico_ai.json` **최상위**에 `"rulesDir": "<경로>"`를 둡니다(`review` 밖). 경로는 **프로젝트 루트 기준**입니다
+- 하위 호환: 예전처럼 `review.rulesDir`(또는 `log.rulesDir`)에 두면 그 도구에서는 그 값이 우선합니다.
+  아무것도 설정하지 않으면 `.fico/rules`와 예전 기본 위치 `review/rules`를 **둘 다** 읽습니다(f-log는 `log/rules`)
+- 하위 폴더까지 **모든 `.md`** 를 읽습니다
+- 맨 위 `globs`(선택)로 적용 대상을 좁힙니다. 예: `"*.java"`, `"**/*Mapper.xml"`. 없으면 모든 파일에 적용
+- 내용이 길면 `mode: reference`를 추가하세요. 프롬프트에 본문을 넣는 대신 목록만 주고, 리뷰어가 필요할 때 읽습니다
+- 한 파일에 적용되는 규칙 본문은 **합계 20,000자**까지만 들어갑니다. 넘으면 뒤가 잘리니 `globs`로 나누세요
+- 같은 디렉터리를 f-log도 읽습니다. f-log용 조건(`exceptions:`, `handler:`)만 있고 `globs`가 없는 규칙은 특정 에러에 대한 내용이라 f-review에서는 건너뜁니다
+
 
 ---
 
-## 5. 리포트가 만들어지는 과정
+## 5. KB 동기화 (`gdc kb-sync`)
 
-### 5.1 산출물 위치
+git wiki(`<저장소>.wiki.git`)의 `.md` 문서를 프로젝트 안의 KB 디렉터리로 내려받습니다.
+f-review의 `framework_kb` 규칙이 이 디렉터리를 참조하므로, **리뷰 전에 한 번 받아두면 됩니다.**
+
+- 저장 위치: `.fico/kb/<이름>/` (기본값)
+- 방식: **미러** — 받을 때마다 대상 디렉터리를 지우고 다시 채웁니다. 그 안에 직접 만든 파일은 사라집니다
+- 실행 위치: **프로젝트 루트** (설정 파일을 현재 디렉터리 기준으로 찾습니다)
+
+### 5.1 사전 설정 ① — wiki 주소 등록
+
+`.fico/config/fico_ai.json` 의 `wikiKb`에 등록합니다. (`review` 섹션 밖, 최상위)
+
+```json
+{
+  "wikiKb": {
+    "fico_framework": {
+      "url": "https://gitlab-ce.koscom.co.kr/fico_ai/fico-wiki.wiki.git",
+      "tokenEnv": "FICO_WIKI_TOKEN"
+    }
+  }
+}
+```
+
+| 키 | 필수 | 설명 |
+|---|---|---|
+| `url` | ✔ | wiki의 **git 주소**. 웹 주소 뒤에 `.wiki.git`이 붙습니다 (브라우저 주소 `.../fico-wiki/-/wikis/home` → `.../fico-wiki.wiki.git`) |
+| `tokenEnv` | | 토큰을 담은 **환경변수 이름**. 토큰 값 자체를 적지 마세요 |
+
+### 5.2 사전 설정 ② — git 토큰
+
+폐쇄망 GitLab이 로그인 없이 읽기를 허용하지 않으면 **PAT(Personal Access Token)** 가 필요합니다.
+
+1. GitLab → 우측 상단 프로필 → **Edit profile** → **Access Tokens**
+2. 권한(scope)은 **`read_repository` 하나면 충분**합니다. 만료일을 지정하세요
+3. 생성된 토큰 문자열을 **환경변수에 저장** — 이름은 `tokenEnv`에 적은 값과 같아야 합니다
+
+```bash
+# 현재 터미널에서만 (테스트용)
+export FICO_WIKI_TOKEN="glpat-xxxxxxxxxxxxxxxxxxxx"
+
+# 영구 저장 → ~/.bashrc 에 추가하고 바로 적용
+echo 'export FICO_WIKI_TOKEN="glpat-xxxxxxxxxxxxxxxxxxxx"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+> `~/.bashrc`는 Git Bash에서만 읽힙니다. OpenCode도 **Git Bash에서 실행해야** 이 토큰을 씁니다.
+> 토큰은 설정 파일·리포트·로그 어디에도 기록되지 않습니다(원격 주소는 `***`로 가려서 출력).
+
+**토큰을 안 쓰는 경우**: `tokenEnv`를 비워두거나 변수를 설정하지 않으면, git이 이미 가진
+자격증명(Windows 자격 증명 관리자, SSH 키, `~/.netrc`)을 그대로 사용합니다. 사내에서 이미
+`git clone`이 되는 환경이면 토큰 설정 없이도 동작합니다.
+
+### 5.3 사용
+
+```bash
+cd /c/workspace/내프로젝트
+
+gdc kb-sync --check          # 최신 여부만 확인 (다운로드 없음, 몇 초)
+gdc kb-sync                  # 동기화
+```
+
+| 옵션 | 설명 |
+|---|---|
+| `--check` | 원격 커밋과 로컬 기록만 비교. 오래됐거나 미동기화면 **종료 코드 1** |
+| `--name <이름>` | `wikiKb`의 특정 항목만 대상 |
+| `--dry-run` | 받아서 개수만 보고, 파일은 쓰지 않음 |
+| `--force` | 최신이어도 다시 내려받기 |
+
+옵션 없이 실행하면 **원격 커밋이 그대로일 때 다운로드를 건너뜁니다.** 매일 돌려도 부담 없습니다.
+
+### 5.4 정상 동작 확인
+
+**① 명령 출력**
 
 ```
-fcq/report/f-review/review-<runId>.md      ← 리포트
-fcq/report/f-review/review-<runId>.html    ← 같은 내용 HTML
+gdc kb-sync
+
+  ✔ fico_framework → .fico/kb/fico_framework (128 md @a1b2c3d4)
+  + .ignore에 `!.fico` 추가 — 이게 없으면 ripgrep 기반 검색(opencode glob 등)이 .fico를 건너뜁니다
 ```
 
-`runId`는 `<짧은 SHA>-<시각>` 형태입니다. 실행 하나에 리포트 하나 — 같은 실행을 다시
-finalize하면 같은 파일을 갱신합니다. `output`이 파일 경로면 그 파일을 덮어씁니다.
+두 번째 실행부터는 이렇게 나오면 정상입니다.
+
+```
+  = fico_framework 이미 최신 @a1b2c3d4 — 건너뜀
+```
+
+**② 받은 문서 확인** — `.md` 파일이 실제로 있어야 합니다.
+
+```bash
+find .fico/kb/fico_framework -name '*.md' | wc -l
+```
+
+---
+
+## 6. 리포트가 만들어지는 과정
+
+### 6.1 산출물 위치
+
+```
+.fico/report/f-review/report-<날짜>-<runId>/review.md      ← 리포트 (실행마다 디렉터리 하나)
+.fico/report/f-review/report-<날짜>-<runId>/review.html    ← 같은 내용 HTML
+```
+
+`runId`는 `<짧은 SHA>-<시각>` 형태입니다. 실행 하나에 디렉터리 하나 — 같은 실행을 다시
+finalize하면 같은 디렉터리의 파일을 갱신합니다. `output`이 파일 경로면 그 파일을 덮어씁니다.
 runId·`Generated:` 시각은 **PC의 시간대** 기준이며, 본문에는 오프셋과 지역명이 함께
 적힙니다(예: `2026-10-13 13:40:37 +09:00 (Asia/Seoul)`).
 
@@ -258,16 +389,16 @@ runId·`Generated:` 시각은 **PC의 시간대** 기준이며, 본문에는 오
 지적마다 배지가 붙고 툴바의 출처 필터(전체/AI/fcq)로 걸러볼 수 있으며, 파일 블록 안에서
 AI 리뷰 → 구분선 → 정적 분석 순으로 묶입니다. `fcq+AI` 행은 두 필터 모두에 나타납니다.
 
-> 리포트 폴더의 다른 파일은 옮기거나 지우지 않습니다. 실행마다 자기 파일이 쌓이므로,
-> 최신 결과는 파일 수정 시각으로 찾습니다. (이전 버전은 쓸 때마다 폴더째
+> 리포트 폴더의 다른 파일은 옮기거나 지우지 않습니다. 실행마다 `report-*/` 디렉터리가 쌓이므로,
+> 최신 결과는 디렉터리 이름(날짜)이나 수정 시각으로 찾습니다. 예전 버전의 리포트는 `fcq/report/f-review/`에 남아 있습니다. (이전 버전은 쓸 때마다 폴더째
 > `f-review.<타임스탬프>`로 옮겼고, 그 때문에 리포트가 여러 폴더로 갈라졌습니다.)
 
-### 5.2 중간 산출물
+### 6.2 중간 산출물
 
 리뷰가 도는 동안 모든 상태가 디스크에 남습니다. 문제 추적의 출발점입니다.
 
 ```
-fcq/f-review/runs/<runId>/
+.fico/f-review/runs/<runId>/
 ├── run.json                  실행 메타 (대상, 범위, 옵션, baseline, fcq 상태)
 ├── reviews/<파일>.json       파일별 리뷰 결과 (findings, assessed, 커버리지)
 ├── reviews/<파일>.md         사람이 읽는 파일별 리뷰

@@ -4,7 +4,7 @@
  * `f_review_plan` runs the fcq CLI ONCE over the run's target files before the
  * fan-out, then shards its `report.json` per target file under the run dir:
  *
- *   fcq/f-review/runs/<runId>/fcq/
+ *   .fico/f-review/runs/<runId>/fcq/
  *     summary.json          run-level summary + analyzer status (finalize)
  *     files/<slug>.json     violations of ONE target file (reviewer/judge)
  *
@@ -23,8 +23,8 @@
  * that nothing here reads.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 import { splitFix, type Category, type Finding, type Severity } from "../contract";
 import { loadConfig } from "../config";
@@ -164,6 +164,14 @@ function fcqDir(runRoot: string): string {
   return join(runRoot, "fcq");
 }
 
+/** fcq >= 0.2.6 writes each run into its own `report-<stamp>/` under
+ * --report-output; older fcq writes `report.json` straight into it. The raw
+ * dir is per run, so the newest report-* is this run's. */
+function fcqReportJson(rawDir: string): string {
+  const runs = existsSync(rawDir) ? readdirSync(rawDir).filter((f) => f.startsWith("report-")).sort() : [];
+  return runs.length ? join(rawDir, runs[runs.length - 1], "report.json") : join(rawDir, "report.json");
+}
+
 /** Absolute path of a target's violation shard. */
 export function fcqShardPath(runRoot: string, file: string): string {
   return join(fcqDir(runRoot), "files", `${slug(file)}.json`);
@@ -268,8 +276,8 @@ export async function runFcq(cwd: string, targets: string[], runRoot: string): P
   const o = fcqOptionsOf(cwd);
   // fcq owns this directory (it writes an ownership manifest there), so keep it
   // separate from the shards f-review writes under fcq/.
-  const reportPath = join(fcqDir(runRoot), "raw", "report.json");
-  const cmd = fcqCommand(cwd, targets, o, dirname(reportPath));
+  const rawDir = join(fcqDir(runRoot), "raw");
+  const cmd = fcqCommand(cwd, targets, o, rawDir);
   const command = cmd.join(" ");
   const started = Date.now();
   const fail = (reason: string): FcqRunStatus => ({
@@ -305,6 +313,7 @@ export async function runFcq(cwd: string, targets: string[], runRoot: string): P
   // a bad exit only marks the result partial.
   const stderrTail = stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 500);
   const partial = exitCode !== 0 && exitCode !== 1;
+  const reportPath = fcqReportJson(rawDir);
   if (!existsSync(reportPath)) {
     return fail(
       partial

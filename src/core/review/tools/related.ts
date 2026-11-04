@@ -195,7 +195,7 @@ export function discoverRelatedFiles(
   for (const symbol of declaredSymbols(content).slice(0, 4)) {
     const result = codeSearch(cwd, ref, symbol, [], true, false);
     for (const path of pathsFromCodeSearch(result)) {
-      // Source only: this project's own review artifacts (fcq/f-review/runs/…)
+      // Source only: this project's own review artifacts (.fico/f-review/runs/…)
       // embed the reviewed class name, and matching them made a run's previous
       // review outrank real callers as "related code".
       const normalized = normalizeRepoPath(path);

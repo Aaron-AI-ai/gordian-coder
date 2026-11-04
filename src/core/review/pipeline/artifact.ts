@@ -17,7 +17,7 @@ import { z } from "zod";
 import { FindingSchema, REQUIRED_CATEGORIES, SEVERITIES, type Severity } from "../contract";
 import { FcqRunStatusSchema, type FcqRunStatus } from "../evidence/fcq";
 
-export const RUNS_DIR = "fcq/f-review/runs";
+export const RUNS_DIR = ".fico/f-review/runs";
 
 /**
  * Structured per-file result written next to the rendered md (the aggregation

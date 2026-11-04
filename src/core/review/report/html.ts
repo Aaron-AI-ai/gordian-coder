@@ -1,6 +1,6 @@
 /**
  * HTML report renderer — the same visual system as the FCQ static report
- * (`fcq/report/static/index.html`): header, verdict banner, hero stats with a
+ * (fcq's own `index.html`): header, verdict banner, hero stats with a
  * severity spectrum, sticky tabs + filter toolbar, collapsible detail blocks,
  * search, and URL-hash state.
  *

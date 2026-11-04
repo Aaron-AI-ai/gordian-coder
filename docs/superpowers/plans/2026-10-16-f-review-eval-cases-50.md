@@ -1,5 +1,7 @@
 # f-review 평가 케이스 50개 확장 Implementation Plan
 
+> **경로 안내 (2026-11-04)**: 이 문서의 리포트·작업 데이터·평가 자산 경로는 작성 당시 기준입니다. 현재는 f-review·f-log·fcq 산출물이 모두 `.fico/` 아래에 생기고(`.fico/report/<도구>/report-*/`, `.fico/f-review/runs/`, `.fico/f-log/runs/`), 평가 자산(`f-log-cases/`, `f-review-cases/`, `.fico/config/`)은 `test-projects/on-test-lab/`(Gradle 루트)에 있습니다. 자세한 내용은 `docs/guides/0.2.5-release.md`를 보세요.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** f-review 평가 테스트베드를 버그 케이스 10개에서 50개(case-11~50 신규 40개)로, 대조군을 2개에서 6개(control-03~06 신규 4개)로 늘리고, 첫 배치에서 드러난 채점기의 약점 3건(줄 번호 수작업·카테고리 단일값·리포트 폴더 충돌)과 대조군 오탐 노이즈 1건을 먼저 고친다.

@@ -184,7 +184,7 @@ export function scoreControlCase(rows: FindingRow[]): boolean {
 
 function runFReview(target: string, c: EvalCase, mode: "whole" | "diff", report: string, model?: string): void {
   rmSync(join(target, report), { force: true });
-  mkdirSync(join(target, ".fico/report/freview-eval"), { recursive: true });
+  mkdirSync(join(target, ".fico/eval/f-review"), { recursive: true });
   const reviewArgs = mode === "whole" ? `--files=${c.file} --whole` : c.commit;
   const cmd = ["opencode", "run", "--command", "f-review", ...(model ? ["-m", model] : []), "--", `${reviewArgs} --output=${report}`];
   console.log(`\n$ ${cmd.join(" ")}`);
@@ -213,7 +213,7 @@ async function main(): Promise<void> {
   const rows: string[] = [];
   let failed = 0;
   for (const c of cases) {
-    const report = `.fico/report/freview-eval/${c.id}-${mode}.md`;
+    const report = `.fico/eval/f-review/${c.id}-${mode}.md`;
     if (!noRun) runFReview(target, c, mode, report, model);
     const full = join(target, report);
     if (!existsSync(full)) { rows.push(`| ${c.id} | – | 리포트 없음 |`); failed++; continue; }

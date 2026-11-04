@@ -219,9 +219,10 @@ describe("reportPath", () => {
   test("directory vs file, override wins", () => {
     const cwd = mkdtempSync(join(tmpdir(), "f-log-rp-"));
     const cfg = loadLogConfig(cwd);
-    expect(reportPath(cwd, cfg, "r1")).toBe(join(cwd, ".fico/report/f-log/", "log-r1.md"));
-    expect(reportPath(cwd, cfg, "r1", "out/custom.md")).toBe(join(cwd, "out/custom.md"));
-    expect(reportPath(cwd, cfg, "r1", "out/dir/")).toBe(join(cwd, "out/dir/", "log-r1.md"));
+    const r = "20261104-103015-ab12"; // newRunId shape: already dated, so no extra date prefix
+    expect(reportPath(cwd, cfg, r)).toBe(join(cwd, ".fico/report/f-log/", `report-${r}`, "log.md"));
+    expect(reportPath(cwd, cfg, r, "out/custom.md")).toBe(join(cwd, "out/custom.md"));
+    expect(reportPath(cwd, cfg, r, "out/dir/")).toBe(join(cwd, "out/dir/", `report-${r}`, "log.md"));
   });
 });
 
@@ -241,16 +242,16 @@ describe("finalizeRun end-to-end", () => {
     submitLogJudge({ runId, judgeToken: tok, scores: { observation: 30, alternatives: 20, rootCause: 25 }, unexplained: [], feedback: "ok" }, cwd);
     const out = finalizeRun(runId, cwd);
     expect(out).toContain("f-log finished — PASS");
-    expect(out).toContain(`log-${runId}.md`);
+    expect(out).toContain(`report-${runId}/log.md`);
     expect(out).toContain("Gaps: none");
     expect(out).not.toContain("script in report prose");
     // The relayed summary carries the resolution too, on ONE line, with the files to change.
     expect(out).toContain("Fix (root-cause): map.get(k) 결과가 null이면 빈 값을 반환하도록 가드한다 [src/a/Svc.java, src/a/Other.java]");
-    const path = join(cwd, ".fico/report/f-log/", `log-${runId}.md`);
+    const path = join(cwd, ".fico/report/f-log/", `report-${runId}`, "log.md");
     expect(existsSync(path)).toBe(true);
     expect(existsSync(join(runDir(runId, cwd), "finalize.json"))).toBe(true);
     const htmlPath = path.replace(/\.md$/, ".html");
-    expect(out).toContain(`HTML: .fico/report/f-log/log-${runId}.html`);
+    expect(out).toContain(`HTML: .fico/report/f-log/report-${runId}/log.html`);
     expect(readFileSync(htmlPath, "utf8")).toContain("null 가드 추가");
     const before = readFileSync(path, "utf8");
     const htmlBefore = readFileSync(htmlPath, "utf8");
@@ -285,11 +286,11 @@ describe("finalizeRun end-to-end", () => {
     const first = runOnce(2);
     expect(first.out).toContain("Report: out/same.md");
     const second = runOnce(1);
-    expect(second.out).toContain(`Report: out/log-${second.runId}.md`);
+    expect(second.out).toContain(`Report: out/report-${second.runId}/log.md`);
     expect(second.out).toContain("already existed");
-    expect(second.out).toContain(`HTML: out/log-${second.runId}.html`);
-    expect(existsSync(join(cwd, "out", `log-${second.runId}.html`))).toBe(true);
-    const path = join(cwd, "out", `log-${second.runId}.md`);
+    expect(second.out).toContain(`HTML: out/report-${second.runId}/log.html`);
+    expect(existsSync(join(cwd, "out", `report-${second.runId}`, "log.html"))).toBe(true);
+    const path = join(cwd, "out", `report-${second.runId}`, "log.md");
     expect(existsSync(path)).toBe(true);
     expect(readFileSync(path, "utf8")).toContain(second.runId);
     // first run's report is untouched

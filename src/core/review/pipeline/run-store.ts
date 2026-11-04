@@ -5,7 +5,7 @@
  * coordination — so any number of subagent sessions can join without growing
  * process memory:
  *
- *   fcq/f-review/runs/<runId>/
+ *   .fico/f-review/runs/<runId>/
  *     run.json                    expected targets + shared review config
  *     reviews/<slug>.md           human-readable per-file review
  *     reviews/<slug>.json         structured findings (what finalize aggregates)

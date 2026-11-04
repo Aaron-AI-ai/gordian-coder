@@ -42,7 +42,7 @@ export const ReviewConfigSchema = z.object({
   maxIter: field(z.number()), // exploration tool calls per round before forced convergence (default MAX_ITER)
   maxToolCalls: field(z.number()), // total tool calls per reviewer session, including context/submit
   batchSize: field(z.number()), // run mode: subagents in flight at once (clamped 1..MAX_BATCH_SIZE, default DEFAULT_BATCH_SIZE)
-  rulesDir: field(z.string()), // project rules directory, relative to root (default "review/rules")
+  rulesDir: field(z.string()), // project rules directory: top-level key, or review.rulesDir (see projectRulesDirs)
   frameworkKb: field(z.record(z.string())), // import prefix → KB dir map; replaces the framework_kb rule's table
   frameworkKbFile: field(z.string()), // path to an md replacing the bundled framework_kb.md entirely (frontmatter globs respected)
   kbSearch: field(z.enum(["keyword", "bm25"])), // kb_search ranker (default "keyword"); prefetch always ranks by keyword
@@ -63,6 +63,17 @@ export type ReviewConfig = z.infer<typeof ReviewConfigSchema>;
  * gordian feature, not just review. The two `.f-review.json` paths stay for
  * back-compat — projects configured before the move keep working untouched.
  */
+/** Project rules — the rules this project follows, read by f-review and f-log
+ * alike. Set once at the top level of fico_ai.json (`"rulesDir"`); a feature's
+ * own `review.rulesDir` / `log.rulesDir` still wins, so older configs behave as
+ * before. With no setting at all, `.fico/rules` is read plus the feature's
+ * pre-.fico default (`review/rules`, `log/rules`). Missing dirs are skipped. */
+export const PROJECT_RULES_DIR = ".fico/rules";
+
+export function projectRulesDirs(explicit: string | undefined, legacyDefault: string): string[] {
+  return explicit ? [explicit] : [PROJECT_RULES_DIR, legacyDefault];
+}
+
 export const CONFIG_PATHS = [
   ".fico/config/fico_ai.json",
   ".f-review.json",

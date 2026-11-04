@@ -88,7 +88,7 @@ tail -f $(ls -t /tmp/freview-*.log | head -1) | grep --line-buffered -E "Agent|j
 ## 결과 확인
 
 ```bash
-cd /Users/koscom/workspace/fico/on-stk-ord && ls -t fcq/report/f-review/*.md | head -1 | xargs -I{} sh -c 'echo {}; grep -E "^\*\*|^## |Verdict" {} | head -20'
+cd /Users/koscom/workspace/fico/on-stk-ord && ls -td .fico/report/f-review/report-*/review.md | head -1 | xargs -I{} sh -c 'echo {}; grep -E "^\*\*|^## |Verdict" {} | head -20'
 ```
 
 ---

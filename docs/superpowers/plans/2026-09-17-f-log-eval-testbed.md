@@ -1,5 +1,7 @@
 # f-log 평가 테스트베드 Implementation Plan
 
+> **경로 안내 (2026-11-04)**: 이 문서의 리포트·작업 데이터·평가 자산 경로는 작성 당시 기준입니다. 현재는 f-review·f-log·fcq 산출물이 모두 `.fico/` 아래에 생기고(`.fico/report/<도구>/report-*/`, `.fico/f-review/runs/`, `.fico/f-log/runs/`), 평가 자산(`f-log-cases/`, `f-review-cases/`, `.fico/config/`)은 `test-projects/on-test-lab/`(Gradle 루트)에 있습니다. 자세한 내용은 `docs/guides/0.2.5-release.md`를 보세요.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** f-log 해결 방안에 수정 후 코드·설정 조각을 싣게 하고, on-test-lab-online에 고의 버그 3개(NPE, MyBatis 바인딩, 빈 충돌)와 그 로그를 만드는 JUnit 테스트, 케이스별 정답 YAML을 두고, gordian-coder의 `scripts/flog-eval.ts`가 f-log 리포트를 정답과 자동 대조하게 한다.

@@ -604,8 +604,9 @@ export async function finalizeRun(runId: string, cwd: string): Promise<string> {
 
   // Name the report by runId, not just label: runId is claimed under an
   // exclusive-create lock, so parallel runs of the same commit (even across
-  // processes, in the same second) can never resolve to the same file.
-  const path = resolveOutputPath(meta.output, meta.runId, cwd);
+  // processes, in the same second) can never resolve to the same directory.
+  // Dated by createdAt so a re-finalize on a later day reuses it.
+  const path = resolveOutputPath(meta.output, meta.runId, cwd, new Date(meta.createdAt));
   const baseline = new Set(meta.baseline ?? []); // plan-time snapshot (see RunMeta.baseline)
   // renderReport only knows finding severity, not run quality. Suppress its
   // finding-only PASS line for incomplete runs; the tool response carries the

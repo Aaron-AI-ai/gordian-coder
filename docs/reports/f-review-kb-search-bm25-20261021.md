@@ -1,5 +1,7 @@
 # f-review `kb_search` 순위 방식 비교: keyword vs bm25 (2026-10-21)
 
+> **경로 안내 (2026-11-04)**: 이 문서의 리포트·작업 데이터·평가 자산 경로는 작성 당시 기준입니다. 현재는 f-review·f-log·fcq 산출물이 모두 `.fico/` 아래에 생기고(`.fico/report/<도구>/report-*/`, `.fico/f-review/runs/`, `.fico/f-log/runs/`), 평가 자산(`f-log-cases/`, `f-review-cases/`, `.fico/config/`)은 `test-projects/on-test-lab/`(Gradle 루트)에 있습니다. 자세한 내용은 `docs/guides/0.2.5-release.md`를 보세요.
+
 ## 결론
 
 - `kb_search` 순위 방식은 `.fico/config/fico_ai.json`의 `kbSearch`로 고른다: `"keyword"`(기본) / `"bm25"`. 설정이 없거나 다른 값이면 **keyword**로 동작한다.

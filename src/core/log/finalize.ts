@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join } from "node:path";
 import { reportScriptWarning } from "../review/contract";
 import { esc, fill } from "../review/report/html";
-import { htmlReportPath } from "../review/report/output";
+import { htmlReportPath, reportDirName } from "../review/report/output";
 import { readFileAt, renderFileContent } from "../review/tools/read";
 import { localTimestamp } from "../time";
 import { loadLogConfig, type LogConfig } from "./config";
@@ -463,7 +463,7 @@ function isDir(p: string): boolean {
 export function reportPath(cwd: string, cfg: LogConfig, runId: string, override?: string): string {
   const opt = override ?? cfg.output;
   const full = isAbsolute(opt) ? opt : join(cwd, opt);
-  return opt.endsWith("/") || isDir(full) ? join(full, `log-${runId}.md`) : full;
+  return opt.endsWith("/") || isDir(full) ? join(full, reportDirName(runId), "log.md") : full;
 }
 
 interface FinalizeRecord { response: string; reportPath: string; badge: Badge; gaps: Gaps }
@@ -501,7 +501,8 @@ export function finalizeRun(runId: string, cwd: string): string {
   let path = requested;
   let collisionNote: string | undefined;
   if (existsSync(requested)) {
-    path = join(dirname(requested), `log-${runId}.md`);
+    path = join(dirname(requested), reportDirName(runId), "log.md");
+    mkdirSync(dirname(path), { recursive: true });
     collisionNote = `Note: ${relOf(requested)} already existed; wrote ${relOf(path)}`;
   }
   writeFileSync(path, md);

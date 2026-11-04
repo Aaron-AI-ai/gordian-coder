@@ -44,14 +44,20 @@ const DATE = new Date("2026-07-27T09:30:05Z");
 const STAMP = localFileStamp(DATE); // yyyymmdd-hhmmss in the PC's zone (20260727-093005 under UTC)
 
 describe("resolveOutputPath", () => {
-  it("defaults to fcq/report/f-review/ with a label-named file (no write-time stamp)", () => {
-    expect(resolveOutputPath(undefined, "L", tmp())).toBe(
-      `fcq/report/f-review/review-L.md`
-    );
+  const YMD = STAMP.slice(0, 8);
+  const R = `report-${YMD}-L/review.md`; // one directory per run/session, fixed file name inside
+
+  it("defaults to .fico/report/f-review/ with a dated per-run directory", () => {
+    expect(resolveOutputPath(undefined, "L", tmp(), DATE)).toBe(`.fico/report/f-review/${R}`);
+  });
+
+  it("does not prefix a date to an id that already starts with one", () => {
+    expect(resolveOutputPath(undefined, `${STAMP}-ab12`, tmp(), DATE)).toBe(`.fico/report/f-review/report-${STAMP}-ab12/review.md`);
+    expect(resolveOutputPath(undefined, "2026-07-27_09-30-05-1", tmp(), DATE)).toBe(`.fico/report/f-review/report-2026-07-27_09-30-05-1/review.md`);
   });
 
   it("treats a trailing-slash param as a directory", () => {
-    expect(resolveOutputPath("reports/", "L", tmp())).toBe(`reports/review-L.md`);
+    expect(resolveOutputPath("reports/", "L", tmp(), DATE)).toBe(`reports/${R}`);
   });
 
   it("uses an explicit filename as-is (no date appended)", () => {
@@ -61,7 +67,7 @@ describe("resolveOutputPath", () => {
   it("reads output from config when no param", () => {
     const d = tmp();
     writeFileSync(join(d, ".f-review.json"), JSON.stringify({ output: "docs/rv/" }));
-    expect(resolveOutputPath(undefined, "L", d)).toBe(`docs/rv/review-L.md`);
+    expect(resolveOutputPath(undefined, "L", d, DATE)).toBe(`docs/rv/${R}`);
   });
 
   it("param overrides config", () => {
@@ -73,19 +79,19 @@ describe("resolveOutputPath", () => {
   it("detects an existing directory without trailing slash", () => {
     const d = tmp();
     mkdirSync(join(d, "reports"));
-    expect(resolveOutputPath("reports", "L", d)).toBe(`reports/review-L.md`);
+    expect(resolveOutputPath("reports", "L", d, DATE)).toBe(`reports/${R}`);
   });
 
   it("keeps an absolute directory path absolute (not re-rooted under cwd)", () => {
     const d = tmp();
     const abs = join(d, "out") + "/";
-    expect(resolveOutputPath(abs, "L", d)).toBe(join(abs, `review-L.md`));
+    expect(resolveOutputPath(abs, "L", d, DATE)).toBe(join(abs, R));
   });
 });
 
 describe("resolveManifestPath", () => {
   it("puts manifests in their own fixed tree, no date in the name", () => {
-    expect(resolveManifestPath("L")).toBe("fcq/f-review/manifest/review-L-targets.md");
+    expect(resolveManifestPath("L")).toBe(".fico/f-review/manifest/review-L-targets.md");
   });
 });
 
@@ -243,10 +249,35 @@ describe("baseline", () => {
 
   it("loadBaseline picks the latest report in the output dir, ignoring manifests", async () => {
     const d = tmp();
-    await writeReport("fcq/report/f-review/review-old.md", { "a.ts": [finding()] }, "", d);
-    writeFileSync(join(d, "fcq/report/f-review/review-old-targets.md"), "# Code Review Targets");
+    await writeReport(".fico/report/f-review/review-old.md", { "a.ts": [finding()] }, "", d);
+    writeFileSync(join(d, ".fico/report/f-review/review-old-targets.md"), "# Code Review Targets");
     const keys = loadBaseline(undefined, d);
     expect(keys.has(baselineKey("a.ts", "no-secret"))).toBe(true);
+  });
+
+  it("loadBaseline picks the newest report across report-*/ directories and legacy flat files", async () => {
+    const d = tmp();
+    const { utimesSync } = await import("node:fs");
+    await writeReport(".fico/report/f-review/review-legacy.md", { "old.ts": [finding()] }, "", d);
+    await writeReport(".fico/report/f-review/report-20260101-a/review.md", { "a.ts": [finding()] }, "", d);
+    await writeReport(".fico/report/f-review/report-20260102-b/review.md", { "b.ts": [finding()] }, "", d);
+    const t = Date.now() / 1000;
+    utimesSync(join(d, ".fico/report/f-review/review-legacy.md"), t - 30, t - 30);
+    utimesSync(join(d, ".fico/report/f-review/report-20260101-a/review.md"), t - 20, t - 20);
+    utimesSync(join(d, ".fico/report/f-review/report-20260102-b/review.md"), t - 10, t - 10);
+    const keys = loadBaseline(undefined, d);
+    expect(keys.has(baselineKey("b.ts", "no-secret"))).toBe(true);
+    expect(keys.has(baselineKey("a.ts", "no-secret"))).toBe(false);
+  });
+
+  it("loadBaseline falls back to the pre-.fico fcq/report/f-review/ when the new default holds no report", async () => {
+    const d = tmp();
+    await writeReport("fcq/report/f-review/review-old.md", { "legacy.ts": [finding()] }, "", d);
+    expect(loadBaseline(undefined, d).has(baselineKey("legacy.ts", "no-secret"))).toBe(true);
+    await writeReport(".fico/report/f-review/report-20260102-b/review.md", { "b.ts": [finding()] }, "", d);
+    const keys = loadBaseline(undefined, d);
+    expect(keys.has(baselineKey("b.ts", "no-secret"))).toBe(true);
+    expect(keys.has(baselineKey("legacy.ts", "no-secret"))).toBe(false);
   });
 
   it("loadBaseline returns an empty set when nothing exists", () => {
@@ -302,7 +333,7 @@ describe("writeReport", () => {
 
   it("never moves other reports in the f-review folder", async () => {
     const d = tmp();
-    const dir = "fcq/report/f-review";
+    const dir = ".fico/report/f-review";
     await writeReport(join(dir, "review-A.md"), { "a.ts": [finding()] }, "A", d);
     await writeReport(join(dir, "review-B.md"), { "b.ts": [finding()] }, "B", d, "en", undefined, undefined, DATE);
     expect(existsSync(join(d, dir, "review-A.md"))).toBe(true);
@@ -312,11 +343,11 @@ describe("writeReport", () => {
 
   it("rewriting the same report keeps one file, updated in place", async () => {
     const d = tmp();
-    const path = "fcq/report/f-review/review-R.md";
+    const path = ".fico/report/f-review/review-R.md";
     await writeReport(path, { "a.ts": [finding()] }, "R", d, "en", undefined, undefined, DATE);
     await writeReport(path, { "a.ts": [finding(), finding({ line: 9, rule: "second" })] }, "R", d, "en", undefined, undefined, DATE);
-    expect(readdirSync(join(d, "fcq/report")).sort()).toEqual(["f-review"]);
-    expect(readdirSync(join(d, "fcq/report/f-review")).sort()).toEqual(["review-R.html", "review-R.md"]);
+    expect(readdirSync(join(d, ".fico/report")).sort()).toEqual(["f-review"]);
+    expect(readdirSync(join(d, ".fico/report/f-review")).sort()).toEqual(["review-R.html", "review-R.md"]);
     expect(readFileSync(join(d, path), "utf8")).toContain("second");
   });
 
@@ -412,8 +443,8 @@ describe("html report", () => {
   });
 
   it("names the html after the markdown target, never colliding with it", () => {
-    expect(htmlReportPath("fcq/report/f-review/review-A-20260727.md")).toBe(
-      "fcq/report/f-review/review-A-20260727.html"
+    expect(htmlReportPath(".fico/report/f-review/review-A-20260727.md")).toBe(
+      ".fico/report/f-review/review-A-20260727.html"
     );
     expect(htmlReportPath("out.txt")).toBe("out.txt.html");
   });

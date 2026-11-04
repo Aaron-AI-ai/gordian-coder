@@ -4,7 +4,7 @@
 
 ## 현황
 
-- `writeFileReview` (`src/core/review/pipeline/run-store.ts`)는 단위마다 `fcq/f-review/runs/<runId>/reviews/<단위>.json`과 `<단위>.md`를 함께 쓴다.
+- `writeFileReview` (`src/core/review/pipeline/run-store.ts`)는 단위마다 `.fico/f-review/runs/<runId>/reviews/<단위>.json`과 `<단위>.md`를 함께 쓴다.
 - 최종 리포트(`finalizeRun`, `pipeline/run.ts`)와 judge·커버리지 판정은 `.json`만 읽는다. `.md`를 읽는 코드는 없다 — 쓰기 전용 산출물이다.
 - 규모: 2026-10-22 on-stk-ord-online 실행(56파일)에서 59개.
 

@@ -89,4 +89,16 @@ describe("loadLogRules", () => {
     expect(files.at(-1)).toBe("log/rules/sub/p.md");
     expect(all.find((r) => r.file === "framework_kb.md")!.content).toContain("Lookup is not required");
   });
+  test("project rules: .fico/rules by default (legacy log/rules too), top-level rulesDir, log.rulesDir wins", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "f-log-rules-dirs-"));
+    for (const d of [".fico/rules", "log/rules", "team-rules", "x/rules", ".fico/config"]) mkdirSync(join(cwd, d), { recursive: true });
+    for (const d of [".fico/rules", "log/rules", "team-rules", "x/rules"]) writeFileSync(join(cwd, d, "r.md"), "rule");
+    const project = () => loadLogRules(cwd).map((r) => r.file).filter((f) => f.includes("/"));
+    expect(project()).toEqual([".fico/rules/r.md", "log/rules/r.md"]);
+    const cfg = join(cwd, ".fico/config/fico_ai.json");
+    writeFileSync(cfg, JSON.stringify({ rulesDir: "team-rules" }));
+    expect(project()).toEqual(["team-rules/r.md"]);
+    writeFileSync(cfg, JSON.stringify({ rulesDir: "team-rules", log: { rulesDir: "x/rules" } }));
+    expect(project()).toEqual(["x/rules/r.md"]);
+  });
 });

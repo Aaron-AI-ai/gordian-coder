@@ -1,5 +1,7 @@
 # f-log 평가 테스트베드 설계
 
+> **경로 안내 (2026-11-04)**: 이 문서의 리포트·작업 데이터·평가 자산 경로는 작성 당시 기준입니다. 현재는 f-review·f-log·fcq 산출물이 모두 `.fico/` 아래에 생기고(`.fico/report/<도구>/report-*/`, `.fico/f-review/runs/`, `.fico/f-log/runs/`), 평가 자산(`f-log-cases/`, `f-review-cases/`, `.fico/config/`)은 `test-projects/on-test-lab/`(Gradle 루트)에 있습니다. 자세한 내용은 `docs/guides/0.2.5-release.md`를 보세요.
+
 날짜: 2026-09-17
 상태: 승인됨(채팅), 구현 전
 관련: `2026-09-16-f-log-design.md`(f-log 본체), 메모리 `p_flog_error_log_analysis`

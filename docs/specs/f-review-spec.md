@@ -111,32 +111,34 @@ const targets = collected.filter(f => !globs.some(g => g.match(f)));
 
 ### 3.3 output (산출물 위치)
 
-report와 manifest는 서로 다른 트리에 저장한다.
+모든 산출물은 프로젝트의 `.fico/` 아래에 둔다(f-log·fcq와 같은 규칙). report와 manifest는 서로 다른 트리에 저장한다.
 
-- **report**: 우선순위 `--output` > `.f-review.json` 의 `output` > 기본 `fcq/report/f-review/`. 디렉터리 대상이면 `review-<label>.md` — label에 runId(또는 세션 id)가 들어 있어 실행 하나가 파일 하나를 가지며, 다시 finalize하면 같은 파일을 갱신한다.
-- **manifest**: 고정 `fcq/f-review/manifest/review-<label>-targets.md`. 파일명에는 날짜를 넣지 않고, 본문에 생성 시각(UTC)을 기록한다.
+- **report**: 우선순위 `--output` > `fico_ai.json`의 `output` > 기본 `.fico/report/f-review/`. 디렉터리 대상이면 실행마다 `report-<yyyymmdd>-<label>/review.md`(+ `review.html`)를 만든다. label에 runId(또는 커밋 sha + 세션 id 끝 6자리)가 들어 있어 실행 하나가 디렉터리 하나를 가지며, 다시 finalize하면 같은 디렉터리의 파일을 갱신한다. label이 이미 날짜로 시작하면 날짜를 덧붙이지 않는다(`reportDirName`, f-log와 공용). 병렬 실행은 run.json의 `createdAt` 날짜를 써서 다른 날 다시 finalize해도 같은 디렉터리를 쓴다. 파일 대상(`--output=x.md`)은 그대로 쓴다.
+- **manifest**: 고정 `.fico/f-review/manifest/review-<label>-targets.md`. 파일명에는 날짜를 넣지 않고, 본문에 생성 시각(UTC)을 기록한다.
+- **작업 데이터**: `.fico/f-review/runs/<runId>/` (fcq 원본은 그 아래 `fcq/raw/report-<stamp>/report.json`).
 - **백업 없음**: report 기록은 폴더의 다른 파일을 옮기지 않는다. (예전의 폴더째 백업은 finalize마다 폴더를 하나씩 늘리고 다른 실행의 최신 결과를 밀어내 제거했다.)
+- **baseline**: 이전 리포트는 출력 디렉터리의 가장 최근 `report-*/review.md`(또는 예전 평면 `review-*.md`)에서 읽는다. 기본 위치에 하나도 없으면 예전 위치 `fcq/report/f-review/`를 본다.
 - **완료 판정**: 실행의 완료 여부는 `finalize.json`의 지문만으로 정한다. 리포트 파일을 옮기거나 지워도 끝난 실행이 미완료로 돌아가지 않는다.
 
 ```ts
-function resolveOutputPath(opt, label /* commit short sha | timestamp */, cwd, date = new Date()) {
-  const p = opt ?? readConfig()?.output ?? "fcq/report/f-review/";
-  if (p.endsWith("/") || isDir(p)) return `${p}review-${label}-${ymd(date)}.md`;
+function resolveOutputPath(opt, label /* runId | sha-session */, cwd, d = new Date()) {
+  const p = opt ?? loadConfig(cwd).output ?? ".fico/report/f-review/";
+  if (p.endsWith("/") || isDir(p)) return join(p, reportDirName(label, d), "review.md");
   return p;
 }
 function resolveManifestPath(label) {
-  return `fcq/f-review/manifest/review-${label}-targets.md`;
+  return `.fico/f-review/manifest/review-${label}-targets.md`;
 }
 ```
 
 | 입력 | report 파일 |
 |------|-----------|
-| (없음) | `fcq/report/f-review/review-<sha|ts>-<yyyymmdd>.md` |
-| `--output=reports/` | `reports/review-<sha|ts>-<yyyymmdd>.md` |
+| (없음) | `.fico/report/f-review/report-<yyyymmdd>-<label>/review.md` |
+| `--output=reports/` | `reports/report-<yyyymmdd>-<label>/review.md` |
 | `--output=reports/pr-42.md` | `reports/pr-42.md` |
-| config `"output":"docs/rv/"` | `docs/rv/review-<sha|ts>-<yyyymmdd>.md` |
+| config `"output":"docs/rv/"` | `docs/rv/report-<yyyymmdd>-<label>/review.md` |
 
-> 디렉터리는 없으면 자동 생성(`{recursive:true}`). label은 commit 있으면 short sha, 없으면 타임스탬프(덮어쓰기 방지).
+> 디렉터리는 없으면 자동 생성. 같은 커밋을 여러 번 리뷰해도 label의 runId·세션 id가 달라 디렉터리가 겹치지 않는다.
 
 ---
 
@@ -144,7 +146,7 @@ function resolveManifestPath(label) {
 
 | 도구 | 시점 | 역할 |
 |------|------|------|
-| `f_review_plan` | 병렬 run 진입 1회 | 대상 수집 + run 생성(`fcq/f-review/runs/<runId>/run.json`) + fan-out 지시 반환 (오케스트레이터 전용) |
+| `f_review_plan` | 병렬 run 진입 1회 | 대상 수집 + run 생성(`.fico/f-review/runs/<runId>/run.json`) + fan-out 지시 반환 (오케스트레이터 전용) |
 | `f_review_context` | 진입 1회 | 대상 파일 수집 + 룰 로드 + diff 스냅샷 + 세션 상태 초기화. `runId` 지정 시 run 합류: **정확히 1개 파일**만 리뷰 (설정은 run.json 공유) |
 | `file_read` | 루프 중 | 파일 after-버전 읽기(라인범위·라인번호·500줄 cap·IS_TRUNCATED) |
 | `file_read_diff` | 루프 중 | 다른 변경 파일의 diff 읽기(DiffMap 스냅샷, 다중경로) |

@@ -5,7 +5,7 @@
 #   ./scripts/run-freview-eval.sh --mode whole --no-run             # 재실행 없이 기존 리포트만 채점
 #   FREVIEW_TARGET=/path FREVIEW_MODEL=openrouter/qwen/qwen3.8-27b ./scripts/run-freview-eval.sh --mode whole
 set -eu
-TARGET="${FREVIEW_TARGET:-/Users/koscom/workspace/fico/test-projects/on-test-lab/on-test-lab-online}"
+TARGET="${FREVIEW_TARGET:-/Users/koscom/workspace/fico/test-projects/on-test-lab}"
 MODEL="${FREVIEW_MODEL:-openrouter/qwen/qwen3.8-27b}"
 cd "$(dirname "$0")/.."
 bun run build >/dev/null
