@@ -9,7 +9,8 @@ cd offline-package
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-> **설치와 사용 모두 PowerShell 사용을 권장합니다.** `install.ps1`을 직접 실행하세요.
+> **설치는 PowerShell에서** `install.ps1`을 직접 실행하세요. OpenCode 실행은 Git Bash를 권장합니다
+> ([OpenCode 가이드 부록](opencode-install-windows.md#부록-실행-터미널-선택--git-bash-권장) 참고).
 
 ### 진행 단계
 
