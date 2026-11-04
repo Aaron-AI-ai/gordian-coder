@@ -10,7 +10,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 /** Plugin entries ending with this belong to gordian-coder. */
 const PLUGIN_SUFFIX = "adapters/opencode/index.js";
@@ -94,7 +94,11 @@ export function resolveConfigPath(options: OpencodeInitOptions): ResolvedConfig 
  * → dist/adapters/opencode/index.js) so that an install into any INSTALL_DIR
  * registers itself, not whatever happens to be on PATH.
  */
-export function resolvePluginEntry(fromDir: string = import.meta.dir): string {
+// `gdc` is a `#!/usr/bin/env node` script: under Node `import.meta.dir` (Bun
+// only) is undefined and path.resolve threw on it, so derive it from the URL.
+export function resolvePluginEntry(
+  fromDir: string = import.meta.dir ?? path.dirname(fileURLToPath(import.meta.url)),
+): string {
   const entry = path.resolve(fromDir, "..", "opencode", "index.js");
   if (!fs.existsSync(entry)) {
     throw new OpencodeInitError(
