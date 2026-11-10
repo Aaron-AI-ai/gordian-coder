@@ -10,6 +10,7 @@ import type { PluginInput, Hooks } from "@opencode-ai/plugin";
 import type { tool } from "@opencode-ai/plugin";
 import { createReviewModule } from "./review";
 import { createLogModule } from "./log";
+import { createPbOnlineModule } from "./pb-online";
 
 /** OpenCode's `command.execute.before` (raw slash-command arguments; `parts`
  * is what the model receives). Declared here because the pinned plugin SDK
@@ -32,6 +33,7 @@ export interface OpenCodeModule {
 const factories: Array<(input: PluginInput) => OpenCodeModule> = [
   createReviewModule,
   createLogModule,
+  createPbOnlineModule,
 ];
 
 export function createModules(input: PluginInput): OpenCodeModule[] {
