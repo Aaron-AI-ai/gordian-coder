@@ -1,0 +1,40 @@
+---
+name: f-unit-test-code
+description: 'Generates JUnit 5 + Mockito unit tests (@SpringBootTest, @Transactional) for existing FICO Java classes (Controller, Service) from their code, then verifies the test build and JaCoCo line/branch coverage. TRIGGER when user asks to create unit tests for existing code in Korean or English (e.g. 단위 테스트 만들어줘, XXXX 프로그램 단위 테스트 생성해줘, 변경분 테스트 보완해줘, generate unit tests for this class). DO NOT TRIGGER for requirement-based test design, integration tests against a real DB/Redis, or non-Java code.'
+---
+
+# f-unit-test-code
+
+Reads finished Java code and generates unit tests for it. Bean dependencies on other modules, Mappers, Redis and external APIs are all mocked; no real resource is touched.
+This skill does NOT modify production code or the project's build files.
+
+### Input (one of)
+- `--files <path...>`: test the given Java classes
+- `--program <ID>`: find the Controller/Service (and In/Out VO) whose class name starts with the program ID (e.g. `SONAQ001`) and test them
+- no argument: test the git changes (working tree + staged vs HEAD; last commit if clean). When a test already exists, add cases for the changed methods only, never overwrite.
+
+## Steps
+
+### 1. Plan the cases
+1. Read the rules:
+   - `docs/f-unit-test-format-rule.md`
+   - `docs/f-unit-test-case-rule.md`
+2. Read each target class. List its public methods, the external collaborators to mock, and the Spring Boot version (root `build.gradle`) and test profile situation.
+3. For every target class decide the cases per method (normal 2, boundary, exception) following the case rule. Methods you skip need a `skip_reason`.
+
+### 2. Implement with the templates
+1. Pick the template:
+
+| Template | When to Use |
+|----------|-------------|
+| `templates/ServiceTestTemplate.java` | Service classes (BSM/Mapper/Redis mocked) |
+| `templates/ControllerTestTemplate.java` | Controller classes (real Service, mocked BSM/Mapper/Redis) |
+
+2. Replace the placeholders `{PackagePath}`, `{ClassName}`, `{TargetClass}` with real values, and replace the example imports, fields and methods with the target's own. No placeholder may remain.
+3. **CRITICAL - Preserve existing tests:** never delete or overwrite existing test code; add cases and imports only.
+4. Do not touch production code or `build.gradle`.
+
+### 3. Verify
+1. Read `docs/f-unit-test-verification-rule.md` and run its self-check list.
+2. Run `scripts/run-coverage.sh --module <gradle module> --tests <comma separated FQCNs> --out <dir>`; it writes `status.json`, `jacoco.xml` and `test-results/` into `--out`.
+3. Fix compile errors. Fill coverage gaps by adding cases (at most 3 rounds). Report unreachable branches with a reason; do not fix failing tests.
