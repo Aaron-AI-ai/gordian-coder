@@ -12,7 +12,7 @@ while [ $# -gt 0 ]; do
   esac
   shift 2
 done
-[ -n "$MODULE" ] && [ -n "$OUT" ] || usage
+[ -n "$MODULE" ] && [ -n "$TESTS" ] && [ -n "$OUT" ] || usage
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 TOOLS=$HERE/../tools
@@ -21,11 +21,13 @@ cd "$PROJECT" || { echo "no such project dir: $PROJECT" >&2; exit 2; }
 MDIR=$(printf '%s' "$MODULE" | sed 's/^://; s/:/\//g')
 
 write_status() { # compile coverage logfile
-  tail -n 40 "$3" 2>/dev/null | tr -d '\000-\010\013\014\016-\037' \
-    | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e "s/$(printf '\t')/\\\\t/g" -e "s/$(printf '\r')/\\\\r/g" \
-    | awk 'BEGIN{printf "{\"compile\":\"%s\",\"log\":\"", "'"$1"'"} NR>1{printf "\\n"} {printf "%s",$0} END{printf "\",\"coverage\":\"%s\"}\n", "'"$2"'"}' > "$OUT/status.json"
+  # LC_ALL=C: byte-safe for non-UTF-8 output (e.g. CP949); tr/sed would otherwise abort and truncate
+  tail -n 40 "$3" 2>/dev/null | LC_ALL=C tr -d '\000-\010\013\014\016-\037' \
+    | LC_ALL=C sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e "s/$(printf '\t')/\\\\t/g" -e "s/$(printf '\r')/\\\\r/g" \
+    | LC_ALL=C awk 'BEGIN{printf "{\"compile\":\"%s\",\"log\":\"", "'"$1"'"} NR>1{printf "\\n"} {printf "%s",$0} END{printf "\",\"coverage\":\"%s\"}\n", "'"$2"'"}' > "$OUT/status.json"
 }
 
+rm -rf "$OUT/jacoco.exec" "$OUT/jacoco.xml" "$OUT/test-results" "$OUT/status.json"
 LOG=$OUT/gradle.log
 if [ -f ./gradlew ]; then GR="sh ./gradlew"
 elif command -v gradle >/dev/null 2>&1; then GR=gradle
@@ -34,16 +36,17 @@ else echo "neither ./gradlew nor gradle found" > "$LOG"; write_status fail missi
 $GR ":$MODULE:testClasses" -I "$HERE/init.gradle" > "$LOG" 2>&1 \
   || { write_status fail missing "$LOG"; exit 0; }
 
-rm -f "$OUT/jacoco.exec" "$OUT/jacoco.xml"
-$GR ":$MODULE:test" --continue -I "$HERE/init.gradle" \
+rm -rf "$MDIR/build/test-results/test"
+# cleanTest forces a real run; a cached/UP-TO-DATE test task would write no jacoco.exec
+$GR ":$MODULE:cleanTest" ":$MODULE:test" --continue -I "$HERE/init.gradle" \
   "-Pfut.agent=$TOOLS/jacocoagent.jar" "-Pfut.exec=$OUT/jacoco.exec" "-Pfut.tests=$TESTS" > "$LOG" 2>&1
 
-rm -rf "$OUT/test-results"
 [ -d "$MDIR/build/test-results/test" ] && cp -R "$MDIR/build/test-results/test" "$OUT/test-results"
 
 COV=missing
+JAVA=java; [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ] && JAVA=$JAVA_HOME/bin/java
 if [ -f "$OUT/jacoco.exec" ] && [ -d "$MDIR/build/classes/java/main" ]; then
-  java -jar "$TOOLS/jacococli.jar" report "$OUT/jacoco.exec" \
+  "$JAVA" -jar "$TOOLS/jacococli.jar" report "$OUT/jacoco.exec" \
     --classfiles "$MDIR/build/classes/java/main" --sourcefiles "$MDIR/src/main/java" \
     --xml "$OUT/jacoco.xml" >> "$LOG" 2>&1 && [ -f "$OUT/jacoco.xml" ] && COV=ok
 fi

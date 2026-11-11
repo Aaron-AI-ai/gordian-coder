@@ -16,7 +16,7 @@ function project(): { proj: string; out: string } {
   const proj = path.join(root, "proj");
   fs.mkdirSync(proj);
   fs.writeFileSync(path.join(proj, "gradlew"),
-    `case "$1" in\n  *:testClasses) echo 'say "hi" \\ back\ttab'; echo 'compile boom'; exit \${FAKE_TESTCLASSES:-0};;\n  *:test) echo 'tests ran'; exit \${FAKE_TEST:-0};;\nesac\n`);
+    `case "$*" in\n  *:testClasses*) echo 'say "hi" \\ back\ttab'; echo 'compile boom'; exit \${FAKE_TESTCLASSES:-0};;\n  *:cleanTest*) echo 'tests ran'; exit \${FAKE_TEST:-0};;\nesac\n`);
   return { proj, out: path.join(root, "out") };
 }
 function run(args: string[], env: Record<string, string> = {}) {
@@ -59,5 +59,40 @@ describe("run-coverage.sh", () => {
     const r = run(["--tests", "a.B", "--out", "/nonexistent-out"]);
     expect(r.exitCode).toBe(2);
     expect(r.stderr.toString()).toContain("usage:");
+  });
+
+  test("non-UTF-8 bytes in the log do not truncate status.json", () => {
+    const { proj, out } = project();
+    fs.writeFileSync(path.join(proj, "gradlew"), "echo before; printf '\\377'; echo after; exit 1\n");
+    run(["--module", "app", "--tests", "a.B", "--out", out, "--project", proj]);
+    const s = JSON.parse(fs.readFileSync(path.join(out, "status.json"), "utf8"));
+    expect(s.log).toContain("before");
+    expect(s.log).toContain("after");
+  });
+
+  test("test run is preceded by cleanTest", () => {
+    const { proj, out } = project();
+    const rec = path.join(proj, "calls.txt");
+    fs.writeFileSync(path.join(proj, "gradlew"), `echo "$@" >> '${rec}'\n`);
+    run(["--module", "app", "--tests", "a.B", "--out", out, "--project", proj]);
+    const calls = fs.readFileSync(rec, "utf8").split("\n").filter((l) => l.includes(":app:test "));
+    expect(calls).toHaveLength(1);
+    expect(calls[0].indexOf(":app:cleanTest")).toBeGreaterThanOrEqual(0);
+    expect(calls[0].indexOf(":app:cleanTest")).toBeLessThan(calls[0].indexOf(":app:test "));
+  });
+
+  test("stale results in --out are removed before a failing compile", () => {
+    const { proj, out } = project();
+    fs.mkdirSync(path.join(out, "test-results"), { recursive: true });
+    fs.writeFileSync(path.join(out, "test-results/x.xml"), "<x/>");
+    fs.writeFileSync(path.join(out, "jacoco.xml"), "<r/>");
+    run(["--module", "app", "--tests", "a.B", "--out", out, "--project", proj], { FAKE_TESTCLASSES: "1" });
+    expect(fs.existsSync(path.join(out, "jacoco.xml"))).toBe(false);
+    expect(fs.existsSync(path.join(out, "test-results"))).toBe(false);
+  });
+
+  test("missing or empty --tests exits 2", () => {
+    expect(run(["--module", "app", "--out", "/nonexistent-out"]).exitCode).toBe(2);
+    expect(run(["--module", "app", "--tests", "", "--out", "/nonexistent-out"]).exitCode).toBe(2);
   });
 });
