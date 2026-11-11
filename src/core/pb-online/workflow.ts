@@ -15,6 +15,7 @@ import * as path from "node:path";
 import { localFileStamp } from "../time";
 import { checkSkeleton } from "./skeleton-check";
 import { MCP_SERVER, SKILL_NAME } from "./names";
+import { MAX_WAIT_CALLS, awaitingReply, noteReply, takeAbort } from "../plan-gate";
 
 export { MCP_SERVER, SKILL_NAME };
 
@@ -26,8 +27,7 @@ export const REPORT_DIR = ".fico/report/pb-online";
 
 /** Verify→execute round trips before the run is reported as incomplete. */
 export const MAX_REWORK = 3;
-/** Refused calls while the plan waits for the user before the turn is aborted. */
-export const MAX_WAIT_CALLS = 3;
+export { MAX_WAIT_CALLS };
 // ponytail: in-memory like f-review/f-log, so a server restart drops the gate.
 const MAX_SESSIONS = 50;
 
@@ -203,28 +203,13 @@ export function endSession(sessionId: string): void {
 /** A real user turn: the only thing that can unlock plan approval. */
 export function noteUserMessage(sessionId: string, createdAt: number): void {
   const session = sessions.get(sessionId);
-  if (!session) return;
-  // A late update to an older message must not move the reply back before the plan.
-  session.userRepliedAt = Math.max(session.userRepliedAt ?? 0, createdAt);
-  session.awaitingCalls = 0;
+  if (session) noteReply(session, createdAt);
 }
 
-/** A recorded plan the user has not answered yet. */
-function awaitingReply(session: PbSession): boolean {
-  if (session.stage !== "plan" || session.planAt === undefined) return false;
-  return session.userRepliedAt === undefined || session.userRepliedAt <= session.planAt;
-}
-
-/**
- * True once when the model keeps calling tools while the plan waits. A model
- * that ignores "END YOUR TURN" otherwise loops until its step limit, so the
- * adapter aborts the turn instead.
- */
+/** True once when the model keeps calling tools while the plan waits; see takeAbort. */
 export function takeAbortRequest(sessionId: string): boolean {
   const session = sessions.get(sessionId);
-  if (!session || session.awaitingCalls < MAX_WAIT_CALLS) return false;
-  session.awaitingCalls = 0;
-  return true;
+  return session ? takeAbort(session) : false;
 }
 
 export function renderStageGuide(stageId: StageId): string {
