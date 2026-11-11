@@ -202,7 +202,7 @@ if [ -d "$INSTALL_BASE" ]; then
     exit 1
   fi
   # 이전 버전의 dist가 남지 않도록 제거
-  rm -rf "$INSTALL_BASE/dist"
+  rm -rf "$INSTALL_BASE/dist" "$INSTALL_BASE/assets"
 fi
 
 mkdir -p "$INSTALL_BASE"

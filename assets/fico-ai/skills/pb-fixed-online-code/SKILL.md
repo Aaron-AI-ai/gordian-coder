@@ -1,10 +1,14 @@
+---
+name: pb-fixed-online-code
+description: 'Scaffolds Controller, Service, and Input/Output VO classes for a new fixed-text (non-JSON) online service in the FICO framework, given a program ID. TRIGGER when user asks to generate online code for a specific program ID in Korean or English (e.g. XXXX 프로그램 아이디 온라인 코드 생성해줘, XXXX 온라인 코드 만들어줘, generate online code for XXXX). DO NOT TRIGGER when user asks about SQL queries, Mapper code, or non-online-code tasks.'
+---
+
 # pb-fixed-online-code
 
 Generates Controller, Service, and Input/Output VO classes for a new fixed-text online service.
 This skill does NOT generate DB Access Layer (Mapper) code.
 
-When generating code, follow the workflow below.
-Every file this skill refers to (`rules/*`, `docs/*`, `templates/*`) is included further down in this guide under a heading with its path (rules may also call themselves `.clinerules/*.md`) — do NOT look for them on disk.
+When generating code, follow the workflow below
 
 ### Input Requirements
 - **Service ID**: The unique identifier for the online service
@@ -12,9 +16,7 @@ Every file this skill refers to (`rules/*`, `docs/*`, `templates/*`) is included
 ## Steps
 
 ### 1. Read the Online Code Layer Code Rules
-1. Apply the project rules (`rules/fico-overview.md`, `rules/online-dev-guide.md`, `rules/pb-comment-template.md`).
-   `rules/online-project-context.md` is an EXAMPLE project (on-stk-ord); take the real package, URL prefix and paths from the Step 3 project analysis.
-2. Apply the rule files required for generating Online Processing Layer code:
+1. Read the rule files required for generating Online Processing Layer code:
    - `docs/pb-fixed-vo-rule.md`
    - `docs/pb-fixed-controller-rule.md`
    - `docs/pb-service-rule.md`
@@ -25,9 +27,8 @@ Every file this skill refers to (`rules/*`, `docs/*`, `templates/*`) is included
    - DO NOT use the literal strings `{group_name}` / `{program_id}` in the URI.
    - If the group name is not given by the user, look the program up in `fico://all-programs` (or `fico://programs/{group_name}`) to find the group it belongs to.
 
-2. Retrieve the API specification and development metadata from the FICO MCP server by reading the MCP resource `fico://program-detail/{group_name}/{program_id}` (use the MCP resource read tool, e.g. `read_mcp_resource`).
+2. Retrieve the API specification and development metadata from the FICO MCP server using `fico://program-detail/{group_name}/{program_id}`.
    - The MCP rejects the old form `fico://program-detail/{program_id}`; the group name is mandatory.
-   - If the FICO MCP server is not available, STOP and tell the user; never invent the API spec.
 
 3. Analyze the MCP results to extract the API path, data format, description, and API spec (input/output). Apply the following mapping rules:
    - `@PostMapping`: Use the extracted API path as the value attribute.
@@ -36,7 +37,7 @@ Every file this skill refers to (`rules/*`, `docs/*`, `templates/*`) is included
 4. **IMPORTANT: Map API Spec I/O field properties to VO class @FixedData annotation**
 
 ### 3. Retrieve Code Templates
-1. Reference the templates included below. Select the appropriate template based on the context:
+1. Reference the template files under `templates/` directory. Select the appropriate template based on the context:
 
 | Template | When to Use |
 |----------|-------------|
@@ -56,4 +57,4 @@ Every file this skill refers to (`rules/*`, `docs/*`, `templates/*`) is included
    - When adding new imports, append without removing any existing ones.
 
 ### 5. Code Verification and Placeholder Replacements
-1. Apply the verification rules from `docs/pb-code-verification-rule.md` to every file you created or modified, and fix any violation before reporting completion.
+1. Read and apply the verification rules from `docs/pb-code-verification-rule.md`.

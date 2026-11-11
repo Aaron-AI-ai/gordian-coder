@@ -54,7 +54,7 @@
     - Nested OBJECT/LIST inside inner class must be recursively generated as nested inner classes.
 
 12. **CRITICAL - Fixed Data Format Annotations by Field Type:**
-    - **PLAIN fields**: `@Schema(description)` + `@FixedData(length, padType, padChar)` — all three attributes mandatory.
+    - **PLAIN fields**: `@Schema(description)` + `@FixedData(length, padType)` — both attributes mandatory; `padChar` is optional and written only when the spec gives one.
     - **OBJECT fields**: `@Schema(description)` + `@FixedVo` (NOT `@FixedData`), no length/padType/padChar.
     - **LIST fields**: `@Schema(description)` + `@FixedList(size = {value})` — size mandatory.
     - `padType` conversion: `"RIGHT"` → `PAD_TYPE.RIGHT`, `"LEFT"` → `PAD_TYPE.LEFT`
@@ -90,6 +90,6 @@
 | `{Description}` | Field description in Korean | fico-mcp |
 | `{Length}` | Fixed-length value | fico-mcp |
 | `{PadType}` | Padding direction (RIGHT/LEFT) | fico-mcp |
-| `{PadChar}` | Padding character | fico-mcp |
+| `{PadChar}` | Padding character (remove the attribute if the spec has none) | fico-mcp |
 | `{Size}` | List max count | fico-mcp |
 

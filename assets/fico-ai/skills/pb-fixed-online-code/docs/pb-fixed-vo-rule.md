@@ -83,7 +83,7 @@ This section defines the rules for converting I/O specifications retrieved from 
 | `type` | Field category | PLAIN → `@FixedData`, OBJECT → `@FixedVo`, LIST → `@FixedList` | If `type` is absent, treat as PLAIN |
 | `length` | Fixed length | `@FixedData(length = {Length})` | Required for PLAIN type |
 | `padType` | Padding direction | `PAD_TYPE.RIGHT` or `PAD_TYPE.LEFT` | JSON `"RIGHT"` → `PAD_TYPE.RIGHT`, `"LEFT"` → `PAD_TYPE.LEFT` |
-| `padChar` | Padding character | `padChar = '{PadChar}'` | JSON string → Java char (`"0"` → `'0'`, `" "` → `' '`) |
+| `padChar` | Padding character | `padChar = '{PadChar}'` | Optional. JSON string → Java char (`"0"` → `'0'`, `" "` → `' '`). If absent or null in the spec, omit the attribute |
 | `objectTypeRefName` | Nested class name | `public static class {ServiceId}{ObjectTypeRefName}` | Capitalize first letter; if absent, use capitalized `fieldName`. MUST be static inner class, NOT separate file |
 | `size` | List max count | `@FixedList(size = {Size})` | Required for LIST type |
 | `properties` | Nested fields | Inner class fields | Recursively apply same mapping rules |
@@ -112,6 +112,8 @@ This section defines the rules for converting I/O specifications retrieved from 
 @FixedData(length = {Length}, padType = PAD_TYPE.{PadType}, padChar = '{PadChar}')
 private {JavaType} {FieldName};
 ```
+
+- `length` and `padType` are mandatory. `padChar` is optional: write it when the spec gives one, and remove the whole `padChar = ...` attribute when it does not (the framework applies a default based on the field type). Never leave `{PadChar}` in the code.
 
 #### OBJECT Type
 

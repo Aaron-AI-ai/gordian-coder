@@ -194,6 +194,8 @@ if (Test-Path $InstallBase) {
     # 이전 버전의 dist가 남지 않도록 제거
     $oldDist = Join-Path $InstallBase "dist"
     if (Test-Path $oldDist) { Remove-Item -Recurse -Force $oldDist }
+    $oldAssets = Join-Path $InstallBase "assets"
+    if (Test-Path $oldAssets) { Remove-Item -Recurse -Force $oldAssets }
 }
 
 New-Item -ItemType Directory -Force -Path $InstallBase | Out-Null

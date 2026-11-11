@@ -113,6 +113,8 @@ const OpenCodeAdapter: Plugin = async (input) => {
   const moduleEvents = modules.map((m) => m.event).filter((e) => e != null);
   const moduleConfigs = modules.map((m) => m.config).filter((c) => c != null);
   const moduleCommandHooks = modules.map((m) => m.commandBefore).filter((h) => h != null);
+  const moduleToolGates = modules.map((m) => m.toolBefore).filter((g) => g != null);
+  const moduleToolResults = modules.map((m) => m.toolAfter).filter((h) => h != null);
   // Spread in, not written in the literal: the pinned SDK's Hooks type lacks this key.
   const commandHooks = {
     "command.execute.before": async (...args: Parameters<CommandBeforeHook>) => {
@@ -176,6 +178,7 @@ const OpenCodeAdapter: Plugin = async (input) => {
         if (budget.abort) await abortSession(sessionID);
         throw new Error(budget.message);
       }
+      for (const gate of moduleToolGates) gate(hookInput.tool, sessionID, output.args as Record<string, unknown>);
       await beforeToolExecute(
         hookInput.tool,
         output.args as Record<string, unknown>,
@@ -185,6 +188,11 @@ const OpenCodeAdapter: Plugin = async (input) => {
 
     // Hook: after tool execution
     "tool.execute.after": async (hookInput, hookOutput) => {
+      for (const h of moduleToolResults) {
+        // The runtime passes `args` here; the pinned SDK type does not declare it yet.
+        const args = (hookInput as { args?: Record<string, unknown> }).args ?? {};
+        h(hookInput.tool, hookInput.sessionID ?? "", (hookOutput.metadata ?? {}) as Record<string, unknown>, hookOutput.output, args);
+      }
       await afterToolExecute(
         hookInput.tool,
         hookOutput,

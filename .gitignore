@@ -39,3 +39,6 @@ fcq/
 
 # OpenCode 반입용 아카이브 (scripts/offline/fetch-opencode.sh)
 opencode-*-offline-*.tar.gz
+
+# fico-mcp wheel: built by scripts/offline/prepare.sh, may carry DB config
+assets/fico-mcp/*.whl
