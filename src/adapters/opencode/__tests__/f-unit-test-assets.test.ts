@@ -35,3 +35,15 @@ describe("f-unit-test-code skill assets", () => {
     for (const word of ["외부 모듈", "프로필", "@MockBean"]) expect(fmt).toContain(word);
   });
 });
+
+describe("f-unit-test-code bundled JaCoCo", () => {
+  test.each(["jacocoagent.jar", "jacococli.jar"])("%s is a real jar", (name) => {
+    const buf = fs.readFileSync(path.join(skill, "tools", name));
+    expect(buf.subarray(0, 2).toString()).toBe("PK");
+    expect(buf.length).toBeGreaterThan(100 * 1024);
+  });
+
+  test("NOTICE.md states the license", () => {
+    expect(read("tools/NOTICE.md")).toContain("EPL-2.0");
+  });
+});
