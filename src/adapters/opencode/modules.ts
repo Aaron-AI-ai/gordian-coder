@@ -10,6 +10,7 @@ import type { PluginInput, Hooks } from "@opencode-ai/plugin";
 import type { tool } from "@opencode-ai/plugin";
 import { createReviewModule } from "./review";
 import { createLogModule } from "./log";
+import { createPbOnlineModule } from "./pb-online";
 
 /** OpenCode's `command.execute.before` (raw slash-command arguments; `parts`
  * is what the model receives). Declared here because the pinned plugin SDK
@@ -19,6 +20,18 @@ export type CommandBeforeHook = (
   output: { parts: Array<{ type: string; text?: string }> }
 ) => Promise<void>;
 
+/** Runs before every tool call; throw to reject the call. */
+export type ToolGate = (tool: string, sessionID: string, args: Record<string, unknown>) => void;
+
+/** Runs only after a tool succeeded; OpenCode skips it when the tool throws or is denied. */
+export type ToolResultHook = (
+  tool: string,
+  sessionID: string,
+  metadata: Record<string, unknown>,
+  output: string,
+  args?: Record<string, unknown>,
+) => void;
+
 export interface OpenCodeModule {
   tools: Record<string, ReturnType<typeof tool>>;
   systemTransform?: NonNullable<Hooks["experimental.chat.system.transform"]>;
@@ -26,12 +39,15 @@ export interface OpenCodeModule {
   /** Inject agents/commands into the OpenCode config (bundled definitions). */
   config?: NonNullable<Hooks["config"]>;
   commandBefore?: CommandBeforeHook;
+  toolBefore?: ToolGate;
+  toolAfter?: ToolResultHook;
 }
 
 /** Registered module factories — the single place to add a new module. */
 const factories: Array<(input: PluginInput) => OpenCodeModule> = [
   createReviewModule,
   createLogModule,
+  createPbOnlineModule,
 ];
 
 export function createModules(input: PluginInput): OpenCodeModule[] {

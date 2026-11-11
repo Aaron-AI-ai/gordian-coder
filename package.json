@@ -11,7 +11,8 @@
     "gdc": "./dist/adapters/cline/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "assets/fico-ai"
   ],
   "exports": {
     ".": {
@@ -64,6 +65,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@opencode-ai/plugin": "^1.1.1",
+    "java-parser": "3.0.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {

@@ -28,6 +28,26 @@ import {
   OpencodeInitError,
 } from "../opencode/init";
 import type { ApplyResult } from "../opencode/init";
+import { writePlugins } from "../opencode/init";
+import {
+  buildMcpEntry,
+  checkFico,
+  checkFicoApi,
+  findMcp,
+  findWheel,
+  flagValue,
+  installMcpServer,
+  installSkill,
+  installedSkillsDir,
+  readEffectiveConfig,
+  readGlobalConfig,
+  resolveApiUrl,
+  resolveAssetsDir,
+  runOpencode,
+  skillDirFor,
+  skillDrift,
+  withMcp,
+} from "../opencode/fico-setup";
 import * as readline from "node:readline";
 import { syncWikiKb, checkWikiKb, resolveWikiSources, ensureKbVisible } from "../../core/kb/kb-sync";
 import * as tty from "node:tty";
@@ -44,6 +64,8 @@ Usage:
   gdc --init-opencode [opts] opencode.json에 이 설치본을 플러그인으로 등록
   gdc --deinit-opencode [opts]   opencode.json에서 플러그인 등록 제거
   gdc kb-sync [options]      git wiki의 md 문서를 KB 디렉토리로 동기화
+  gdc fico-init [options]    OpenCode에 FICO 스킬·fico-mcp·플러그인 설치 및 구성
+  gdc fico-check [--global]  OpenCode가 스킬·fico-mcp·플러그인을 실제로 인식하는지 확인
   gdc --help, -h             도움말 표시
   gdc --version, -v          버전 표시
 
@@ -57,8 +79,15 @@ init-opencode / deinit-opencode options:
   --config <path>            설정 파일 경로를 직접 지정
   --yes, -y                  확인 프롬프트 없이 적용
 
+fico-init options:
+  --global                   전역 OpenCode 설정과 ~/.config/opencode/skills 에 설치
+  --config <path>            설정 파일 경로를 직접 지정
+  --fico-api-url <url>       fico-mcp 신규 구성 시 FICO WebAdmin API 주소
+                             (없으면 FICO_API_BASE_URL, 그것도 없으면 http://localhost:8081)
+  --yes, -y                  확인 프롬프트 없이 적용
+
 kb-sync options:
-  --name <name>              해당 wikiKb 항목만 대상으로
+  --name <name>             해당 wikiKb 항목만 대상으로
   --check                    원격과 비교만 (최신 여부 확인, 다운로드 없음)
   --dry-run                  clone 후 개수만 보고, 파일은 쓰지 않음
   --force                    최신이어도 다시 내려받기
@@ -318,6 +347,56 @@ async function runInitOpencode(args: string[]): Promise<void> {
   reportWritten(applyPlugin(state, entry), entry);
 }
 
+// ── fico-init / fico-check ───────────────────────────────────────
+
+async function runFicoInit(args: string[]): Promise<void> {
+  const assets = resolveAssetsDir();
+  const entry = resolvePluginEntry();
+  const { state, assumeYes } = openConfigForEdit(args, true);
+  const skillsDir = skillDirFor({ global: args.includes("--global") });
+  const drift = skillDrift(assets, skillsDir);
+  const plugins = upsertPlugin(state.plugins, entry);
+  const pluginChanged = !sameList(plugins, state.plugins);
+
+  // An existing server is left alone, including one set in another config layer.
+  // When OpenCode cannot be asked, read the global file rather than assume there is no server.
+  const effective = readEffectiveConfig(runOpencode) ?? readGlobalConfig();
+  const needMcp = findMcp(state.config) === undefined && findMcp(effective) === undefined;
+  const apiUrl = resolveApiUrl(flagValue(args, "--fico-api-url"), process.env.FICO_API_BASE_URL);
+  if (needMcp) findWheel(assets);
+
+  process.stderr.write(`  스킬: ${skillsDir} (${drift.length > 0 ? `설치/갱신 ${drift.length}개 파일` : "최신"})\n`);
+  process.stderr.write(`  fico-mcp: ${needMcp ? "설치 후 설정 추가" : "이미 구성됨, 유지"}\n`);
+  process.stderr.write(`  플러그인: ${pluginChanged ? `등록 ${entry}` : "이미 등록됨"}\n`);
+
+  if (drift.length === 0 && !needMcp && !pluginChanged) {
+    process.stderr.write("\n  변경할 내용이 없습니다. gdc fico-check 로 상태를 확인할 수 있습니다.\n\n");
+    return;
+  }
+  if (!(await confirmEdit(assumeYes, "\n  이 내용으로 진행하시겠습니까? (y/N): "))) return;
+
+  if (drift.length > 0) process.stderr.write(`\n  [OK] 스킬 설치: ${installSkill(assets, skillsDir)}\n`);
+  const config = needMcp ? withMcp(state.config, buildMcpEntry(installMcpServer(assets), apiUrl)) : state.config;
+  if (needMcp || pluginChanged) reportWritten(writePlugins({ ...state, config }, plugins), entry);
+  process.stderr.write("  OpenCode 재시작 후 gdc fico-check 로 확인하세요.\n\n");
+}
+
+async function runFicoCheck(args: string[]): Promise<void> {
+  const config = readEffectiveConfig(runOpencode) ?? readGlobalConfig();
+  const results = [
+    ...checkFico(
+      { assets: resolveAssetsDir(), skillsDir: installedSkillsDir(args.includes("--global")), config },
+      runOpencode
+    ),
+    await checkFicoApi(config),
+  ];
+  for (const r of results) process.stderr.write(`  ${r.ok ? "[OK]  " : "[FAIL]"} ${r.name}: ${r.detail}\n`);
+  if (results.some((r) => !r.ok)) {
+    process.stderr.write("\n  gdc fico-init 으로 구성할 수 있습니다.\n");
+    process.exit(1);
+  }
+}
+
 /**
  * Unregister gordian-coder from opencode.json. Removes every gordian entry,
  * not just this install's path — a config can carry a stale one from an
@@ -370,21 +449,26 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   "--init-opencode": ["--global", "--config", "--yes", "-y", "--force"],
   "--deinit-opencode": ["--global", "--config", "--yes", "-y", "--force"],
 };
-const KB_SYNC_FLAGS = ["--name", "--check", "--dry-run", "--force"];
+const SUBCOMMAND_FLAGS: Record<string, string[]> = {
+  "kb-sync": ["--name", "--check", "--dry-run", "--force"],
+  "fico-init": ["--global", "--config", "--fico-api-url", "--yes", "-y", "--force"],
+  "fico-check": ["--global"],
+};
 /** Flags whose next argument is a value, not another flag. */
-const VALUE_FLAGS = ["--config", "--name"];
+const VALUE_FLAGS = ["--config", "--name", "--fico-api-url"];
 const GLOBAL_FLAGS = ["--help", "-h", "--version", "-v"];
 
 function rejectUnknownArgs(args: string[]): void {
   if (args.length === 0) return; // hook mode / TTY help
   if (args.includes("--help") || args.includes("-h")) return;
 
-  const isKbSync = args[0] === "kb-sync";
-  const rest = isKbSync ? args.slice(1) : args;
+  const subcommandFlags = SUBCOMMAND_FLAGS[args[0]!];
+  const isSubcommand = subcommandFlags !== undefined;
+  const rest = isSubcommand ? args.slice(1) : args;
 
   const allowed = new Set(GLOBAL_FLAGS);
-  if (isKbSync) {
-    for (const f of KB_SYNC_FLAGS) allowed.add(f);
+  if (isSubcommand) {
+    for (const f of subcommandFlags) allowed.add(f);
   } else {
     for (const [command, flags] of Object.entries(COMMAND_FLAGS)) {
       if (!args.includes(command)) continue;
@@ -400,7 +484,7 @@ function rejectUnknownArgs(args: string[]): void {
   };
 
   // A bare `gdc --version` is fine; anything else needs a command to belong to.
-  if (!isKbSync && allowed.size === GLOBAL_FLAGS.length) {
+  if (!isSubcommand && allowed.size === GLOBAL_FLAGS.length) {
     const hasGlobalOnly = rest.every((a) => GLOBAL_FLAGS.includes(a));
     if (!hasGlobalOnly) fail(`Unknown command: ${rest.filter((a) => !GLOBAL_FLAGS.includes(a)).join(" ")}`);
     return;
@@ -447,6 +531,20 @@ async function main(): Promise<void> {
   if (args[0] === "kb-sync") {
     await runKbSync(args.slice(1));
     return;
+  }
+
+  if (args[0] === "fico-init" || args[0] === "fico-check") {
+    try {
+      if (args[0] === "fico-init") await runFicoInit(args.slice(1));
+      else await runFicoCheck(args.slice(1));
+    } catch (err) {
+      if (err instanceof OpencodeInitError) {
+        process.stderr.write(`\n[gordian-coder:opencode] ${err.message}\n\n`);
+        process.exit(1);
+      }
+      throw err;
+    }
+    process.exit(0);
   }
 
   const hasInitOpencode = args.includes("--init-opencode");

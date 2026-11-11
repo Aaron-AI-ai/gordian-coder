@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!-- description: {TableDescription} -->
+<mapper namespace="{PackagePath}.mapper.{EntityName}Mapper">
+
+    <select id="{methodName}"
+            parameterType="{PackagePath}.model.dto.{MethodName}Parameter"
+            resultType="{PackagePath}.model.dto.{MethodName}Result">
+    <![CDATA[
+        /* {QueryDescription} */
+        SELECT
+            {columns}
+        FROM
+            {schema}.{tableName}
+        WHERE
+            {whereConditions}
+    ]]>
+    </select>
+
+</mapper>
