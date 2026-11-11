@@ -148,17 +148,37 @@ if [ "${#WHEELS[@]}" -ne 1 ]; then
   exit 1
 fi
 WHEEL="${WHEELS[0]}"
-# 검사 도구가 없으면 검사가 조용히 통과하므로 먼저 확인한다.
-if ! command -v unzip >/dev/null 2>&1; then
-  echo "ERROR: 휠의 비밀번호 검사에 unzip 이 필요합니다." >&2
+# 휠의 설정 파일에 평문 비밀값이 있으면 설치받는 모든 사람에게 배포되므로 막는다.
+# 모든 설정 파일(yml/yaml/json/properties/env/ini/cfg/toml)에서 pass/pwd/secret/token/key 류 키를 보고,
+# 값이 비었거나 ${VAR} 참조가 아니면 막는다. 검사 도구가 없으면 조용히 통과하므로 python3 를 먼저 확인한다.
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "ERROR: 휠의 비밀값 검사에 python3 가 필요합니다." >&2
   exit 1
 fi
-# 휠의 DB 설정에 평문 비밀번호가 있으면 설치받는 모든 사람에게 배포되므로 막는다.
-if [ "${ALLOW_WHEEL_SECRETS:-}" != "1" ] \
-  && unzip -p "$WHEEL" '*/sql_database_config.*' | grep -qE "^[[:space:]]*password:[[:space:]]*[\"']?[^\$\"'[:space:]]"; then
-  echo "ERROR: 휠의 sql_database_config.*.yml 에 평문 password 가 있습니다. 값을 환경변수 참조로 바꿔 다시 빌드하세요." >&2
-  echo "       (의도한 경우에만 ALLOW_WHEEL_SECRETS=1)" >&2
-  exit 1
+if [ "${ALLOW_WHEEL_SECRETS:-}" != "1" ]; then
+  if ! python3 -I - "$WHEEL" <<'PY'
+import re, sys, zipfile
+# Anywhere on the line, so an inline JSON or YAML flow mapping is caught too.
+KEY = re.compile(r"""["']?([\w.-]*(?:pass(?:word)?|pwd|secret|token|api[_-]?key|private[_-]?key)[\w.-]*)["']?\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,}#]*)""", re.I)
+found = []
+with zipfile.ZipFile(sys.argv[1]) as wheel:
+    for name in wheel.namelist():
+        if not re.search(r"\.(ya?ml|json|properties|env|ini|cfg|toml)$|(^|/)\.env", name):
+            continue
+        for no, line in enumerate(wheel.read(name).decode("utf-8", "replace").splitlines(), 1):
+            for m in KEY.finditer(line):
+                value = m.group(2).strip("\"'")
+                if value and not value.startswith("${") and value.lower() not in ("null", "none", "~"):
+                    found.append(f"{name}:{no} ({m.group(1)})")
+for f in found:
+    print(f"  {f}", file=sys.stderr)
+sys.exit(1 if found else 0)
+PY
+  then
+    echo "ERROR: 휠 설정에 평문 비밀값이 있습니다(위 목록). 환경변수 참조로 바꿔 다시 빌드하세요." >&2
+    echo "       (의도한 경우에만 ALLOW_WHEEL_SECRETS=1)" >&2
+    exit 1
+  fi
 fi
 cp -R "$PROJECT_ROOT/assets" "$OFFLINE_DIR/project/assets"
 
