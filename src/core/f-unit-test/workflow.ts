@@ -16,6 +16,8 @@ import { UNIT_TEST_SKILL_NAME } from "../pb-online/names";
 import { MAX_WAIT_CALLS, awaitingReply, noteReply, takeAbort, type PlanGateState } from "../plan-gate";
 import { isFullyCovered, readCoverage, readFailedTests, type FileCoverage } from "./coverage";
 import { checkTestSource, testMethodNames } from "./test-check";
+import { writeReport } from "./report";
+import { BASH_RULE, bashAllowed, coverageCommandLine, type BashContext } from "./bash-gate";
 
 export { MAX_WAIT_CALLS, UNIT_TEST_SKILL_NAME };
 
@@ -102,71 +104,7 @@ interface Stage {
 }
 
 const WRITES = ["edit", "write", "apply_patch", "multiedit", "patch"];
-// Strict allowlists over whitespace tokens. Shell metacharacters, quotes and backslashes are refused
-// outright: none of the allowed commands needs them, and they are how a token hides a flag.
-const SHELL_META = /[;&|<>`$\n\r'"\\]/;
-const GIT_SUBCOMMANDS = new Set(["diff", "status", "log", "show", "rev-parse"]);
-const GIT_TOKEN = /^[\w./:@^~=,*-]+$/;
-const GIT_FORBIDDEN = ["--output", "--ext-diff", "--textconv", "-c", "--exec-path", "--git-dir", "--work-tree", "-C"];
-const GRADLE_EXE = new Set(["./gradlew", "gradlew", "gradlew.bat", "gradle"]);
-const GRADLE_TASK = /^(:[\w-]+)*:?(classes|testClasses|compileJava|compileTestJava|test|cleanTest)$/;
-const GRADLE_FLAGS = new Set(["--offline", "--console=plain", "-q", "--quiet", "--no-daemon", "--parallel", "--continue", "--stacktrace"]);
-const TEST_FILTER = /^[\w.*]+$/;
-const SKILL_SCRIPT = `${UNIT_TEST_SKILL_NAME}/scripts/run-coverage.sh`;
-
-/** git accepts any unambiguous prefix of a long option (`--outp` is `--output`), so a prefix is refused too. */
-function forbiddenGitArg(a: string): boolean {
-  const name = a.split("=")[0]!;
-  return GIT_FORBIDDEN.some((f) => a.startsWith(f) || (name.startsWith("--") && name.length > 2 && f.startsWith(name)));
-}
-
-function gitRead([exe, sub, ...rest]: string[]): boolean {
-  return exe === "git" && GIT_SUBCOMMANDS.has(sub ?? "") && rest.every((a) => GIT_TOKEN.test(a) && !forbiddenGitArg(a));
-}
-
-function gradle([exe, ...rest]: string[]): boolean {
-  if (!GRADLE_EXE.has(exe ?? "")) return false;
-  let tasks = 0;
-  for (let i = 0; i < rest.length; i++) {
-    const a = rest[i]!;
-    if (GRADLE_TASK.test(a)) tasks += 1;
-    else if (a === "--tests" && TEST_FILTER.test(rest[i + 1] ?? "")) i += 1;
-    else if (!GRADLE_FLAGS.has(a)) return false;
-  }
-  return tasks > 0;
-}
-
-/** Exactly the command the verify guide shows: the skill's script with this session's arguments. */
-function coverageCommand([shell, script, ...rest]: string[], session: FutSession): boolean {
-  if ((shell !== "sh" && shell !== "bash") || !script) return false;
-  if (script.split("/").includes("..") || !`/${script}`.endsWith(`/${SKILL_SCRIPT}`)) return false;
-  const want = coverageParts(session);
-  if (rest.length !== 6 || rest[0] !== "--module" || rest[2] !== "--tests" || rest[4] !== "--out") return false;
-  const tests = rest[3]!.split(",");
-  const sameTests = tests.length === want.tests.length && new Set(tests).size === tests.length && tests.every((t) => want.tests.includes(t));
-  return rest[1] === want.module && sameTests && rest[5] === want.out;
-}
-
-function bashAllowed(session: FutSession, command: string): boolean {
-  if (SHELL_META.test(command)) return false;
-  const t = command.trim().split(/\s+/);
-  switch (session.stage) {
-    case "plan":
-      return gitRead(t);
-    case "execute":
-      return gitRead(t) || gradle(t);
-    case "verify":
-      return coverageCommand(t, session);
-    case "report":
-      return false;
-  }
-}
-
 const SCRIPT = "scripts/run-coverage.sh";
-const BASH_RULE =
-  "bash runs one plain command, written without quotes or backslashes (e.g. `--tests com.x.FooTest`) and without ; & | < > ` $ or newlines. " +
-  "plan: git diff|status|log|show|rev-parse with plain arguments. execute: that, or gradle/./gradlew with only classes, testClasses, compileJava, compileTestJava, test, cleanTest tasks (optionally :module:-prefixed), --tests <pattern> and --offline, --console=plain, -q, --quiet, --no-daemon, --parallel, --continue, --stacktrace. " +
-  "verify: only the run-coverage.sh command shown in the guide, exactly.";
 
 export const STAGES: Record<StageId, Stage> = {
   plan: {
@@ -190,7 +128,7 @@ export const STAGES: Record<StageId, Stage> = {
       "Write only the planned `files`; any other path is refused. If another file is really needed, say so in the report.",
       "Follow the skill's format rule: @SpringBootTest, @Transactional, @BeforeEach, @AfterEach; mock every external module or resource, keep same-module pure collaborators real.",
       "Keep every existing @Test method of a file you extend. Replace every template placeholder.",
-      "You may compile with gradle in bash, without quotes (e.g. `./gradlew :<module>:compileTestJava`). Failing tests are not your job to fix here; they are reported.",
+      "You may compile with gradle in bash, without quotes (e.g. `./gradlew :<module>:compileTestJava`; `--tests` takes a full test class name, no wildcards). Failing tests are not your job to fix here; they are reported.",
     ],
     tools: ["read", "edit", "write", "grep", "bash (gradle only)"],
     blocked: ["task", "bash (except gradle and read-only git)"],
@@ -199,7 +137,7 @@ export const STAGES: Record<StageId, Stage> = {
   verify: {
     goal: "Measure. The plugin reads the build and coverage facts itself; you do not report pass or fail.",
     steps: [
-      `Run the skill's \`${SCRIPT}\` with bash (the path is under the skill directory the skill tool showed) with the arguments below. It leaves status.json, jacoco.xml and test-results/ in --out.`,
+      `Run the skill's \`${SCRIPT}\` with bash using exactly the command below. It leaves status.json, jacoco.xml and test-results/ in --out.`,
       `Then call ${STAGE_TOOL} with stage "verify" and a \`note\`: for any line or branch you consider unreachable, the reason. Compile errors, static-check defects and coverage gaps send you back to execute with the details.`,
     ],
     tools: ["bash (run-coverage.sh only)", "read", "grep"],
@@ -292,10 +230,7 @@ function coverageParts(session: FutSession): { module: string; tests: string[]; 
   return { module: session.inputs?.module ?? "<module>", tests, out: session.runDir ?? "<runDir>" };
 }
 
-function coverageArgs(session: FutSession): string {
-  const { module, tests, out } = coverageParts(session);
-  return `--module ${module} --tests ${tests.join(",") || "<FQCN,...>"} --out ${out}`;
-}
+const bashContext = (session: FutSession): BashContext => ({ cwd: session.cwd, coverage: coverageParts(session) });
 
 export function renderStageGuide(stageId: StageId, session?: FutSession): string {
   const stage = STAGES[stageId];
@@ -306,7 +241,7 @@ export function renderStageGuide(stageId: StageId, session?: FutSession): string
     "Steps:",
     ...stage.steps.map((step, i) => `${i + 1}. ${step}`),
   ];
-  if (stageId === "verify" && session) lines.push(`Run exactly (no quotes, no extra arguments): sh <skill dir>/${SCRIPT} ${coverageArgs(session)}`);
+  if (stageId === "verify" && session) lines.push(`Run exactly (no quotes, no extra arguments): ${coverageCommandLine(bashContext(session))}`);
   if (stageId === "execute" && session?.inputs) lines.push(`Planned files: ${session.inputs.files.join(", ")}`);
   lines.push(`Recommended tools: ${stage.tools.join(", ")}`);
   lines.push(`Blocked at this stage: ${stage.blocked.join(", ")}`);
@@ -335,7 +270,7 @@ export function gateTool(sessionId: string, tool: string, args: Record<string, u
   // A subagent's writes would escape this session's gate.
   if (tool === "task") return refuse();
   if (tool === "bash") {
-    if (bashAllowed(session, typeof args.command === "string" ? args.command : "")) return null;
+    if (bashAllowed(session.stage, typeof args.command === "string" ? args.command : "", bashContext(session))) return null;
     return `${refuse()}\n${BASH_RULE}`;
   }
   if (!WRITES.includes(tool)) return null;
@@ -548,69 +483,6 @@ function completeVerify(session: FutSession, input: StageInput): string {
   }
   session.verification = "gaps";
   return advance(session, "report", `Coverage rounds (${MAX_COVERAGE_ROUNDS}) used up. Report the remaining gaps with their reasons:\n${detail}${failed}`);
-}
-
-const pct = (c: { missed: number; covered: number }): string => {
-  const total = c.missed + c.covered;
-  return total === 0 ? "-" : `${c.covered}/${total} (${Math.round((c.covered / total) * 100)}%)`;
-};
-
-const VERDICT: Record<Verification, string> = {
-  pending: "측정 안 됨",
-  covered: "전부 커버됨",
-  gaps: `공백 남음 (보강 ${MAX_COVERAGE_ROUNDS}회 소진)`,
-  incomplete: `미완료 (수정 재시도 ${MAX_FIX_RETRIES}회 초과)`,
-};
-
-function writeReport(session: FutSession, summary: string): string {
-  session.runDir ??= `${REPORT_DIR}/report-${localFileStamp()}`;
-  const dir = path.join(session.cwd, session.runDir);
-  fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, "report.md");
-  const rows = session.coverage.map((c) =>
-    c.coverage ? `| ${c.target} | ${pct(c.coverage.line)} | ${pct(c.coverage.branch)} |` : `| ${c.target} | jacoco.xml에 없음 | - |`,
-  );
-  const gaps = session.coverage
-    .filter((c) => !isFullyCovered(c.coverage))
-    .map((c) =>
-      c.coverage
-        ? `- ${c.target}: 미실행 줄 ${c.coverage.uncoveredLines.join(", ") || "없음"}, 분기 일부 미실행 줄 ${c.coverage.partialLines.join(", ") || "없음"}`
-        : `- ${c.target}: 어떤 테스트도 실행하지 않음`,
-    );
-  const body = [
-    "# f-unit-test-code 리포트",
-    "",
-    `- 요청: ${session.request}`,
-    `- 모드: ${session.inputs?.mode ?? "-"}, 모듈: ${session.inputs?.module ?? "-"}`,
-    `- 검증 결과: ${VERDICT[session.verification]}`,
-    `- 재시도: 수정 ${session.fixRetries}회, 커버리지 보강 ${session.gapRounds}회`,
-    "",
-    "## 대상",
-    ...(session.inputs?.targets ?? []).map((t) => `- ${t}`),
-    "",
-    "## 테스트 파일",
-    ...[...session.touched].sort().map((f) => `- ${f}`),
-    "",
-    "## 커버리지",
-    ...(rows.length > 0 ? ["| 대상 | 라인 | 분기 |", "|---|---|---|", ...rows] : ["측정 결과 없음"]),
-    "",
-    ...(gaps.length > 0 ? ["## 남은 공백", ...gaps, ""] : []),
-    ...(session.verification === "incomplete" ? ["## 마지막 오류", ...session.lastProblems, ""] : []),
-    "## 실패한 테스트",
-    ...(session.failedTests.length > 0 ? session.failedTests.map((t) => `- ${t}`) : ["없음"]),
-    "",
-    "## 검증 메모",
-    session.verifyNote ?? "",
-    "",
-    "## 계획",
-    session.plan ?? "",
-    "",
-    "## 요약",
-    summary,
-    "",
-  ].join("\n");
-  fs.writeFileSync(file, body, "utf-8");
-  return file;
 }
 
 /** Compared after normalization; a reordered list counts as a revision (harmless: the plan is recorded again). */
