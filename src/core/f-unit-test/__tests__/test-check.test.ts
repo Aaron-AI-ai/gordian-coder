@@ -108,3 +108,48 @@ describe("checkTestSource", () => {
     expect(r[0]).toContain("old_case")
   })
 })
+
+describe("기존 테스트 파일 보완 (previousMethods 있음)", () => {
+  // 형식 규칙(@SpringBootTest 등)이 빠진 기존 파일: 옛 메서드 두 개는 단언도 없고 하나는 @Disabled
+  const legacy = (extra: string): string => `class LegacyTest {
+    @Disabled
+    @Test void old1() { service.run(); }
+    @Test void old2() { service.run(); }
+${extra}
+  }`
+  const prev = ["old1", "old2"]
+  const good = `    @Test void inquire_normal1() { assertEquals(1, service.inquire(1)); }`
+
+  test("기존 파일 + 좋은 새 메서드는 결함 없음", () => {
+    expect(checkTestSource(legacy(good), { mocks: [], previousMethods: prev })).toEqual([])
+  })
+  test("단언 없는 새 메서드만 결함", () => {
+    const d = checkTestSource(legacy(`    @Test void inquire_normal2() { service.inquire(2); }`), { mocks: [], previousMethods: prev })
+    expect(d).toHaveLength(1)
+    expect(d[0]).toContain("inquire_normal2")
+  })
+  test("새 메서드의 @Disabled는 결함, 기존 메서드의 것은 아님", () => {
+    const d = checkTestSource(legacy(`    @Disabled\n${good}`), { mocks: [], previousMethods: prev })
+    expect(d).toHaveLength(1)
+    expect(d[0]).toContain("inquire_normal1")
+    expect(d[0]).toContain("@Disabled")
+  })
+  test("사라진 기존 메서드는 여전히 결함", () => {
+    const d = checkTestSource(legacy(good).replace(/@Test void old2[^\n]*/, ""), { mocks: [], previousMethods: prev })
+    expect(d.some((x) => x.includes("old2"))).toBe(true)
+  })
+  test("새 파일(previousMethods 없음)은 모든 점검 유지", () => {
+    const d = checkTestSource(legacy(good), { mocks: [] })
+    expect(d.some((x) => x.includes("@SpringBootTest"))).toBe(true)
+    expect(d.some((x) => x.includes("old1"))).toBe(true)
+    expect(d.some((x) => x.includes("@Disabled"))).toBe(true)
+  })
+})
+
+describe("mock 이름 비교", () => {
+  test("FQCN은 단순명으로, 정규식 문자는 리터럴로 비교한다", () => {
+    expect(checkTestSource(healthy, { mocks: ["kr.co.koscom.pb.bsm.AccountBSM"] })).toEqual([])
+    expect(() => checkTestSource(healthy, { mocks: ["AccountBSM.getAccount("] })).not.toThrow()
+    expect(checkTestSource(healthy, { mocks: ["Account"] }).some((x) => x.includes("Account"))).toBe(true)
+  })
+})

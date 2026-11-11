@@ -18,7 +18,9 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 TOOLS=$HERE/../tools
 mkdir -p "$OUT" && OUT=$(cd "$OUT" && pwd) || exit 2
 cd "$PROJECT" || { echo "no such project dir: $PROJECT" >&2; exit 2; }
-MDIR=$(printf '%s' "$MODULE" | sed 's/^://; s/:/\//g')
+# Accept :a:b, a:b and a/b alike: GMOD is the Gradle path without the leading colon, MDIR its directory.
+GMOD=$(printf '%s' "$MODULE" | sed 's#/#:#g; s/^://')
+MDIR=$(printf '%s' "$GMOD" | sed 's#:#/#g')
 
 write_status() { # compile coverage logfile
   # LC_ALL=C: byte-safe for non-UTF-8 output (e.g. CP949); tr/sed would otherwise abort and truncate
@@ -33,12 +35,12 @@ if [ -f ./gradlew ]; then GR="sh ./gradlew"
 elif command -v gradle >/dev/null 2>&1; then GR=gradle
 else echo "neither ./gradlew nor gradle found" > "$LOG"; write_status fail missing "$LOG"; exit 0; fi
 
-$GR ":$MODULE:testClasses" -I "$HERE/init.gradle" > "$LOG" 2>&1 \
+$GR ":$GMOD:testClasses" -I "$HERE/init.gradle" > "$LOG" 2>&1 \
   || { write_status fail missing "$LOG"; exit 0; }
 
 rm -rf "$MDIR/build/test-results/test"
 # cleanTest forces a real run; a cached/UP-TO-DATE test task would write no jacoco.exec
-$GR ":$MODULE:cleanTest" ":$MODULE:test" --continue -I "$HERE/init.gradle" \
+$GR ":$GMOD:cleanTest" ":$GMOD:test" --continue -I "$HERE/init.gradle" \
   "-Pfut.agent=$TOOLS/jacocoagent.jar" "-Pfut.exec=$OUT/jacoco.exec" "-Pfut.tests=$TESTS" > "$LOG" 2>&1
 
 [ -d "$MDIR/build/test-results/test" ] && cp -R "$MDIR/build/test-results/test" "$OUT/test-results"

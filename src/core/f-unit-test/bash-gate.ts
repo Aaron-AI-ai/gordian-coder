@@ -94,10 +94,15 @@ export function guideScriptPath(cwd: string, home: string = os.homedir()): strin
   return fs.existsSync(path.join(cwd, ".opencode", SKILL_SCRIPT)) ? `.opencode/${SKILL_SCRIPT}` : `${slashes(home)}/.config/opencode/${SKILL_SCRIPT}`;
 }
 
-/** The exact verify command; the guide prints it and `bashAllowed` accepts it (tests in any order). */
-export function coverageCommandLine(ctx: BashContext): string {
+/**
+ * The exact verify command; the guide prints it and `bashAllowed` accepts it (tests in any order).
+ * Null when the script path has whitespace: such a path can never be one plain token.
+ */
+export function coverageCommandLine(ctx: BashContext): string | null {
   const { module, tests, out } = ctx.coverage;
-  return `sh ${guideScriptPath(ctx.cwd, ctx.home)} --module ${module} --tests ${tests.join(",") || "<FQCN,...>"} --out ${out}`;
+  const script = guideScriptPath(ctx.cwd, ctx.home);
+  if (/\s/.test(script)) return null;
+  return `sh ${script} --module ${module} --tests ${tests.join(",") || "<FQCN,...>"} --out ${out}`;
 }
 
 function coverageCommand([shell, script, ...rest]: string[], ctx: BashContext): boolean {

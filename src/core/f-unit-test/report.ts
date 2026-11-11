@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { localFileStamp } from "../time";
 import { isFullyCovered } from "./coverage";
-import { MAX_COVERAGE_ROUNDS, MAX_FIX_RETRIES, REPORT_DIR, type FutSession, type Verification } from "./workflow";
+import { MAX_COVERAGE_ROUNDS, MAX_FIX_RETRIES, REPORT_DIR, measuredTargets, type FutSession, type Verification } from "./workflow";
 
 const pct = (c: { missed: number; covered: number }): string => {
   const total = c.missed + c.covered;
@@ -36,6 +36,10 @@ export function writeReport(session: FutSession, summary: string): string {
         ? `- ${c.target}: 미실행 줄 ${c.coverage.uncoveredLines.join(", ") || "없음"}, 분기 일부 미실행 줄 ${c.coverage.partialLines.join(", ") || "없음"}`
         : `- ${c.target}: 어떤 테스트도 실행하지 않음`,
     );
+  const measured = new Set(measuredTargets(session));
+  const skipped = (session.inputs?.cases ?? [])
+    .filter((c) => c.skip_reason?.trim())
+    .map((c) => `- ${c.target}#${c.method}: ${c.skip_reason!.trim()}${measured.has(c.target) ? "" : " (대상 전체 제외, 커버리지 측정 안 함)"}`);
   const body = [
     "# f-unit-test-code 리포트",
     "",
@@ -54,6 +58,7 @@ export function writeReport(session: FutSession, summary: string): string {
     ...(rows.length > 0 ? ["| 대상 | 라인 | 분기 |", "|---|---|---|", ...rows] : ["측정 결과 없음"]),
     "",
     ...(gaps.length > 0 ? ["## 남은 공백", ...gaps, ""] : []),
+    ...(skipped.length > 0 ? ["## 테스트하지 않은 메서드", ...skipped, ""] : []),
     ...(session.verification === "incomplete" ? ["## 마지막 오류", ...session.lastProblems, ""] : []),
     "## 실패한 테스트",
     ...(session.failedTests.length > 0 ? session.failedTests.map((t) => `- ${t}`) : ["없음"]),

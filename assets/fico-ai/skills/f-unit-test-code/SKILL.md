@@ -39,5 +39,5 @@ This skill does NOT modify production code or the project's build files.
 
 ### 3. Verify
 1. Read `docs/f-unit-test-verification-rule.md` and run its self-check list.
-2. Run `scripts/run-coverage.sh --module <gradle module> --tests <comma separated FQCNs> --out <dir>`; it writes `status.json`, `jacoco.xml` and `test-results/` into `--out`.
+2. Run `scripts/run-coverage.sh --module <gradle module> --tests <comma separated FQCNs> --out <dir>`; it writes `status.json`, `jacoco.xml` and `test-results/` into `--out`. The verify step needs a POSIX shell (Git Bash or WSL on Windows); Windows execution of the coverage script is untested.
 3. Fix compile errors. Fill coverage gaps by adding cases (at most 3 rounds). Report unreachable branches with a reason; do not fix failing tests.

@@ -3,11 +3,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Hooks, PluginInput, ToolContext } from "@opencode-ai/plugin";
+import { tool } from "@opencode-ai/plugin";
 import { createFUnitTestModule } from "../f-unit-test";
 import { createModules } from "../modules";
 import { COMMAND_NAME, MAX_WAIT_CALLS, STAGE_TOOL, endSession, getSession, noteUserMessage } from "../../../core/f-unit-test/workflow";
 import { COMMAND_NAME as PB_COMMAND, endSession as pbEnd, getSession as pbGet } from "../../../core/pb-online/workflow";
 
+const z = tool.schema;
 type Config = Parameters<NonNullable<Hooks["config"]>>[0];
 
 const SID = "ses-fut";
@@ -136,4 +138,25 @@ describe("with both workflows registered", () => {
     expect(gate("read", "unrelated")).not.toThrow();
     pbEnd("pb-ses");
   });
+
+  test("another slash command in the same session ends the f-unit-test workflow", async () => {
+    const m = mod();
+    await start(m);
+    await m.commandBefore!({ command: "f-review", sessionID: "another", arguments: "" }, { parts: [] });
+    expect(getSession(SID)).toBeDefined();
+    await m.commandBefore!({ command: "f-review", sessionID: SID, arguments: "" }, { parts: [] });
+    expect(getSession(SID)).toBeUndefined();
+    expect(() => m.toolBefore!("write", SID, { filePath: "x" })).not.toThrow();
+  });
+
+  test("the stage tool schema accepts a skip_reason-only case", () => {
+    const schema = z.object(mod().tools[STAGE_TOOL]!.args);
+    const parsed = schema.safeParse({
+      stage: "plan",
+      note: "p",
+      inputs: { ...plan, cases: [...plan.cases, { target: TARGET, method: "toString", skip_reason: "generated" }] },
+    });
+    expect(parsed.success).toBe(true);
+  });
 });
+

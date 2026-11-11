@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -497,5 +497,96 @@ describe("review round 1: gate bypasses", () => {
   test("a blank plan note is refused", () => {
     expect(done({ stage: "plan", note: "  ", inputs: okPlan() })).toContain("note");
     expect(session().plan).toBeUndefined();
+  });
+});
+
+describe("final review fixes", () => {
+  test("a legacy test file is extended without being blamed for its old shape", () => {
+    const legacy = `class SONAQ001ServiceTest {\n  @Disabled\n  @Test void old1() { service.run(); }\n  @Test void old2() { service.run(); }\n}\n`;
+    put(TEST_FILE, legacy);
+    approve();
+    expect(session().previousMethods[TEST_FILE]).toEqual(["old1", "old2"]);
+    writeTest(legacy.replace(/\n}\n$/, "\n  @MockitoBean AccountBSM accountBSM;\n  @Test void inquire_normal1() { assertEquals(1, service.inquire(1)); }\n}\n"));
+    done({ stage: "execute" });
+    runCoverage();
+    done({ stage: "verify", note: "n" });
+    expect(session().stage).toBe("report");
+    expect(session().fixRetries).toBe(0);
+  });
+
+  test("plan rejects mocks that are not class names", () => {
+    for (const mock of ["AccountBSM.getAccount(", "AccountBSM (on-stk-ord-bsm)"]) {
+      const plan = okPlan();
+      plan.cases[0]!.mocks = [mock];
+      const out = done({ stage: "plan", note: "p", inputs: plan });
+      expect(out).toStartWith("Rejected:");
+      expect(out).toContain("class name only");
+    }
+    const fq = okPlan();
+    fq.cases[0]!.mocks = ["kr.co.koscom.pb.bsm.AccountBSM"];
+    expect(done({ stage: "plan", note: "p", inputs: fq })).toContain("Plan recorded");
+  });
+
+  test("a skip_reason-only case needs no case lists", () => {
+    const plan = okPlan();
+    plan.cases.push({ target: TARGET, method: "toString", skip_reason: "generated" } as unknown as (typeof plan.cases)[number]);
+    expect(done({ stage: "plan", note: "p", inputs: plan })).toContain("Plan recorded");
+  });
+
+  test("verify calls without fresh results burn fix retries and end as incomplete", () => {
+    reachVerify();
+    for (let i = 1; i <= MAX_FIX_RETRIES; i++) {
+      expect(done({ stage: "verify", note: "n" })).toContain(`fix retry (${i}/${MAX_FIX_RETRIES})`);
+      expect(session().stage).toBe("verify");
+    }
+    done({ stage: "verify", note: "n" });
+    expect(session().stage).toBe("report");
+    expect(session().verification).toBe("incomplete");
+    const out = done({ stage: "report", note: "s" });
+    expect(fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8")).toContain("without fresh run-coverage.sh results");
+  });
+
+  test("the verify guide says it needs a POSIX shell", () => {
+    expect(renderStageGuide("verify")).toContain("POSIX shell (Git Bash or WSL on Windows)");
+  });
+
+  test("a target whose cases are all skipped is not a coverage gap and is listed as skipped", () => {
+    const other = `${MODULE}/src/main/java/${PKG}/SONAQ001Out.java`;
+    put(other, "class SONAQ001Out {}");
+    const plan = okPlan();
+    plan.targets.push(other);
+    plan.cases.push({ target: other, method: "getX", normal: [], boundary: [], exception: [], mocks: [], skip_reason: "plain VO getter" });
+    plan.cases.push({ target: TARGET, method: "toString", normal: [], boundary: [], exception: [], mocks: [], skip_reason: "Lombok" });
+    approve(plan);
+    writeTest();
+    done({ stage: "execute" });
+    runCoverage(); // jacoco has SONAQ001Service only
+    done({ stage: "verify", note: "n" });
+    expect(session().verification).toBe("covered");
+    expect(session().coverage.map((c) => c.target)).toEqual([TARGET]);
+    const out = done({ stage: "report", note: "s" });
+    const report = fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8");
+    expect(report).toContain("## 테스트하지 않은 메서드");
+    expect(report).toContain(`${other}#getX: plain VO getter (대상 전체 제외`);
+    expect(report).toContain(`${TARGET}#toString: Lombok`);
+  });
+
+  test("a write whose target cannot be determined is refused", () => {
+    approve();
+    expect(gateTool(SID, "write", { content: "x" })).toContain("could not be determined");
+    expect(gateTool(SID, "multiedit", { edits: [] })).toContain("could not be determined");
+    expect(gateTool(SID, "patch", { patchText: "garbage" })).toContain("could not be determined");
+    expect(gateTool(SID, "patch", { patchText: `*** Begin Patch\n*** Update File: ${TEST_FILE}\n*** End Patch` })).toBeNull();
+  });
+
+  test("the guide tells the user to run gdc fico-init when the global path cannot be typed", () => {
+    const home = spyOn(os, "homedir").mockReturnValue("/Users/Jane Doe");
+    try {
+      reachVerify();
+      expect(renderStageGuide("verify", session())).toContain("gdc fico-init");
+      expect(renderStageGuide("verify", session())).not.toContain("Run exactly");
+    } finally {
+      home.mockRestore();
+    }
   });
 });

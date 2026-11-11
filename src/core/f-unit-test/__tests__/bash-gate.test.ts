@@ -161,7 +161,11 @@ describe("bash gate", () => {
     expect(guideScriptPath(CWD, HOME)).toBe(GLOBAL_SCRIPT);
     const line = coverageCommandLine(ctx());
     expect(line).toBe(`sh ${GLOBAL_SCRIPT} ${ARGS}`);
-    expect(bashAllowed("verify", line, ctx())).toBe(true);
+    expect(bashAllowed("verify", line!, ctx())).toBe(true);
+  });
+
+  test("no command is offered when the global skill path has whitespace", () => {
+    expect(coverageCommandLine(ctx([FQCN], CWD, "/Users/Jane Doe"))).toBeNull();
   });
 
   test("the refusal rule names the forbidden characters", () => {

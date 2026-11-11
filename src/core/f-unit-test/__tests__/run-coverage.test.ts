@@ -81,6 +81,15 @@ describe("run-coverage.sh", () => {
     expect(calls[0].indexOf(":app:cleanTest")).toBeLessThan(calls[0].indexOf(":app:test "));
   });
 
+  test.each(["a/b", ":a:b", "a:b"])("module %s becomes the Gradle path :a:b in every task", (module) => {
+    const { proj, out } = project();
+    const rec = path.join(proj, "calls.txt");
+    fs.writeFileSync(path.join(proj, "gradlew"), `echo "$@" >> '${rec}'\n`);
+    run(["--module", module, "--tests", "a.B", "--out", out, "--project", proj]);
+    const tasks = fs.readFileSync(rec, "utf8").split(/\s+/).filter((t) => /(testClasses|cleanTest|test)$/.test(t));
+    expect(tasks).toEqual([":a:b:testClasses", ":a:b:cleanTest", ":a:b:test"]);
+  });
+
   test("stale results in --out are removed before a failing compile", () => {
     const { proj, out } = project();
     fs.mkdirSync(path.join(out, "test-results"), { recursive: true });

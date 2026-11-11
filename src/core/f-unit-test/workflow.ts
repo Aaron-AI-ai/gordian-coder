@@ -105,6 +105,7 @@ interface Stage {
 
 const WRITES = ["edit", "write", "apply_patch", "multiedit", "patch"];
 const SCRIPT = "scripts/run-coverage.sh";
+const POSIX_NOTE = "The verify step needs a POSIX shell (Git Bash or WSL on Windows); Windows execution of the coverage script is untested.";
 
 export const STAGES: Record<StageId, Stage> = {
   plan: {
@@ -137,7 +138,7 @@ export const STAGES: Record<StageId, Stage> = {
   verify: {
     goal: "Measure. The plugin reads the build and coverage facts itself; you do not report pass or fail.",
     steps: [
-      `Run the skill's \`${SCRIPT}\` with bash using exactly the command below. It leaves status.json, jacoco.xml and test-results/ in --out.`,
+      `Run the skill's \`${SCRIPT}\` with bash using exactly the command below. It leaves status.json, jacoco.xml and test-results/ in --out. ${POSIX_NOTE}`,
       `Then call ${STAGE_TOOL} with stage "verify" and a \`note\`: for any line or branch you consider unreachable, the reason. Compile errors, static-check defects and coverage gaps send you back to execute with the details.`,
     ],
     tools: ["bash (run-coverage.sh only)", "read", "grep"],
@@ -241,7 +242,14 @@ export function renderStageGuide(stageId: StageId, session?: FutSession): string
     "Steps:",
     ...stage.steps.map((step, i) => `${i + 1}. ${step}`),
   ];
-  if (stageId === "verify" && session) lines.push(`Run exactly (no quotes, no extra arguments): ${coverageCommandLine(bashContext(session))}`);
+  if (stageId === "verify" && session) {
+    const command = coverageCommandLine(bashContext(session));
+    lines.push(
+      command
+        ? `Run exactly (no quotes, no extra arguments): ${command}`
+        : "The global skill path contains whitespace, so no command can pass the bash gate. Tell the user to run `gdc fico-init` in this project (it installs the skill under .opencode/skills) and END YOUR TURN.",
+    );
+  }
   if (stageId === "execute" && session?.inputs) lines.push(`Planned files: ${session.inputs.files.join(", ")}`);
   lines.push(`Recommended tools: ${stage.tools.join(", ")}`);
   lines.push(`Blocked at this stage: ${stage.blocked.join(", ")}`);
@@ -250,9 +258,9 @@ export function renderStageGuide(stageId: StageId, session?: FutSession): string
 }
 
 /** The files a write-capable call is about to touch. */
-function targetsOf(tool: string, args: Record<string, unknown>): string[] {
+function targetsOf(args: Record<string, unknown>): string[] {
   if (typeof args.filePath === "string") return [args.filePath];
-  if (tool === "apply_patch" && typeof args.patchText === "string") {
+  if (typeof args.patchText === "string") {
     return [...args.patchText.matchAll(/^\*\*\* (?:Add|Update) File: (.+)$/gm)].map((m) => m[1]!.trim());
   }
   return [];
@@ -279,7 +287,9 @@ export function gateTool(sessionId: string, tool: string, args: Record<string, u
     return `${COMMAND_NAME}: apply_patch may not delete or move files; existing tests must be kept.`;
   }
   const planned = session.inputs?.files ?? [];
-  const unplanned = targetsOf(tool, args).map((f) => toRelative(session.cwd, f)).filter((f) => !planned.some((p) => matchesPath(p, f)));
+  // Fail closed: a write whose target cannot be read from its arguments cannot be checked against the plan.
+  if (targetsOf(args).length === 0) return `${COMMAND_NAME}: ${tool} was refused because its target file could not be determined. Use write or edit with filePath for a planned file.`;
+  const unplanned = targetsOf(args).map((f) => toRelative(session.cwd, f)).filter((f) => !planned.some((p) => matchesPath(p, f)));
   if (unplanned.length > 0) {
     return `${COMMAND_NAME}: ${unplanned.join(", ")} is not in the approved plan. Write only the planned files: ${planned.join(", ")}. If another file is really needed, say so in the report.`;
   }
@@ -290,7 +300,7 @@ export function gateTool(sessionId: string, tool: string, args: Record<string, u
 export function noteToolResult(sessionId: string, tool: string, args: Record<string, unknown> = {}): void {
   const session = sessions.get(sessionId);
   if (!session || !WRITES.includes(tool)) return;
-  for (const file of targetsOf(tool, args)) {
+  for (const file of targetsOf(args)) {
     const rel = toRelative(session.cwd, file);
     session.touched.add(rel);
     session.roundWrites.add(rel);
@@ -351,6 +361,9 @@ function planProblems(p: PlanInputs, cwd: string): string[] {
   for (const c of p.cases) {
     const where = `cases: ${c.target || "(no target)"}#${c.method || "(no method)"}`;
     if (!p.targets.includes(c.target)) problems.push(`${where}: target is not in targets`);
+    for (const m of c.mocks) {
+      if (!/^[\w.$]+$/.test(m)) problems.push(`${where}: mock "${m}" must be a class name only (simple or fully qualified, e.g. AccountBSM), without module names, methods or spaces`);
+    }
     if (c.skip_reason?.trim()) continue;
     if (filled(c.normal) < 2) problems.push(`${where}: needs at least 2 normal cases`);
     if (filled(c.boundary) < 1) problems.push(`${where}: needs at least 1 boundary case`);
@@ -425,6 +438,12 @@ function testDefects(session: FutSession): string[] {
   return defects;
 }
 
+/** Targets with at least one case to test; a target whose every case has skip_reason is only reported as skipped. */
+export function measuredTargets(session: FutSession): string[] {
+  const cases = session.inputs?.cases ?? [];
+  return (session.inputs?.targets ?? []).filter((t) => cases.some((c) => c.target === t && !c.skip_reason?.trim()));
+}
+
 function describeGap(c: TargetCoverage): string {
   if (!c.coverage) return `- ${c.target}: not in jacoco.xml (no test executed it)`;
   const { line, branch, uncoveredLines, partialLines } = c.coverage;
@@ -447,10 +466,21 @@ function sendBackToFix(session: FutSession, problems: string[]): string {
 
 const RERUN = `Rejected: run run-coverage.sh first in this verify stage (its status.json and jacoco.xml must be newer than the stage entry).`;
 
+/** A verify call without fresh facts. It burns a fix retry so a run that never measures still ends. */
+function rerun(session: FutSession): string {
+  session.fixRetries += 1;
+  if (session.fixRetries > MAX_FIX_RETRIES) {
+    session.verification = "incomplete";
+    session.lastProblems = ["verify was called without fresh run-coverage.sh results (status.json/jacoco.xml) too many times"];
+    return advance(session, "report", `Fix limit (${MAX_FIX_RETRIES}) reached without coverage results. Report this run as INCOMPLETE.`);
+  }
+  return `${RERUN} This counts as a fix retry (${session.fixRetries}/${MAX_FIX_RETRIES}).\n\n${renderStageGuide("verify", session)}`;
+}
+
 function completeVerify(session: FutSession, input: StageInput): string {
   if (!input.note?.trim()) return "Rejected: verify needs a `note` (the reason for any line or branch you leave uncovered, or \"none\").";
   const statusFile = freshFile(session, "status.json");
-  if (!statusFile) return `${RERUN}\n\n${renderStageGuide("verify", session)}`;
+  if (!statusFile) return rerun(session);
   let status: { compile?: string; log?: string; coverage?: string };
   try {
     status = JSON.parse(fs.readFileSync(statusFile, "utf-8")) as typeof status;
@@ -466,10 +496,10 @@ function completeVerify(session: FutSession, input: StageInput): string {
   // Compiled but no coverage: the test run itself broke. Bounded by the fix retries, not an endless rerun.
   if (status.coverage === "missing") return sendBackToFix(session, [`Tests compiled but produced no coverage:\n${status.log ?? "(no log)"}`]);
   const xmlFile = freshFile(session, "jacoco.xml");
-  if (!xmlFile) return `${RERUN}\n\n${renderStageGuide("verify", session)}`;
+  if (!xmlFile) return rerun(session);
 
   const xml = fs.readFileSync(xmlFile, "utf-8");
-  session.coverage = (session.inputs?.targets ?? []).map((target) => ({ target, coverage: readCoverage(xml, target) }));
+  session.coverage = measuredTargets(session).map((target) => ({ target, coverage: readCoverage(xml, target) }));
   const gaps = session.coverage.filter((c) => !isFullyCovered(c.coverage));
   const failed = session.failedTests.length > 0 ? `\nFailing tests (reported, not blocking): ${session.failedTests.join(", ")}` : "";
   if (gaps.length === 0) {

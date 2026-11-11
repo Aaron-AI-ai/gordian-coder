@@ -12,6 +12,7 @@ import {
   STAGE_TOOL,
   STAGE_TOOL_DESCRIPTION,
   completeStage,
+  endSession,
   gateTool,
   getSession,
   noteToolResult,
@@ -36,6 +37,8 @@ export function createFUnitTestModule(input: PluginInput): OpenCodeModule {
 
   const commandBefore: CommandBeforeHook = async ({ command, sessionID, arguments: raw }) => {
     if (command === COMMAND_NAME) startSession(sessionID, raw, input.directory);
+    // Another slash command in the same session leaves this workflow; otherwise its gate would keep refusing.
+    else if (getSession(sessionID)) endSession(sessionID);
   };
 
   // A model that ignores "END YOUR TURN" loops until its step limit; abort the turn instead.
@@ -87,11 +90,11 @@ export function createFUnitTestModule(input: PluginInput): OpenCodeModule {
                   z.object({
                     target: z.string(),
                     method: z.string(),
-                    normal: strs(),
-                    boundary: strs(),
-                    exception: strs(),
-                    mocks: strs(),
-                    skip_reason: z.string().optional(),
+                    normal: strs().optional(),
+                    boundary: strs().optional(),
+                    exception: strs().optional(),
+                    mocks: strs().optional().describe("Class names to mock (simple or fully qualified), nothing else"),
+                    skip_reason: z.string().optional().describe("Instead of cases: why this method needs no test"),
                   })
                 )
                 .optional(),
