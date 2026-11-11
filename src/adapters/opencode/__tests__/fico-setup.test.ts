@@ -19,7 +19,7 @@ import {
   skillDrift,
   withMcp,
 } from "../fico-setup";
-import { MCP_SERVER, SKILL_NAME } from "../../../core/pb-online/names";
+import { MCP_SERVER, SKILL_NAME, UNIT_TEST_SKILL_NAME } from "../../../core/pb-online/names";
 
 let root: string;
 let assets: string;
@@ -36,6 +36,7 @@ beforeEach(() => {
   skills = path.join(root, "skills");
   write(path.join(assets, "fico-ai/skills", SKILL_NAME, "SKILL.md"), "skill");
   write(path.join(assets, "fico-ai/skills", SKILL_NAME, "docs/a.md"), "doc");
+  write(path.join(assets, "fico-ai/skills", UNIT_TEST_SKILL_NAME, "SKILL.md"), "ut skill");
   write(path.join(assets, "fico-ai/skills/sql-query-gen/SKILL.md"), "other");
   write(path.join(assets, "fico-ai/rules/fico-overview.md"), "rule");
   write(path.join(assets, "fico-mcp/fico_mcp-0.1.0-py3-none-any.whl"), "whl");
@@ -104,10 +105,31 @@ describe("skill install", () => {
     installSkill(assets, skills);
     write(path.join(skills, SKILL_NAME, "docs/a.md"), "edited");
     write(path.join(skills, SKILL_NAME, "stale.md"), "old");
-    expect(skillDrift(assets, skills)).toEqual(["docs/a.md"]);
+    expect(skillDrift(assets, skills)).toEqual([`${SKILL_NAME}/docs/a.md`]);
     installSkill(assets, skills);
     expect(skillDrift(assets, skills)).toEqual([]);
     expect(fs.existsSync(path.join(skills, SKILL_NAME, "stale.md"))).toBe(false);
+  });
+
+  test("skillDrift lists every skill's missing files", () => {
+    const drift = skillDrift(assets, skills);
+    expect(drift).toContain(`${SKILL_NAME}/SKILL.md`);
+    expect(drift).toContain(`${UNIT_TEST_SKILL_NAME}/SKILL.md`);
+  });
+
+  test("installSkill installs every listed skill and not the other vendored ones", () => {
+    expect(installSkill(assets, skills)).toBe(skills);
+    expect(fs.existsSync(path.join(skills, SKILL_NAME, "SKILL.md"))).toBe(true);
+    expect(fs.existsSync(path.join(skills, UNIT_TEST_SKILL_NAME, "SKILL.md"))).toBe(true);
+    expect(fs.existsSync(path.join(skills, "sql-query-gen"))).toBe(false);
+    expect(skillDrift(assets, skills)).toEqual([]);
+  });
+
+  test("a shipped skill folder that is missing is reported and skipped, not a crash", () => {
+    fs.rmSync(path.join(assets, "fico-ai/skills", UNIT_TEST_SKILL_NAME), { recursive: true });
+    expect(skillDrift(assets, skills)).toContain(`${UNIT_TEST_SKILL_NAME}/(shipped skill missing)`);
+    installSkill(assets, skills);
+    expect(fs.existsSync(path.join(skills, UNIT_TEST_SKILL_NAME))).toBe(false);
   });
 
   test("global and project skill locations", () => {
@@ -198,7 +220,7 @@ describe("check", () => {
   const healthy = (cmd: string[]) =>
     cmd[0] === "mcp"
       ? { ok: true, stdout: `\u001b[0m✓ ${MCP_SERVER} \u001b[90mconnected` }
-      : { ok: true, stdout: `[{"name": "${SKILL_NAME}"}]` };
+      : { ok: true, stdout: `[{"name": "${SKILL_NAME}"}, {"name": "${UNIT_TEST_SKILL_NAME}"}]` };
 
   const entryPath = () => path.join(root, "adapters/opencode/index.js");
   const options = () => ({ assets, skillsDir: skills, config: { plugin: [`file://${entryPath()}`], mcp: { [MCP_SERVER]: {} } } });
@@ -222,6 +244,15 @@ describe("check", () => {
       "skill-loaded",
       "mcp-connected",
     ]);
+  });
+
+  test("checkFico reports skill-loaded false naming the skill OpenCode did not list", () => {
+    setUp();
+    const results = checkFico(options(), (cmd) =>
+      cmd[0] === "mcp" ? healthy(cmd) : { ok: true, stdout: `[{"name": "${SKILL_NAME}"}]` });
+    const loaded = results.find((c) => c.name === "skill-loaded")!;
+    expect(loaded.ok).toBe(false);
+    expect(loaded.detail).toContain(UNIT_TEST_SKILL_NAME);
   });
 
   test("a server that is configured but failing does not pass", () => {
