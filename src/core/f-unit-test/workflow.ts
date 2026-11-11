@@ -76,9 +76,13 @@ export interface FutSession extends PlanGateState {
   previousMethods: Record<string, string[]>;
   /** Project-relative files written through the gate. */
   touched: Set<string>;
+  /** Files written since the run last entered execute; leaving execute needs one. */
+  roundWrites: Set<string>;
   /** Project-relative directory passed to run-coverage.sh as --out; holds report.md too. */
   runDir?: string;
   verifyStartedAt?: number;
+  /** mtimes of status.json/jacoco.xml at verify entry; only strictly newer files count. */
+  verifyBaseline: Record<string, number>;
   fixRetries: number;
   gapRounds: number;
   verification: Verification;
@@ -98,15 +102,23 @@ interface Stage {
 }
 
 const WRITES = ["edit", "write", "apply_patch", "multiedit", "patch"];
-const GIT_READ = /^\s*git\s+(diff|status|log|show|rev-parse)\b/;
-const GRADLE = /\bgradlew(\.bat)?\b|\bgradle\b/;
-// ponytail: commands are matched, not parsed; `git diff; rm x` passes. Fine for a cooperating model, not a sandbox.
+// One plain command only: no chaining, pipes, redirection, substitution or a second line.
+const SHELL_META = /[;&|<>`$\n\r]/;
+const GIT_READ = /^\s*git\s+(diff|status|log|show|rev-parse)(\s+[^;&|<>`$\n\r]*)?$/;
+const GIT_WRITE_ARG = /(^|\s)--output(=|\s|$)/;
+const GRADLE = /^\s*(\.\/)?gradlew(\.bat)?(\s|$)|^\s*gradle(\s|$)/;
+// Arguments that load build logic from elsewhere (init scripts, another project, another user home).
+const GRADLE_ESCAPE_ARG = /(^|\s)(-[Ipgbc]|--(init-script|project-dir|gradle-user-home|build-file|settings-file|include-build))/;
+const COVERAGE = /^\s*(sh|bash)\s+\S*run-coverage\.sh(\s|$)/;
+const gitRead = (c: string): boolean => GIT_READ.test(c) && !GIT_WRITE_ARG.test(c);
+const gradle = (c: string): boolean => GRADLE.test(c) && !GRADLE_ESCAPE_ARG.test(c);
 const BASH_ALLOWED: Record<StageId, (command: string) => boolean> = {
-  plan: (c) => GIT_READ.test(c),
-  execute: (c) => GRADLE.test(c) || GIT_READ.test(c),
-  verify: (c) => c.includes("run-coverage.sh"),
+  plan: gitRead,
+  execute: (c) => gradle(c) || gitRead(c),
+  verify: (c) => COVERAGE.test(c),
   report: () => false,
 };
+const bashAllowed = (stage: StageId, command: string): boolean => !SHELL_META.test(command) && BASH_ALLOWED[stage](command);
 
 const SCRIPT = "scripts/run-coverage.sh";
 
@@ -168,6 +180,8 @@ export function startSession(sessionId: string, request: string, cwd: string): F
     cwd,
     previousMethods: {},
     touched: new Set(),
+    roundWrites: new Set(),
+    verifyBaseline: {},
     awaitingCalls: 0,
     fixRetries: 0,
     gapRounds: 0,
@@ -202,15 +216,22 @@ export function takeAbortRequest(sessionId: string): boolean {
 
 const slash = (p: string): string => p.trim().replace(/\\/g, "/");
 
+/** Project-relative, `/`-separated and normalized (`a/../b` → `b`, `./x` → `x`). */
 function toRelative(cwd: string, file: string): string {
   const f = slash(file);
   const rel = path.isAbsolute(f) ? path.relative(cwd, f).split(path.sep).join("/") : f;
-  return rel.replace(/^\.\//, "");
+  return rel ? path.posix.normalize(rel) : "";
 }
 
-/** Exactly the planned path, or a path ending in `/` + it. */
+/** A normalized path that leaves the project: `..`, `../x`, or still absolute (other drive, `C:/`). */
+const escapes = (rel: string): boolean => rel === ".." || rel.startsWith("../") || path.isAbsolute(rel) || /^[A-Za-z]:\//.test(rel);
+
+/**
+ * Both sides are normalized project-relative paths, so only an exact match counts. A suffix
+ * match would let `x/<planned>` through and then be checked as the planned file.
+ */
 function matchesPath(planned: string, file: string): boolean {
-  return file === planned || file.endsWith(`/${planned}`);
+  return !escapes(file) && file === planned;
 }
 
 /** `a/src/test/java/x/y/ZTest.java` → `x.y.ZTest`. */
@@ -261,7 +282,10 @@ export function gateTool(sessionId: string, tool: string, args: Record<string, u
   const refuse = (): string => `${COMMAND_NAME}: ${tool} is not allowed in the ${session.stage} stage.\n\n${renderStageGuide(session.stage, session)}`;
   // A subagent's writes would escape this session's gate.
   if (tool === "task") return refuse();
-  if (tool === "bash") return BASH_ALLOWED[session.stage](typeof args.command === "string" ? args.command : "") ? null : refuse();
+  if (tool === "bash") {
+    if (bashAllowed(session.stage, typeof args.command === "string" ? args.command : "")) return null;
+    return `${refuse()}\nbash runs one plain command only: no ; & | < > \` $ or newlines, and no gradle -I/-p/-g/-b/-c or git --output.`;
+  }
   if (!WRITES.includes(tool)) return null;
   if (session.stage !== "execute") return refuse();
   if (tool === "apply_patch" && typeof args.patchText === "string" && /^\*\*\* (?:Delete File|Move to):/m.test(args.patchText)) {
@@ -279,11 +303,10 @@ export function gateTool(sessionId: string, tool: string, args: Record<string, u
 export function noteToolResult(sessionId: string, tool: string, args: Record<string, unknown> = {}): void {
   const session = sessions.get(sessionId);
   if (!session || !WRITES.includes(tool)) return;
-  const planned = session.inputs?.files ?? [];
   for (const file of targetsOf(tool, args)) {
     const rel = toRelative(session.cwd, file);
-    // Recorded as the planned spelling so later checks find previousMethods and mocks by it.
-    session.touched.add(planned.find((p) => matchesPath(p, rel)) ?? rel);
+    session.touched.add(rel);
+    session.roundWrites.add(rel);
   }
 }
 
@@ -320,17 +343,22 @@ function planProblems(p: PlanInputs, cwd: string): string[] {
   if (!["files", "program", "git"].includes(p.mode)) problems.push('mode: must be "files", "program" or "git"');
   // A Gradle path (:a:b) maps to the directory a/b, as run-coverage.sh does.
   const moduleDir = p.module.replace(/^:/, "").replace(/:/g, "/");
-  if (!moduleDir || !isDir(abs(moduleDir))) problems.push(`module: directory "${p.module}" does not exist in the project`);
+  if (/\s/.test(p.module)) problems.push(`module: "${p.module}" must not contain whitespace`);
+  else if (!moduleDir || moduleDir === "." || escapes(moduleDir) || !isDir(abs(moduleDir))) {
+    problems.push(`module: "${p.module}" must be an existing module directory inside the project`);
+  }
   if (p.targets.length === 0) problems.push("targets: list the classes to test");
   for (const t of p.targets) {
-    if (!t.endsWith(".java") || !`/${t}`.includes("/src/main/java/") || !isFile(abs(t))) {
+    if (escapes(t) || !t.endsWith(".java") || !`/${t}`.includes("/src/main/java/") || !isFile(abs(t))) {
       problems.push(`targets: ${t} must be an existing .java file under src/main/java`);
     }
   }
   if (p.files.length === 0) problems.push("files: list the test files you will write");
   for (const f of p.files) {
-    const ok = `/${f}`.includes("/src/test/") && (f.endsWith(".java") || `/${f}`.includes("/src/test/resources/"));
-    if (!ok) problems.push(`files: ${f} must be a .java file under src/test or a file under src/test/resources`);
+    const ok = !escapes(f) && `/${f}`.includes("/src/test/") && (f.endsWith(".java") || `/${f}`.includes("/src/test/resources/"));
+    if (!ok) problems.push(`files: ${f} must be a .java file under src/test or a file under src/test/resources, inside the project`);
+    // verify allows bash only for run-coverage.sh; a planned file of that name could forge its facts.
+    else if (path.posix.basename(f) === "run-coverage.sh") problems.push(`files: ${f} may not be named run-coverage.sh`);
   }
   for (const c of p.cases) {
     const where = `cases: ${c.target || "(no target)"}#${c.method || "(no method)"}`;
@@ -345,6 +373,7 @@ function planProblems(p: PlanInputs, cwd: string): string[] {
 }
 
 function submitPlan(session: FutSession, input: StageInput): string {
+  if (!input.note?.trim()) return "Rejected: the plan needs a `note` describing it for the user.";
   const inputs = normalizeInputs(input.inputs ?? {}, session.cwd);
   const problems = planProblems(inputs, session.cwd);
   if (problems.length > 0) {
@@ -365,8 +394,18 @@ function submitPlan(session: FutSession, input: StageInput): string {
 
 function advance(session: FutSession, to: StageId, lead: string): string {
   session.stage = to;
-  if (to === "execute") session.runDir ??= `${REPORT_DIR}/report-${localFileStamp()}`;
-  if (to === "verify") session.verifyStartedAt = Date.now();
+  if (to === "execute") {
+    session.runDir ??= `${REPORT_DIR}/report-${localFileStamp()}`;
+    session.roundWrites.clear();
+  }
+  if (to === "verify") {
+    session.verifyStartedAt = Date.now();
+    session.verifyBaseline = {};
+    for (const name of ["status.json", "jacoco.xml"]) {
+      const file = path.join(session.cwd, session.runDir!, name);
+      if (isFile(file)) session.verifyBaseline[name] = fs.statSync(file).mtimeMs;
+    }
+  }
   return `${lead}\n\n${renderStageGuide(to, session)}`;
 }
 
@@ -374,7 +413,10 @@ function advance(session: FutSession, to: StageId, lead: string): string {
 function freshFile(session: FutSession, name: string): string | null {
   const file = path.join(session.cwd, session.runDir!, name);
   if (!isFile(file)) return null;
-  return fs.statSync(file).mtimeMs >= (session.verifyStartedAt ?? 0) - MTIME_SLACK_MS ? file : null;
+  const mtime = fs.statSync(file).mtimeMs;
+  const baseline = session.verifyBaseline[name];
+  if (baseline !== undefined && mtime <= baseline) return null;
+  return mtime >= (session.verifyStartedAt ?? 0) - MTIME_SLACK_MS ? file : null;
 }
 
 /** Static-check defects of the written test classes, as `file: defect`. */
@@ -518,7 +560,7 @@ function writeReport(session: FutSession, summary: string): string {
   return file;
 }
 
-/** Field by field after normalization, so a reordered resubmission is not a revision. */
+/** Compared after normalization; a reordered list counts as a revision (harmless: the plan is recorded again). */
 function sameInputs(a: Partial<PlanInputs>, session: FutSession): boolean {
   return session.inputs !== undefined && JSON.stringify(normalizeInputs(a, session.cwd)) === JSON.stringify(session.inputs);
 }
@@ -545,7 +587,11 @@ export function completeStage(sessionId: string, input: StageInput): string {
       return advance(session, "execute", "Plan approved.");
     }
     case "execute":
-      if (session.touched.size === 0) return "Rejected: no planned file has been written yet.";
+      if (session.roundWrites.size === 0) {
+        return session.touched.size === 0
+          ? "Rejected: no planned file has been written yet."
+          : "Rejected: nothing was written in this round. Fix the listed problems in the planned files before finishing execute.";
+      }
       return advance(session, "verify", `Written: ${[...session.touched].join(", ")}`);
     case "verify":
       return completeVerify(session, input);

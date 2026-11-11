@@ -114,14 +114,24 @@ interface RunFacts {
   log?: string;
 }
 
+let lastStamp = 0;
+/** Strictly increasing mtimes: a rerun must be newer than the verify-entry baseline even within one clock tick. */
+function stampNow(...files: string[]): void {
+  lastStamp = Math.max(Date.now(), lastStamp + 10);
+  const at = new Date(lastStamp);
+  for (const f of files) if (fs.existsSync(f)) fs.utimesSync(f, at, at);
+}
+
 /** What run-coverage.sh leaves behind. */
 function runCoverage({ compile = "ok", xml = jacoco(0, 0), failed = [], log = "BUILD SUCCESSFUL" }: RunFacts = {}): void {
   const out = path.join(cwd, session().runDir!);
   fs.mkdirSync(path.join(out, "test-results"), { recursive: true });
   fs.writeFileSync(path.join(out, "status.json"), JSON.stringify({ compile, log, coverage: xml === null ? "missing" : "ok" }));
+  fs.rmSync(path.join(out, "jacoco.xml"), { force: true });
   if (xml !== null) fs.writeFileSync(path.join(out, "jacoco.xml"), xml);
   const cases = failed.map((m) => `<testcase classname="${FQCN}" name="${m}"><failure message="x"/></testcase>`).join("");
   fs.writeFileSync(path.join(out, "test-results", "TEST-x.xml"), `<testsuite>${cases}<testcase classname="${FQCN}" name="ok"/></testsuite>`);
+  stampNow(path.join(out, "status.json"), path.join(out, "jacoco.xml"));
 }
 
 /** A JaCoCo report for SONAQ001Service with the given missed lines/branches (lines 12.. missed). */
@@ -300,6 +310,7 @@ describe("verify", () => {
       runCoverage({ compile: "fail", xml: null });
       done({ stage: "verify", note: "n" });
       expect(session().stage).toBe("execute");
+      writeTest();
       done({ stage: "execute" });
     }
     runCoverage({ compile: "fail", xml: null });
@@ -329,6 +340,7 @@ describe("verify", () => {
       expect(out).toContain("12, 13");
       expect(out).toContain("30");
       expect(session().gapRounds).toBe(round);
+      writeTest();
       done({ stage: "execute" });
     }
     runCoverage({ xml: jacoco(2, 1) });
@@ -373,7 +385,10 @@ describe("report", () => {
     for (let i = 0; i <= MAX_COVERAGE_ROUNDS; i++) {
       runCoverage({ xml: jacoco(1, 0) });
       done({ stage: "verify", note: "line 12 is unreachable" });
-      if (session().stage === "execute") done({ stage: "execute" });
+      if (session().stage === "execute") {
+        writeTest();
+        done({ stage: "execute" });
+      }
     }
     expect(session().stage).toBe("report");
     expect(done({ stage: "report" })).toContain("note");
@@ -389,5 +404,113 @@ describe("report", () => {
     expect(report).toContain("line 12 is unreachable");
     expect(report).toContain("all methods tested");
     expect(getSession(SID)).toBeUndefined();
+  });
+});
+
+describe("review round 1: gate bypasses", () => {
+  const MUST_REFUSE: [string, string][] = [
+    ["plan", "git diff; rm x"],
+    ["plan", "git diff && rm x"],
+    ["plan", "git diff || rm x"],
+    ["plan", "git diff | tee x"],
+    ["plan", "git diff > x"],
+    ["plan", "git diff >> x"],
+    ["plan", "git log `rm x`"],
+    ["plan", "git log $(rm x)"],
+    ["plan", "git diff\nrm x"],
+    ["plan", "git diff\rrm x"],
+    ["plan", "git diff --output=evil.txt"],
+    ["plan", "git diff --output evil.txt"],
+    ["plan", "git show HEAD:a > src/main/java/X.java"],
+    ["execute", "rm -rf src # gradle"],
+    ["execute", "echo hi > src/main/java/X.java; ./gradlew"],
+    ["execute", "cat > $HOME/x <<E\ngradle\nE"],
+    ["execute", `./gradlew -I ${MODULE}/src/test/resources/evil.gradle test`],
+    ["execute", "./gradlew --init-script evil.gradle test"],
+    ["execute", "./gradlew -p ../other test"],
+    ["execute", "./gradlew --project-dir ../other test"],
+    ["execute", "git diff; rm x"],
+    ["verify", "rm -rf x # run-coverage.sh"],
+    ["verify", `echo '{"compile":"ok","coverage":"ok"}' > .fico/x/status.json; : run-coverage.sh`],
+    ["verify", "sh run-coverage.sh; rm x"],
+    ["verify", "sh run-coverage.sh > /tmp/q"],
+    ["verify", "./gradlew test"],
+  ];
+  const MUST_ALLOW: [string, string][] = [
+    ["plan", "git diff HEAD~1 -- src"],
+    ["plan", "git log -3 --oneline"],
+    ["execute", `./gradlew :${MODULE}:testClasses`],
+    ["execute", "gradlew.bat test --parallel"],
+    ["execute", "git status"],
+    ["verify", "sh .opencode/skills/f-unit-test-code/scripts/run-coverage.sh --module m --tests a.B --out .fico/r"],
+  ];
+
+  function reach(stage: string): void {
+    if (stage === "execute") approve();
+    if (stage === "verify") reachVerify();
+  }
+
+  test.each(MUST_REFUSE)("%s refuses bash %j", (stage, command) => {
+    reach(stage);
+    expect(gateTool(SID, "bash", { command })).toContain(`not allowed in the ${stage} stage`);
+  });
+
+  test.each(MUST_ALLOW)("%s allows bash %j", (stage, command) => {
+    reach(stage);
+    expect(gateTool(SID, "bash", { command })).toBeNull();
+  });
+
+  test("plan refuses module '..', module '.', a module with whitespace and files escaping the project", () => {
+    for (const module of ["..", ".", "./", `${MODULE}/..`, "mod a"]) {
+      expect(done({ stage: "plan", note: "p", inputs: { ...okPlan(), module } })).toContain("module:");
+    }
+    const out = done({ stage: "plan", note: "p", inputs: { ...okPlan(), files: ["../../x/src/test/A.java"] } });
+    expect(out).toStartWith("Rejected:");
+    expect(out).toContain("files:");
+    const escaping = okPlan();
+    escaping.targets = [`../elsewhere/${TARGET}`];
+    escaping.cases[0]!.target = escaping.targets[0]!;
+    expect(done({ stage: "plan", note: "p", inputs: escaping })).toContain("targets:");
+  });
+
+  test("plan refuses a planned file named run-coverage.sh", () => {
+    const out = done({ stage: "plan", note: "p", inputs: { ...okPlan(), files: [TEST_FILE, `${MODULE}/src/test/resources/run-coverage.sh`] } });
+    expect(out).toContain("run-coverage.sh");
+    expect(out).toStartWith("Rejected:");
+  });
+
+  test("an absolute write outside the project that ends in a planned path is refused", () => {
+    approve();
+    expect(gateTool(SID, "write", { filePath: `/etc/${TEST_FILE}` })).toContain("not in the approved plan");
+    expect(gateTool(SID, "write", { filePath: path.join(cwd, "nested", TEST_FILE) })).toContain("not in the approved plan");
+    expect(gateTool(SID, "write", { filePath: path.join(cwd, TEST_FILE).replace(/\//g, "\\") })).toBeNull();
+  });
+
+  test("after a gap, execute with no new write cannot finish", () => {
+    reachVerify();
+    runCoverage({ xml: jacoco(1, 0) });
+    done({ stage: "verify", note: "n" });
+    expect(session().stage).toBe("execute");
+    expect(done({ stage: "execute" })).toContain("nothing was written in this round");
+    expect(session().stage).toBe("execute");
+  });
+
+  test("verify re-entered without re-running the script is refused", () => {
+    reachVerify();
+    runCoverage({ xml: jacoco(1, 0) });
+    done({ stage: "verify", note: "n" });
+    writeTest();
+    done({ stage: "execute" });
+    expect(session().stage).toBe("verify");
+    expect(done({ stage: "verify", note: "n" })).toContain("run run-coverage.sh first");
+    expect(session().gapRounds).toBe(1);
+    runCoverage();
+    done({ stage: "verify", note: "n" });
+    expect(session().verification).toBe("covered");
+  });
+
+  test("a blank plan note is refused", () => {
+    expect(done({ stage: "plan", note: "  ", inputs: okPlan() })).toContain("note");
+    expect(session().plan).toBeUndefined();
   });
 });
