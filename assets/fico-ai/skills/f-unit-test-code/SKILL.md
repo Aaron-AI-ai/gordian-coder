@@ -12,6 +12,8 @@ This skill does NOT modify production code or the project's build files.
 - `--files <path...>`: test the given Java classes
 - `--program <ID>`: find the Controller/Service (and In/Out VO) whose class name starts with the program ID (e.g. `SONAQ001`) and test them
 - no argument: test the git changes (working tree + staged vs HEAD; last commit if clean). When a test already exists, add cases for the changed methods only, never overwrite.
+  - Find the changed methods by mapping the `git diff` hunk line ranges to each method's line range (do this yourself, no script).
+  - If an existing test lacks the format rules (`@BeforeEach`, `@AfterEach`, `@Transactional`, ...), report it in the plan; do not fix it.
 
 ## Steps
 
@@ -31,8 +33,9 @@ This skill does NOT modify production code or the project's build files.
 | `templates/ControllerTestTemplate.java` | Controller classes (real Service, mocked BSM/Mapper/Redis) |
 
 2. Replace the placeholders `{PackagePath}`, `{ClassName}`, `{TargetClass}` with real values, and replace the example imports, fields and methods with the target's own. No placeholder may remain.
-3. **CRITICAL - Preserve existing tests:** never delete or overwrite existing test code; add cases and imports only.
-4. Do not touch production code or `build.gradle`.
+3. Before creating a test file, check whether one already exists at the target path. If it does, add cases only.
+4. **CRITICAL - Preserve existing tests:** never delete or overwrite existing test code; add cases and imports only.
+5. Do not touch production code or `build.gradle`.
 
 ### 3. Verify
 1. Read `docs/f-unit-test-verification-rule.md` and run its self-check list.
