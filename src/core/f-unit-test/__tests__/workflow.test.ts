@@ -100,6 +100,13 @@ function writeTest(content = GOOD_TEST): void {
   expect(writeOk("write", { filePath: path.join(cwd, TEST_FILE) })).toBeNull();
 }
 
+/** The run-coverage.sh command for the current session, from a project-installed skill. */
+function coverageCmd(): string {
+  const s = session();
+  const tests = s.inputs!.files.filter((f) => f.endsWith(".java")).map((f) => f.replace(/^.*src\/test\/java\//, "").replace(/\.java$/, "").replace(/\//g, "."));
+  return `sh .opencode/skills/f-unit-test-code/scripts/run-coverage.sh --module ${s.inputs!.module} --tests ${tests.join(",")} --out ${s.runDir}`;
+}
+
 function reachVerify(content = GOOD_TEST): void {
   approve();
   writeTest(content);
@@ -271,7 +278,8 @@ describe("verify", () => {
     reachVerify();
     expect(gateTool(SID, "edit", { filePath: TEST_FILE })).toContain("verify");
     expect(gateTool(SID, "bash", { command: "./gradlew test" })).toContain("verify");
-    expect(gateTool(SID, "bash", { command: "sh .opencode/skills/f-unit-test-code/scripts/run-coverage.sh --module x" })).toBeNull();
+    expect(gateTool(SID, "bash", { command: coverageCmd() })).toBeNull();
+    expect(gateTool(SID, "bash", { command: "sh .opencode/skills/f-unit-test-code/scripts/run-coverage.sh --module x" })).toContain("verify");
   });
 
   test("verify needs a note", () => {
@@ -435,6 +443,42 @@ describe("review round 1: gate bypasses", () => {
     ["verify", "sh run-coverage.sh; rm x"],
     ["verify", "sh run-coverage.sh > /tmp/q"],
     ["verify", "./gradlew test"],
+    // round 2: quoting and escaping
+    ["plan", 'git diff "--output=x"'],
+    ["plan", "git diff '--output'=x"],
+    ["plan", "git diff \\--output=x"],
+    ["plan", "git diff --outp=x"],
+    ["plan", "git diff --outpu x"],
+    ["plan", "git log --ext"],
+    ["plan", "git log --exec=x"],
+    ["plan", "git diff --output-indicator-new=+"],
+    ["plan", "git -c core.pager=sh log"],
+    ["plan", "git log --ext-diff -p"],
+    ["plan", "git log --textconv"],
+    ["plan", "git log --git-dir=../x"],
+    ["plan", "git log -C ../x"],
+    ["plan", "git checkout -- ."],
+    ["execute", './gradlew "-I" mod/src/test/resources/evil.gradle test'],
+    ["execute", "./gradlew '--init-script' x test"],
+    ["execute", './gradlew -"I"x test'],
+    ["execute", "./gradlew \\-p ../other test"],
+    ["execute", "./gradlew --init-script=x test"],
+    ["execute", "./gradlew -Ix test"],
+    ["execute", "./gradlew -Dgradle.user.home=/x test"],
+    ["execute", "./gradlew -Dorg.gradle.java.home=/tmp/j test"],
+    ["execute", "./gradlew -Pfoo=bar test"],
+    ["execute", "./gradlew wrapper"],
+    ["execute", "./gradlew init"],
+    ["execute", "./gradlew tasks --console=plain"],
+    ["execute", "./gradlew test --tests '*STest*'"],
+    ["execute", "./gradlew --offline"],
+    ["execute", "/abs/gradlew test"],
+    ["execute", "X=1 ./gradlew test"],
+    ["verify", "sh /tmp/x/run-coverage.sh --module m --tests a.B --out .fico/r"],
+    ["verify", "bash evilrun-coverage.sh"],
+    ["verify", "bash -xrun-coverage.sh"],
+    ["verify", "bash run-coverage.sh.evil"],
+    ["verify", "X=1 sh run-coverage.sh"],
   ];
   const MUST_ALLOW: [string, string][] = [
     ["plan", "git diff HEAD~1 -- src"],
@@ -442,13 +486,44 @@ describe("review round 1: gate bypasses", () => {
     ["execute", `./gradlew :${MODULE}:testClasses`],
     ["execute", "gradlew.bat test --parallel"],
     ["execute", "git status"],
-    ["verify", "sh .opencode/skills/f-unit-test-code/scripts/run-coverage.sh --module m --tests a.B --out .fico/r"],
+    ["execute", "./gradlew :m:cleanTest :m:test --tests com.x.FooTest --offline"],
+    ["execute", "gradle test --tests com.x.*Test -q --no-daemon --console=plain"],
   ];
 
   function reach(stage: string): void {
     if (stage === "execute") approve();
     if (stage === "verify") reachVerify();
   }
+
+  test("verify refuses the right script with extra, missing or different arguments", () => {
+    reachVerify();
+    const good = coverageCmd();
+    expect(gateTool(SID, "bash", { command: good })).toBeNull();
+    const refused = [
+      `${good} --project ..`,
+      good.replace(session().runDir!, ".fico/report/f-unit-test/other"),
+      good.replace(`--module ${MODULE}`, "--module other-online"),
+      good.replace(FQCN, `${FQCN},${FQCN}`),
+      good.replace(FQCN, "a.B"),
+      good.replace(` --out ${session().runDir}`, ""),
+      good.replace("sh .opencode", "sh ../.opencode").replace("skills/f-unit-test-code", "skills/../f-unit-test-code"),
+      good.replace("f-unit-test-code/scripts", "x/scripts"),
+      good.replace(/^sh /, "zsh "),
+    ];
+    for (const command of refused) expect(gateTool(SID, "bash", { command })).toContain("not allowed in the verify stage");
+  });
+
+  test("verify compares --tests as a set", () => {
+    const other = `${MODULE}/src/test/java/${PKG}/SONAQ002ServiceTest.java`;
+    approve({ ...okPlan(), files: [TEST_FILE, other] });
+    writeTest();
+    done({ stage: "execute" });
+    const both = `${FQCN},${FQCN.replace("SONAQ001", "SONAQ002")}`;
+    expect(coverageCmd()).toContain(`--tests ${both}`);
+    const reversed = coverageCmd().replace(both, both.split(",").reverse().join(","));
+    expect(gateTool(SID, "bash", { command: reversed })).toBeNull();
+    expect(gateTool(SID, "bash", { command: coverageCmd().replace(both, FQCN) })).toContain("verify");
+  });
 
   test.each(MUST_REFUSE)("%s refuses bash %j", (stage, command) => {
     reach(stage);
@@ -458,6 +533,15 @@ describe("review round 1: gate bypasses", () => {
   test.each(MUST_ALLOW)("%s allows bash %j", (stage, command) => {
     reach(stage);
     expect(gateTool(SID, "bash", { command })).toBeNull();
+  });
+
+  test("verify allows the exact command the guide shows, with sh or bash and any skill dir", () => {
+    reachVerify();
+    const guide = renderStageGuide("verify", session());
+    expect(guide).toContain(coverageCmd().replace(".opencode/skills", "<skill dir>").replace("<skill dir>/f-unit-test-code/", "<skill dir>/"));
+    expect(gateTool(SID, "bash", { command: coverageCmd() })).toBeNull();
+    expect(gateTool(SID, "bash", { command: coverageCmd().replace(/^sh /, "bash ") })).toBeNull();
+    expect(gateTool(SID, "bash", { command: coverageCmd().replace(".opencode/skills", "/home/u/.config/opencode/skills") })).toBeNull();
   });
 
   test("plan refuses module '..', module '.', a module with whitespace and files escaping the project", () => {
@@ -473,10 +557,18 @@ describe("review round 1: gate bypasses", () => {
     expect(done({ stage: "plan", note: "p", inputs: escaping })).toContain("targets:");
   });
 
-  test("plan refuses a planned file named run-coverage.sh", () => {
-    const out = done({ stage: "plan", note: "p", inputs: { ...okPlan(), files: [TEST_FILE, `${MODULE}/src/test/resources/run-coverage.sh`] } });
-    expect(out).toContain("run-coverage.sh");
-    expect(out).toStartWith("Rejected:");
+  test("plan refuses a planned file named like run-coverage.sh", () => {
+    for (const name of ["run-coverage.sh", "evilrun-coverage.sh", "Run-Coverage.SH"]) {
+      const out = done({ stage: "plan", note: "p", inputs: { ...okPlan(), files: [TEST_FILE, `${MODULE}/src/test/resources/${name}`] } });
+      expect(out).toContain("run-coverage.sh");
+      expect(out).toStartWith("Rejected:");
+    }
+  });
+
+  test("plan needs a .java test file and plain module and package names", () => {
+    expect(done({ stage: "plan", note: "p", inputs: { ...okPlan(), files: [`${MODULE}/src/test/resources/application-test.yml`] } })).toContain(".java test file");
+    expect(done({ stage: "plan", note: "p", inputs: { ...okPlan(), module: `${MODULE}'` } })).toContain("module:");
+    expect(done({ stage: "plan", note: "p", inputs: { ...okPlan(), files: [`${MODULE}/src/test/java/a b/XTest.java`] } })).toContain("plain package path");
   });
 
   test("an absolute write outside the project that ends in a planned path is refused", () => {

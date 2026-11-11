@@ -102,25 +102,71 @@ interface Stage {
 }
 
 const WRITES = ["edit", "write", "apply_patch", "multiedit", "patch"];
-// One plain command only: no chaining, pipes, redirection, substitution or a second line.
-const SHELL_META = /[;&|<>`$\n\r]/;
-const GIT_READ = /^\s*git\s+(diff|status|log|show|rev-parse)(\s+[^;&|<>`$\n\r]*)?$/;
-const GIT_WRITE_ARG = /(^|\s)--output(=|\s|$)/;
-const GRADLE = /^\s*(\.\/)?gradlew(\.bat)?(\s|$)|^\s*gradle(\s|$)/;
-// Arguments that load build logic from elsewhere (init scripts, another project, another user home).
-const GRADLE_ESCAPE_ARG = /(^|\s)(-[Ipgbc]|--(init-script|project-dir|gradle-user-home|build-file|settings-file|include-build))/;
-const COVERAGE = /^\s*(sh|bash)\s+\S*run-coverage\.sh(\s|$)/;
-const gitRead = (c: string): boolean => GIT_READ.test(c) && !GIT_WRITE_ARG.test(c);
-const gradle = (c: string): boolean => GRADLE.test(c) && !GRADLE_ESCAPE_ARG.test(c);
-const BASH_ALLOWED: Record<StageId, (command: string) => boolean> = {
-  plan: gitRead,
-  execute: (c) => gradle(c) || gitRead(c),
-  verify: (c) => COVERAGE.test(c),
-  report: () => false,
-};
-const bashAllowed = (stage: StageId, command: string): boolean => !SHELL_META.test(command) && BASH_ALLOWED[stage](command);
+// Strict allowlists over whitespace tokens. Shell metacharacters, quotes and backslashes are refused
+// outright: none of the allowed commands needs them, and they are how a token hides a flag.
+const SHELL_META = /[;&|<>`$\n\r'"\\]/;
+const GIT_SUBCOMMANDS = new Set(["diff", "status", "log", "show", "rev-parse"]);
+const GIT_TOKEN = /^[\w./:@^~=,*-]+$/;
+const GIT_FORBIDDEN = ["--output", "--ext-diff", "--textconv", "-c", "--exec-path", "--git-dir", "--work-tree", "-C"];
+const GRADLE_EXE = new Set(["./gradlew", "gradlew", "gradlew.bat", "gradle"]);
+const GRADLE_TASK = /^(:[\w-]+)*:?(classes|testClasses|compileJava|compileTestJava|test|cleanTest)$/;
+const GRADLE_FLAGS = new Set(["--offline", "--console=plain", "-q", "--quiet", "--no-daemon", "--parallel", "--continue", "--stacktrace"]);
+const TEST_FILTER = /^[\w.*]+$/;
+const SKILL_SCRIPT = `${UNIT_TEST_SKILL_NAME}/scripts/run-coverage.sh`;
+
+/** git accepts any unambiguous prefix of a long option (`--outp` is `--output`), so a prefix is refused too. */
+function forbiddenGitArg(a: string): boolean {
+  const name = a.split("=")[0]!;
+  return GIT_FORBIDDEN.some((f) => a.startsWith(f) || (name.startsWith("--") && name.length > 2 && f.startsWith(name)));
+}
+
+function gitRead([exe, sub, ...rest]: string[]): boolean {
+  return exe === "git" && GIT_SUBCOMMANDS.has(sub ?? "") && rest.every((a) => GIT_TOKEN.test(a) && !forbiddenGitArg(a));
+}
+
+function gradle([exe, ...rest]: string[]): boolean {
+  if (!GRADLE_EXE.has(exe ?? "")) return false;
+  let tasks = 0;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i]!;
+    if (GRADLE_TASK.test(a)) tasks += 1;
+    else if (a === "--tests" && TEST_FILTER.test(rest[i + 1] ?? "")) i += 1;
+    else if (!GRADLE_FLAGS.has(a)) return false;
+  }
+  return tasks > 0;
+}
+
+/** Exactly the command the verify guide shows: the skill's script with this session's arguments. */
+function coverageCommand([shell, script, ...rest]: string[], session: FutSession): boolean {
+  if ((shell !== "sh" && shell !== "bash") || !script) return false;
+  if (script.split("/").includes("..") || !`/${script}`.endsWith(`/${SKILL_SCRIPT}`)) return false;
+  const want = coverageParts(session);
+  if (rest.length !== 6 || rest[0] !== "--module" || rest[2] !== "--tests" || rest[4] !== "--out") return false;
+  const tests = rest[3]!.split(",");
+  const sameTests = tests.length === want.tests.length && new Set(tests).size === tests.length && tests.every((t) => want.tests.includes(t));
+  return rest[1] === want.module && sameTests && rest[5] === want.out;
+}
+
+function bashAllowed(session: FutSession, command: string): boolean {
+  if (SHELL_META.test(command)) return false;
+  const t = command.trim().split(/\s+/);
+  switch (session.stage) {
+    case "plan":
+      return gitRead(t);
+    case "execute":
+      return gitRead(t) || gradle(t);
+    case "verify":
+      return coverageCommand(t, session);
+    case "report":
+      return false;
+  }
+}
 
 const SCRIPT = "scripts/run-coverage.sh";
+const BASH_RULE =
+  "bash runs one plain command, written without quotes or backslashes (e.g. `--tests com.x.FooTest`) and without ; & | < > ` $ or newlines. " +
+  "plan: git diff|status|log|show|rev-parse with plain arguments. execute: that, or gradle/./gradlew with only classes, testClasses, compileJava, compileTestJava, test, cleanTest tasks (optionally :module:-prefixed), --tests <pattern> and --offline, --console=plain, -q, --quiet, --no-daemon, --parallel, --continue, --stacktrace. " +
+  "verify: only the run-coverage.sh command shown in the guide, exactly.";
 
 export const STAGES: Record<StageId, Stage> = {
   plan: {
@@ -144,7 +190,7 @@ export const STAGES: Record<StageId, Stage> = {
       "Write only the planned `files`; any other path is refused. If another file is really needed, say so in the report.",
       "Follow the skill's format rule: @SpringBootTest, @Transactional, @BeforeEach, @AfterEach; mock every external module or resource, keep same-module pure collaborators real.",
       "Keep every existing @Test method of a file you extend. Replace every template placeholder.",
-      "You may compile with gradle in bash (e.g. `./gradlew :<module>:compileTestJava`). Failing tests are not your job to fix here; they are reported.",
+      "You may compile with gradle in bash, without quotes (e.g. `./gradlew :<module>:compileTestJava`). Failing tests are not your job to fix here; they are reported.",
     ],
     tools: ["read", "edit", "write", "grep", "bash (gradle only)"],
     blocked: ["task", "bash (except gradle and read-only git)"],
@@ -240,9 +286,15 @@ function fqcn(file: string): string | null {
   return m ? m[1]!.replace(/\//g, ".") : null;
 }
 
-function coverageArgs(session: FutSession): string {
+/** The run-coverage.sh arguments for this session; the guide prints them and verify's bash gate requires them. */
+function coverageParts(session: FutSession): { module: string; tests: string[]; out: string } {
   const tests = (session.inputs?.files ?? []).map(fqcn).filter((f): f is string => f !== null);
-  return `--module ${session.inputs?.module ?? "<module>"} --tests ${tests.join(",") || "<FQCN,...>"} --out ${session.runDir ?? "<runDir>"}`;
+  return { module: session.inputs?.module ?? "<module>", tests, out: session.runDir ?? "<runDir>" };
+}
+
+function coverageArgs(session: FutSession): string {
+  const { module, tests, out } = coverageParts(session);
+  return `--module ${module} --tests ${tests.join(",") || "<FQCN,...>"} --out ${out}`;
 }
 
 export function renderStageGuide(stageId: StageId, session?: FutSession): string {
@@ -254,7 +306,7 @@ export function renderStageGuide(stageId: StageId, session?: FutSession): string
     "Steps:",
     ...stage.steps.map((step, i) => `${i + 1}. ${step}`),
   ];
-  if (stageId === "verify" && session) lines.push(`Run: sh <skill dir>/${SCRIPT} ${coverageArgs(session)}`);
+  if (stageId === "verify" && session) lines.push(`Run exactly (no quotes, no extra arguments): sh <skill dir>/${SCRIPT} ${coverageArgs(session)}`);
   if (stageId === "execute" && session?.inputs) lines.push(`Planned files: ${session.inputs.files.join(", ")}`);
   lines.push(`Recommended tools: ${stage.tools.join(", ")}`);
   lines.push(`Blocked at this stage: ${stage.blocked.join(", ")}`);
@@ -283,8 +335,8 @@ export function gateTool(sessionId: string, tool: string, args: Record<string, u
   // A subagent's writes would escape this session's gate.
   if (tool === "task") return refuse();
   if (tool === "bash") {
-    if (bashAllowed(session.stage, typeof args.command === "string" ? args.command : "")) return null;
-    return `${refuse()}\nbash runs one plain command only: no ; & | < > \` $ or newlines, and no gradle -I/-p/-g/-b/-c or git --output.`;
+    if (bashAllowed(session, typeof args.command === "string" ? args.command : "")) return null;
+    return `${refuse()}\n${BASH_RULE}`;
   }
   if (!WRITES.includes(tool)) return null;
   if (session.stage !== "execute") return refuse();
@@ -343,7 +395,7 @@ function planProblems(p: PlanInputs, cwd: string): string[] {
   if (!["files", "program", "git"].includes(p.mode)) problems.push('mode: must be "files", "program" or "git"');
   // A Gradle path (:a:b) maps to the directory a/b, as run-coverage.sh does.
   const moduleDir = p.module.replace(/^:/, "").replace(/:/g, "/");
-  if (/\s/.test(p.module)) problems.push(`module: "${p.module}" must not contain whitespace`);
+  if (!/^[\w.\/:-]+$/.test(p.module)) problems.push(`module: "${p.module}" may contain only letters, digits, _ . / : -`);
   else if (!moduleDir || moduleDir === "." || escapes(moduleDir) || !isDir(abs(moduleDir))) {
     problems.push(`module: "${p.module}" must be an existing module directory inside the project`);
   }
@@ -353,12 +405,13 @@ function planProblems(p: PlanInputs, cwd: string): string[] {
       problems.push(`targets: ${t} must be an existing .java file under src/main/java`);
     }
   }
-  if (p.files.length === 0) problems.push("files: list the test files you will write");
+  if (!p.files.some((f) => f.endsWith(".java"))) problems.push("files: list at least one .java test file you will write");
   for (const f of p.files) {
     const ok = !escapes(f) && `/${f}`.includes("/src/test/") && (f.endsWith(".java") || `/${f}`.includes("/src/test/resources/"));
     if (!ok) problems.push(`files: ${f} must be a .java file under src/test or a file under src/test/resources, inside the project`);
     // verify allows bash only for run-coverage.sh; a planned file of that name could forge its facts.
-    else if (path.posix.basename(f) === "run-coverage.sh") problems.push(`files: ${f} may not be named run-coverage.sh`);
+    else if (path.posix.basename(f).toLowerCase().endsWith("run-coverage.sh")) problems.push(`files: ${f} may not be named like run-coverage.sh`);
+    else if (f.endsWith(".java") && !/^[\w.]+$/.test(fqcn(f) ?? "")) problems.push(`files: ${f} must be under src/test/java with a plain package path (it becomes a --tests class name)`);
   }
   for (const c of p.cases) {
     const where = `cases: ${c.target || "(no target)"}#${c.method || "(no method)"}`;
