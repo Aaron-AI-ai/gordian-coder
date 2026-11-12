@@ -27,5 +27,5 @@
 
 ## 관련
 
-- f-log 사용 문서: `docs/guides/f-log-usage.md`
+- f-log 사용 문서: `docs/guides/04-f-log.md`
 - 실행 중지 조건 TODO: `docs/todo/run-stop-conditions.md`

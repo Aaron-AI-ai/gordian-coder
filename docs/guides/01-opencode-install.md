@@ -105,7 +105,7 @@ opencode --version        # 예: 1.18.27
 apiKey는 평문으로 두지 않고 `{env:...}` 참조만 저장합니다. 실제 값은 사용자 환경변수와
 `~\.config\opencode\env`에 들어갑니다.
 
-`plugin` 배열은 비어 있습니다 — [gdc 설치 가이드](./gdc-install-windows.md)의
+`plugin` 배열은 비어 있습니다 — [gdc 설치 가이드](./02-gdc-install.md)의
 `gdc --init-opencode --global`이 채웁니다.
 
 ### 환경변수 (사용자 범위, HKCU)
