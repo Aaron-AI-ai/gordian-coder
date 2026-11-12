@@ -23,13 +23,21 @@ export interface MapperCheck {
 
 /**
  * MyBatis, not MapStruct or a util `ObjectMapper`: `@Mapper` from org.apache.ibatis (import, wildcard or FQCN),
- * or a `*Mapper.java` interface in a `mapper`/`repo`/`repository` package that does not use MapStruct.
+ * or a `*Mapper.java` interface in a `mapper`/`mappers`/`repo`/`repository`/`dao`/`persistence` package that does
+ * not use MapStruct (the usual `@MapperScan` locations).
  */
 function isMyBatisMapper(code: string, head: string, fileName: string): boolean {
   if (/@org\.apache\.ibatis\.annotations\.Mapper\b/.test(head)) return true;
   if (/@Mapper\b/.test(head) && /\bimport\s+org\.apache\.ibatis\.annotations\.(?:Mapper|\*)\s*;/.test(code)) return true;
   const pkg = /\bpackage\s+([\w.]+)\s*;/.exec(code)?.[1] ?? "";
-  return fileName.endsWith("Mapper.java") && !/\borg\.mapstruct\b/.test(code) && pkg.split(".").some((seg) => ["mapper", "repo", "repository"].includes(seg));
+  return fileName.endsWith("Mapper.java") && !/\borg\.mapstruct\b/.test(code) && pkg.split(".").some((seg) => MAPPER_PACKAGES.has(seg));
+}
+
+const MAPPER_PACKAGES = new Set(["mapper", "mappers", "repo", "repository", "dao", "persistence"]);
+
+/** The source's first top-level type is an `interface` (not an `@interface`): no executable lines for JaCoCo. */
+export function isPlainInterface(source: string): boolean {
+  return /(?<![@\w$])(class|interface|enum|record)\s+[A-Za-z_$]/.exec(stripComments(source))?.[1] === "interface";
 }
 
 // ponytail: regex scan, not a Java parser; an annotation argument that itself holds `(` inside a char literal is not handled.

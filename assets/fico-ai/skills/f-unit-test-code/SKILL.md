@@ -52,7 +52,7 @@ This skill does NOT modify production code or the project's build files.
 | `--out` | `-Out` | Output directory (stale results are removed first) |
 | `--project` (optional) | `-Project` (optional) | Project root, default the current directory |
 
-   - The script runs Gradle offline first (`--offline`, from the Gradle cache) and retries online only when the offline run failed on dependency resolution or on javac errors in `src/main/java` (a stale cached SNAPSHOT), never for javac errors in `src/test/java`; the last line of `gradle.log` names the mode used.
+   - The script runs Gradle offline first (`--offline`, from the Gradle cache) and retries online only when the offline run failed on dependency resolution or on javac errors in `src/main/java`, never for javac errors in `src/test/java`. Gradle trusts a cached changing module (SNAPSHOT) for 24 hours, so the online retry only picks up a newer SNAPSHOT once the cache entry is older than that; never add `--refresh-dependencies` (it re-resolves everything and triggers repository rate limits); the last line of `gradle.log` names the mode used.
    - A dependency/network failure (e.g. `Could not resolve`, `status code 429` from Nexus) is an environment problem: report it to the user and stop. Never "fix" it in test code.
 
 3. Fix compile errors. Fill coverage gaps by adding cases (at most 3 rounds). Mapper targets are not JaCoCo-measured; every method the Mapper declares must be called in its test (`<MapperName>Test.java`). Report unreachable branches with a reason; do not fix failing tests.

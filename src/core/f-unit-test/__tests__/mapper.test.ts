@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mapperDefects, mapperMethods } from "../mapper";
+import { isPlainInterface, mapperDefects, mapperMethods } from "../mapper";
 
 const ACCOUNT_MAPPER = `package kr.co.koscom.pb.on.stk.ord.bsm.mapper;
 
@@ -51,7 +51,7 @@ describe("mapperMethods", () => {
   });
 
   test("a Mapper-named interface qualifies without @Mapper only in a mapper/repo/repository package", () => {
-    for (const pkg of ["x.mapper", "x.repo", "x.y.repository.z"]) {
+    for (const pkg of ["x.mapper", "x.mappers", "x.repo", "x.y.repository.z", "kr.co.x.dao", "kr.co.x.persistence.ord"]) {
       expect(mapperMethods(`package ${pkg};\npublic interface FooMapper { int a(); }`, "FooMapper.java")).toEqual(["a"]);
     }
     expect(mapperMethods("package x.util;\npublic interface FooMapper { int a(); }", "FooMapper.java")).toBeNull();
@@ -80,6 +80,17 @@ public interface SqlMapper {
   Row pick(@Param("x") String x);
 }`;
     expect(mapperMethods(src, "SqlMapper.java")).toEqual(["pick"]);
+  });
+});
+
+describe("isPlainInterface", () => {
+  test("an interface is; a class, an enum, an annotation type and a class with a nested interface are not", () => {
+    expect(isPlainInterface("package x;\n/** interface doc */\npublic interface SONAQ001Api { Out inquire(In in); }")).toBe(true);
+    expect(isPlainInterface("public sealed interface Shape permits A {}")).toBe(true);
+    expect(isPlainInterface("public class A { interface Cb { void x(); } }")).toBe(false);
+    expect(isPlainInterface("public enum E { A }")).toBe(false);
+    expect(isPlainInterface("public @interface Audited { String value(); }")).toBe(false);
+    expect(isPlainInterface('public class A { String s = "interface X"; }')).toBe(false);
   });
 });
 

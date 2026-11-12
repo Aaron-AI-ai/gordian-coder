@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { localFileStamp } from "../time";
 import { isFullyCovered } from "./coverage";
-import { MAX_COVERAGE_ROUNDS, MAX_FIX_RETRIES, REPORT_DIR, measuredTargets, type FutSession, type Verification } from "./workflow";
+import { MAX_COVERAGE_ROUNDS, MAX_FIX_RETRIES, REPORT_DIR, interfaceTargets, measuredTargets, type FutSession, type Verification } from "./workflow";
 
 const pct = (c: { missed: number; covered: number }): string => {
   const total = c.missed + c.covered;
@@ -36,7 +36,8 @@ export function writeReport(session: FutSession, summary: string): string {
         ? `- ${c.target}: 미실행 줄 ${c.coverage.uncoveredLines.join(", ") || "없음"}, 분기 일부 미실행 줄 ${c.coverage.partialLines.join(", ") || "없음"}`
         : `- ${c.target}: 어떤 테스트도 실행하지 않음`,
     );
-  const measured = new Set([...measuredTargets(session), ...session.mapperChecks.map((m) => m.target)]);
+  const interfaces = interfaceTargets(session);
+  const measured = new Set([...measuredTargets(session), ...session.mapperChecks.map((m) => m.target), ...interfaces]);
   const mapperLines = session.mapperChecks.flatMap((m) => [
     `- ${m.target}: 커버리지 측정 안 함 (XML SQL은 JaCoCo가 보지 않음) — 테스트 ${m.testFile ?? "없음"}`,
     ...m.methods.map((x) => `  - ${x.name}: ${x.called ? "호출함" : x.skipped ? "건너뜀 (skip_reason)" : "호출 안 함"}`),
@@ -62,6 +63,7 @@ export function writeReport(session: FutSession, summary: string): string {
     ...(rows.length > 0 ? ["| 대상 | 라인 | 분기 |", "|---|---|---|", ...rows] : ["측정 결과 없음"]),
     "",
     ...(mapperLines.length > 0 ? ["## Mapper (실제 DB 테스트)", ...mapperLines, ""] : []),
+    ...(interfaces.length > 0 ? ["## 인터페이스", ...interfaces.map((t) => `- ${t}: 커버리지 측정 안 함 (인터페이스)`), ""] : []),
     ...(gaps.length > 0 ? ["## 남은 공백", ...gaps, ""] : []),
     ...(skipped.length > 0 ? ["## 테스트하지 않은 메서드", ...skipped, ""] : []),
     ...(session.verification === "incomplete" ? ["## 마지막 오류", ...session.lastProblems, ""] : []),

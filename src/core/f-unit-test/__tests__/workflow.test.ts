@@ -696,6 +696,31 @@ describe("final review fixes", () => {
   });
 });
 
+describe("interface targets", () => {
+  test("a plain interface (not a Mapper) is not measured by JaCoCo and is reported as such", () => {
+    put(TARGET, "package x;\npublic interface SONAQ001Service { Out inquire(In in); }\n");
+    reachVerify();
+    runCoverage({ xml: jacoco(3, 1) });
+    done({ stage: "verify", note: "n" });
+    expect(session().stage).toBe("report");
+    expect(session().gapRounds).toBe(0);
+    expect(session().verification).toBe("covered");
+    const out = done({ stage: "report", note: "s" });
+    const report = fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8");
+    expect(report).toContain(`${TARGET}: 커버리지 측정 안 함 (인터페이스)`);
+  });
+
+  test("an annotation type (@interface) is still measured like a class", () => {
+    put(TARGET, "package x;\npublic @interface SONAQ001Service { String value(); }\n");
+    reachVerify();
+    runCoverage({ xml: jacoco(1, 0) });
+    done({ stage: "verify", note: "n" });
+    expect(session().stage).toBe("execute");
+    expect(session().gapRounds).toBe(1);
+  });
+
+});
+
 describe("Mapper targets", () => {
   const MAPPER = `${MODULE}/src/main/java/kr/co/koscom/pb/on/stk/ord/online/mapper/AccountOnlineMapper.java`;
   const MAPPER_TEST = `${MODULE}/src/test/java/kr/co/koscom/pb/on/stk/ord/online/mapper/AccountOnlineMapperTest.java`;

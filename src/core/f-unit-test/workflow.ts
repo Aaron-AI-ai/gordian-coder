@@ -17,7 +17,7 @@ import { MAX_WAIT_CALLS, awaitingReply, noteReply, takeAbort, type PlanGateState
 import { isFullyCovered, readCoverage, readFailedTests, type FileCoverage } from "./coverage";
 import { checkTestSource, testMethodNames } from "./test-check";
 import { writeReport } from "./report";
-import { checkMapperTargets, mapperDefects, type MapperCheck } from "./mapper";
+import { checkMapperTargets, isPlainInterface, mapperDefects, type MapperCheck } from "./mapper";
 import { BASH_RULE, bashAllowed, coverageCommandLine, coverageScriptName, type BashContext } from "./bash-gate";
 import { environmentFailureLine } from "./env-failure";
 
@@ -123,7 +123,7 @@ export const STAGES: Record<StageId, Stage> = {
       "Find the Gradle module of the targets (e.g. `on-stk-ord-online`) and check the Spring Boot version in the root build.gradle (below 3.4: @MockBean instead of @MockitoBean).",
       `If a required input is missing or cannot be settled from the request and the project, ASK THE USER and END YOUR TURN before doing anything else; never guess and never put a placeholder in \`inputs\`. Required inputs: ${ASK_USER_WHEN}.`,
       "For every public method of each target define cases: at least two normal, one boundary and one exception, plus the external classes to mock (other modules, Mappers, Redis, external API clients). A method that really needs no test gets `skip_reason` instead.",
-      "A Mapper interface (MyBatis `@Mapper`, or a `*Mapper.java` interface) is tested against the real DB of the test profile, not mocked: give it its own case(s) covering every method, put the chosen test profile in the plan `note`, and list no mocks for it. If the project has several test profiles or none, ask the user which to use and END YOUR TURN. In --program mode include the Mappers the target Service uses in the same Gradle module; a Mapper of another module must be named with --files and its test goes in that module. Controller and Service tests still mock their Mappers. A class-level @Transactional rolls back only the default transaction manager: for a Mapper on a non-primary datasource the test must use `@Transactional(\"<transactionManager bean>\")`; read the bean name from the datasource config classes, put it in the plan `note`, and ask the user when it cannot be read. A bulk-delete method (`deleteAll`, `truncate*`) may get `skip_reason`.",
+      "A MyBatis Mapper interface (`@Mapper` from org.apache.ibatis, or a `*Mapper.java` interface in a mapper/mappers/repo/repository/dao/persistence package that does not use MapStruct) is tested against the real DB of the test profile, not mocked: give it its own case(s) covering every method, put the chosen test profile in the plan `note`, and list no mocks for it. If the project has several test profiles or none, ask the user which to use and END YOUR TURN. In --program mode include the Mappers the target Service uses in the same Gradle module; a Mapper of another module must be named with --files and its test goes in that module. Controller and Service tests still mock their Mappers. A class-level @Transactional rolls back only the default transaction manager: for a Mapper on a non-primary datasource the test must use `@Transactional(\"<transactionManager bean>\")`; read the bean name from the datasource config classes, put it in the plan `note`, and ask the user when it cannot be read. A bulk-delete method (`deleteAll`, `truncate*`) may get `skip_reason`.",
       "Test files go under the module's src/test/java in the target's package as `<ClassName>Test.java`; a test profile may go under src/test/resources. An existing test file is extended, never replaced: keep every existing @Test method.",
       `Write the plan for the user in your reply, then call ${STAGE_TOOL} with stage "plan", the plan as \`note\` and \`inputs\` = { mode, module, targets, files, cases: [{ target, method, normal, boundary, exception, mocks, skip_reason? }] } with project-relative paths. Once it is accepted, END YOUR TURN. Any further tool call while the plan waits is refused, and repeated calls stop the turn.`,
       `After the user approves, call ${STAGE_TOOL} with stage "plan" and user_approved=true. If they ask for changes, submit a new \`note\` and \`inputs\` and ask again.`,
@@ -473,11 +473,28 @@ function mapperChecksOf(session: FutSession): MapperCheck[] {
   return checkMapperTargets(session.cwd, tested, (session.inputs?.files ?? []).filter((f) => f.endsWith(".java")), skipped);
 }
 
-/** Targets JaCoCo judges: with at least one case to test, and not a Mapper (its SQL is in XML). A target whose every case has skip_reason is only reported as skipped. */
-export function measuredTargets(session: FutSession): string[] {
+/** Targets with at least one case to test (not every case has skip_reason). */
+function testedTargets(session: FutSession): string[] {
   const cases = session.inputs?.cases ?? [];
+  return (session.inputs?.targets ?? []).filter((t) => cases.some((c) => c.target === t && !c.skip_reason?.trim()));
+}
+
+/**
+ * Tested targets that are plain interfaces but not MyBatis Mappers (e.g. a Service interface): an interface has no
+ * executable lines, so JaCoCo can never measure it. Reported as unmeasured; no call check either.
+ */
+export function interfaceTargets(session: FutSession): string[] {
   const mappers = new Set(mapperChecksOf(session).map((m) => m.target));
-  return (session.inputs?.targets ?? []).filter((t) => !mappers.has(t) && cases.some((c) => c.target === t && !c.skip_reason?.trim()));
+  return testedTargets(session).filter((t) => {
+    const abs = path.resolve(session.cwd, t);
+    return !mappers.has(t) && isFile(abs) && isPlainInterface(fs.readFileSync(abs, "utf-8"));
+  });
+}
+
+/** Targets JaCoCo judges: tested, not a Mapper (its SQL is in XML) and not an interface. A target whose every case has skip_reason is only reported as skipped. */
+export function measuredTargets(session: FutSession): string[] {
+  const unmeasured = new Set([...mapperChecksOf(session).map((m) => m.target), ...interfaceTargets(session)]);
+  return testedTargets(session).filter((t) => !unmeasured.has(t));
 }
 
 function describeGap(c: TargetCoverage): string {

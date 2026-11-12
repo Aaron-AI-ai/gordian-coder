@@ -59,6 +59,14 @@ describe("f-unit-test-code skill assets", () => {
 });
 
 describe("f-unit-test-code Mapper and datasource wording", () => {
+  test("the Mapper rule names the package condition, and the Korean javac summary is marked unverified", () => {
+    expect(read("docs/f-unit-test-format-rule.md")).not.toContain("`@Mapper` 인터페이스 또는 `*Mapper.java`)");
+    expect(read("docs/f-unit-test-format-rule.md")).toContain("dao");
+    expect(read("docs/f-unit-test-verification-rule.md")).toContain("오류 N개");
+    expect(read("docs/f-unit-test-verification-rule.md")).toMatch(/X\.java:N: 오류:/);
+    for (const s of ["scripts/run-coverage.sh", "scripts/run-coverage.ps1"]) expect(read(s)).toContain("separate daemon");
+  });
+
   test("the description triggers for Mapper tests and limits real-DB tests to them", () => {
     const fm = /^---\n([\s\S]*?)\n---/.exec(read("SKILL.md"))?.[1] ?? "";
     expect(fm).toMatch(/Mapper \(MyBatis\)/);
@@ -99,6 +107,9 @@ describe("f-unit-test-code coverage scripts", () => {
     for (const doc of ["SKILL.md", "docs/f-unit-test-verification-rule.md"]) {
       expect(read(doc)).toContain("--offline");
       expect(read(doc)).toContain("src/main/java");
+      // a changing module is trusted for 24h, so the online retry does not refresh a fresh stale SNAPSHOT
+      expect(read(doc)).toMatch(/24/);
+      expect(read(doc)).toContain("--refresh-dependencies");
       expect(read(doc)).toContain("status code 429");
     }
   });

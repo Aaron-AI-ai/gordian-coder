@@ -14,7 +14,7 @@
 
 ## mock 대상 (외부 모듈이나 외부 자원에 닿는 것은 전부 mock)
 
-**예외: Mapper 테스트.** 테스트 대상이 MyBatis Mapper(`@Mapper` 인터페이스 또는 `*Mapper.java`) 자체일 때만 그 Mapper는 mock하지 않고 `@Autowired`로 받은 실제 빈으로 프로필 DB를 조회한다(아래 "Mapper 테스트"). Controller·Service 테스트에서는 Mapper가 여전히 아래 표대로 mock이다.
+**예외: Mapper 테스트.** 테스트 대상이 MyBatis Mapper(`org.apache.ibatis`의 `@Mapper`가 붙은 인터페이스, 또는 MapStruct를 쓰지 않고 `mapper`/`mappers`/`repo`/`repository`/`dao`/`persistence` 패키지에 있는 `*Mapper.java` 인터페이스) 자체일 때만 그 Mapper는 mock하지 않고 `@Autowired`로 받은 실제 빈으로 프로필 DB를 조회한다(아래 "Mapper 테스트"). Controller·Service 테스트에서는 Mapper가 여전히 아래 표대로 mock이다.
 
 | mock으로 둔다 | 예 |
 |---|---|

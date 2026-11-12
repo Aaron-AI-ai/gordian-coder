@@ -30,7 +30,8 @@ RESOLUTION='No cached version|offline mode|Could not resolve|Could not GET|Could
 JAVAC='\.java:[0-9]+: (error|오류):|^[0-9]+ errors?$|^오류 [0-9]+개$'
 # javac errors in production sources: offline, a stale cached SNAPSHOT looks like this.
 MAIN_JAVAC='src[/\\]main[/\\]java[/\\].*\.java:[0-9]+: (error|오류):'
-# English diagnostics where the JVM honours it (a Gradle daemon started earlier keeps its own locale; JAVAC covers ko).
+# English diagnostics. A different JAVA_TOOL_OPTIONS value makes Gradle start a separate daemon (seen on Gradle 8.10.2),
+# so this takes effect even when a ko/ja daemon is already running; the cost is one extra cold daemon start.
 # Exported for this script's process only.
 export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Duser.language=en -Duser.country=US"
 
