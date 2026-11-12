@@ -56,20 +56,71 @@ export function readCoverage(xml: string, target: string): FileCoverage | null {
   return null
 }
 
-/** `<failure`/`<error`가 있는 testcase를 "Class.method"로. */
-export function readFailedTests(resultsDir: string): string[] {
+export interface FailedTest {
+  /** "패키지.클래스.메서드" */
+  id: string
+  cls: string
+  method: string
+  kind: "failure" | "error"
+  /** 예외 클래스 이름(junit 의 type 속성), 없으면 "" */
+  type: string
+  /** 메시지의 첫 줄(300자까지) */
+  message: string
+  /** 스택에서 처음 나오는 프로젝트 쪽 줄, 예: "FooTest.java:34", 없으면 "" */
+  frame: string
+}
+
+const entity = (t: string): string =>
+  t
+    .replace(/&#(\d+);/g, (_, n: string) => String.fromCharCode(Number(n)))
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&")
+
+const FRAMEWORK_FRAME = /^(?:org\.junit|org\.opentest4j|org\.mockito|org\.springframework|java\.|javax\.|jdk\.|sun\.|org\.apache|org\.gradle|worker\.)/
+
+/** `<failure`/`<error`가 있는 testcase의 상세. 메시지·예외 종류·프로젝트 쪽 첫 스택 줄을 함께 읽는다. */
+export function readFailedDetails(resultsDir: string): FailedTest[] {
   if (!existsSync(resultsDir)) return []
-  const failed: string[] = []
+  const failed: FailedTest[] = []
   for (const f of readdirSync(resultsDir)) {
     if (!/^TEST-.*\.xml$/.test(f)) continue
     const xml = readFileSync(join(resultsDir, f), "utf8")
     for (const m of xml.matchAll(/<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g)) {
-      if (!m[2] || !/<(?:failure|error)\b/.test(m[2])) continue
+      if (!m[2]) continue
+      const e = /<(failure|error)\b([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/.exec(m[2])
+      if (!e) continue
       const a = attrs(m[1]!)
-      failed.push(`${a.classname ?? ""}.${a.name ?? ""}`)
+      const ea = attrs(e[2]!)
+      const body = entity(e[3] ?? "")
+      const message = entity(ea.message ?? body.split("\n")[0] ?? "").split("\n")[0]!.trim().slice(0, 300)
+      let frame = ""
+      for (const line of body.split("\n")) {
+        const fm = /^\s*at\s+([\w.$]+)\.[\w$<>]+\(([\w$]+\.java:\d+)\)/.exec(line)
+        if (fm && !FRAMEWORK_FRAME.test(fm[1]!)) {
+          frame = fm[2]!
+          break
+        }
+      }
+      failed.push({
+        id: `${a.classname ?? ""}.${a.name ?? ""}`,
+        cls: a.classname ?? "",
+        method: a.name ?? "",
+        kind: e[1] as "failure" | "error",
+        type: ea.type ?? "",
+        message,
+        frame,
+      })
     }
   }
   return failed
+}
+
+/** `<failure`/`<error`가 있는 testcase를 "Class.method"로. */
+export function readFailedTests(resultsDir: string): string[] {
+  return readFailedDetails(resultsDir).map((d) => d.id)
 }
 
 export function isFullyCovered(c: FileCoverage | null): boolean {

@@ -453,6 +453,33 @@ describe("verify", () => {
     expect(session().verification).toBe("covered");
   });
 
+  test("the report separates broken pre-existing tests from failing new ones, each with its cause", () => {
+    reachVerify();
+    runCoverage();
+    session().previousMethods = { [TEST_FILE]: ["inquire_normal1"] };
+    const dir = path.join(cwd, session().runDir!, "test-results");
+    fs.writeFileSync(
+      path.join(dir, "TEST-y.xml"),
+      `<testsuite>` +
+        `<testcase classname="${FQCN}" name="inquire_normal1"><failure message="expected: &lt;3000&gt; but was: &lt;3500&gt;" type="org.opentest4j.AssertionFailedError">x\n\tat ${FQCN}.inquire_normal1(SONAQ001ServiceTest.java:34)\n</failure></testcase>` +
+        `<testcase classname="${FQCN}" name="inquire_new"><error message="boom | pipe" type="java.lang.IllegalStateException"/></testcase>` +
+        `</testsuite>`,
+    );
+    done({ stage: "verify", note: "n" });
+    expect(session().verification).toBe("covered");
+    const out = done({ stage: "report", note: "summary" });
+    const report = fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8");
+    const section = report.slice(report.indexOf("## 실패한 테스트"), report.indexOf("## 검증 메모"));
+    const oldPart = section.slice(section.indexOf("### 기존 테스트"), section.indexOf("### 이번에 생성한 테스트"));
+    expect(oldPart).toContain("SONAQ001ServiceTest.inquire_normal1");
+    expect(oldPart).toContain("기대 3000, 실제 3500");
+    expect(oldPart).toContain("SONAQ001ServiceTest.java:34");
+    expect(oldPart).not.toContain("inquire_new");
+    const newPart = section.slice(section.indexOf("### 이번에 생성한 테스트"));
+    expect(newPart).toContain("SONAQ001ServiceTest.inquire_new");
+    expect(newPart).toContain("IllegalStateException: boom \\| pipe");
+  });
+
   test("failed tests are listed in the report but do not block", () => {
     reachVerify();
     runCoverage({ failed: ["inquire_normal2"] });
@@ -461,7 +488,7 @@ describe("verify", () => {
     expect(session().failedTests).toEqual([`${FQCN}.inquire_normal2`]);
     const out = done({ stage: "report", note: "summary" });
     const report = fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8");
-    expect(report).toContain(`${FQCN}.inquire_normal2`);
+    expect(report).toContain("SONAQ001ServiceTest.inquire_normal2");
   });
 });
 

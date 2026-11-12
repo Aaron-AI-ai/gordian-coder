@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { isFullyCovered, readCoverage, readFailedTests } from "../coverage"
+import { isFullyCovered, readCoverage, readFailedDetails, readFailedTests } from "../coverage"
 
 const XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <!DOCTYPE report PUBLIC "-//JACOCO//DTD Report 1.1//EN" "report.dtd">
@@ -62,5 +62,44 @@ describe("readFailedTests", () => {
   })
   test("missing dir gives []", () => {
     expect(readFailedTests("/nonexistent-dir-xyz")).toEqual([])
+  })
+})
+
+describe("readFailedDetails", () => {
+  const XML = `<testsuite>
+<testcase name="fee_normal1" classname="p.ShippingFeeServiceTest" time="0.1"><failure message="org.opentest4j.AssertionFailedError: expected: &lt;3000&gt; but was: &lt;3500&gt;" type="org.opentest4j.AssertionFailedError">org.opentest4j.AssertionFailedError: expected: &lt;3000&gt; but was: &lt;3500&gt;
+	at org.junit.jupiter.api.AssertionUtils.fail(AssertionUtils.java:55)
+	at p.ShippingFeeServiceTest.fee_normal1(ShippingFeeServiceTest.java:34)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+</failure></testcase>
+<testcase name="boom" classname="p.ShippingFeeServiceTest"><error message="NPE &amp; more" type="java.lang.NullPointerException">java.lang.NullPointerException
+	at p.ShippingFeeService.fee(ShippingFeeService.java:21)
+</error></testcase>
+<testcase name="bare" classname="p.X"><failure message="x"/></testcase>
+<testcase name="ok" classname="p.X"/>
+</testsuite>`
+  const dir = () => {
+    const d = mkdtempSync(join(tmpdir(), "cov-"))
+    writeFileSync(join(d, "TEST-a.xml"), XML)
+    return d
+  }
+  test("message, exception type, kind and the first project stack frame", () => {
+    const [a, b, c] = readFailedDetails(dir())
+    expect(a).toEqual({
+      id: "p.ShippingFeeServiceTest.fee_normal1",
+      cls: "p.ShippingFeeServiceTest",
+      method: "fee_normal1",
+      kind: "failure",
+      type: "org.opentest4j.AssertionFailedError",
+      message: "org.opentest4j.AssertionFailedError: expected: <3000> but was: <3500>",
+      frame: "ShippingFeeServiceTest.java:34",
+    })
+    expect(b!.kind).toBe("error")
+    expect(b!.message).toBe("NPE & more")
+    expect(b!.frame).toBe("ShippingFeeService.java:21")
+    expect(c).toMatchObject({ id: "p.X.bare", message: "x", frame: "", type: "" })
+  })
+  test("readFailedTests stays the id list of the same testcases", () => {
+    expect(readFailedTests(dir())).toEqual(["p.ShippingFeeServiceTest.fee_normal1", "p.ShippingFeeServiceTest.boom", "p.X.bare"])
   })
 })

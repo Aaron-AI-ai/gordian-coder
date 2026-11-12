@@ -3,7 +3,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { localFileStamp } from "../time";
-import { isFullyCovered } from "./coverage";
+import { isFullyCovered, type FailedTest } from "./coverage";
 import { MAX_COVERAGE_ROUNDS, MAX_FIX_RETRIES, REPORT_DIR, interfaceTargets, measuredTargets, type FutSession, type Verification } from "./workflow";
 
 const pct = (c: { missed: number; covered: number }): string => {
@@ -19,6 +19,45 @@ const verdict = (v: Verification): string =>
     gaps: `공백 남음 (보강 ${MAX_COVERAGE_ROUNDS}회 소진)`,
     incomplete: `미완료 (수정 재시도 ${MAX_FIX_RETRIES}회 초과)`,
   })[v];
+
+
+const cell = (t: string): string => t.replace(/\|/g, "\\|").replace(/\n/g, " ");
+
+/** "기대 X, 실제 Y" 로 읽히면 그렇게, 아니면 메시지 그대로. */
+function describeFailure(d: FailedTest): string {
+  const m = /expected:\s*<(.*?)>\s*but was:\s*<(.*?)>/s.exec(d.message);
+  const text = m ? `기대 ${m[1]}, 실제 ${m[2]}` : d.message || "(메시지 없음)";
+  return d.type && !m ? `${d.type.split(".").pop()}: ${text}` : text;
+}
+
+/** Whether the failing test method was already in a planned test file before this run. */
+function existedBefore(session: FutSession, d: FailedTest): boolean {
+  const simple = d.cls.split(".").pop()!;
+  return Object.entries(session.previousMethods).some(([file, methods]) => path.posix.basename(file, ".java") === simple && methods.includes(d.method));
+}
+
+function failureSection(session: FutSession): string[] {
+  if (session.failedDetails.length === 0) return ["없음"];
+  const table = (rows: FailedTest[]): string[] => [
+    "| 테스트 | 종류 | 원인 | 위치 |",
+    "|---|---|---|---|",
+    ...rows.map((d) => `| ${cell(d.cls.split(".").pop()! + "." + d.method)} | ${d.kind === "error" ? "예외" : "단언 실패"} | ${cell(describeFailure(d))} | ${d.frame || "-"} |`),
+  ];
+  const old = session.failedDetails.filter((d) => existedBefore(session, d));
+  const made = session.failedDetails.filter((d) => !existedBefore(session, d));
+  return [
+    ...(old.length > 0
+      ? [
+          "### 기존 테스트 (이번 실행 전부터 있던 것, 수정하거나 끄지 않았다)",
+          "코드 변경으로 동작이 바뀌어 낡았을 수도, 변경이 회귀일 수도 있다. 생성기는 어느 쪽인지 판단하지 않는다. 확인이 필요하다.",
+          "",
+          ...table(old),
+          "",
+        ]
+      : []),
+    ...(made.length > 0 ? ["### 이번에 생성한 테스트 (코드나 기대값을 다시 확인해야 한다)", "", ...table(made), ""] : []),
+  ];
+}
 
 /** Writes `<runDir>/report.md` (Korean headings for the developer) and returns its path. */
 export function writeReport(session: FutSession, summary: string): string {
@@ -68,7 +107,7 @@ export function writeReport(session: FutSession, summary: string): string {
     ...(skipped.length > 0 ? ["## 테스트하지 않은 메서드", ...skipped, ""] : []),
     ...(session.verification === "incomplete" ? ["## 마지막 오류", ...session.lastProblems, ""] : []),
     "## 실패한 테스트",
-    ...(session.failedTests.length > 0 ? session.failedTests.map((t) => `- ${t}`) : ["없음"]),
+    ...failureSection(session),
     "",
     "## 검증 메모",
     session.verifyNote ?? "",

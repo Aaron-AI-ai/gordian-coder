@@ -14,7 +14,7 @@ import * as path from "node:path";
 import { localFileStamp } from "../time";
 import { UNIT_TEST_SKILL_NAME } from "../pb-online/names";
 import { MAX_WAIT_CALLS, awaitingReply, noteReply, takeAbort, type PlanGateState } from "../plan-gate";
-import { isFullyCovered, readCoverage, readFailedTests, type FileCoverage } from "./coverage";
+import { isFullyCovered, readCoverage, readFailedDetails, type FailedTest, type FileCoverage } from "./coverage";
 import { checkTestSource, testMethodNames } from "./test-check";
 import { writeReport } from "./report";
 import { checkMapperTargets, isPlainInterface, mapperDefects, type MapperCheck } from "./mapper";
@@ -92,6 +92,8 @@ export interface FutSession extends PlanGateState {
   verification: Verification;
   coverage: TargetCoverage[];
   failedTests: string[];
+  /** The same failures with message, exception type and stack frame, for the report. */
+  failedDetails: FailedTest[];
   /** Mapper targets (judged by the static call check, not JaCoCo) with which methods the planned test calls. */
   mapperChecks: MapperCheck[];
   /** The last defects or compile log that sent the run back, kept for an incomplete report. */
@@ -182,6 +184,7 @@ export function startSession(sessionId: string, request: string, cwd: string): F
     verification: "pending",
     coverage: [],
     failedTests: [],
+    failedDetails: [],
     mapperChecks: [],
     lastProblems: [],
   };
@@ -565,7 +568,8 @@ function completeVerify(session: FutSession, input: StageInput): string {
     return `Rejected: ${session.runDir}/status.json is not valid JSON. Run ${SCRIPT_NAME} again.`;
   }
   session.verifyNote = input.note;
-  session.failedTests = readFailedTests(path.join(session.cwd, session.runDir!, "test-results"));
+  session.failedDetails = readFailedDetails(path.join(session.cwd, session.runDir!, "test-results"));
+  session.failedTests = session.failedDetails.map((d) => d.id);
 
   // Compile failure, or a test step that left no coverage: either can be the environment's (resolution, network).
   const envLine = status.compile === "fail" || status.coverage === "missing" ? environmentFailureLine(status.log ?? "") : null;
@@ -582,7 +586,10 @@ function completeVerify(session: FutSession, input: StageInput): string {
   const xml = fs.readFileSync(xmlFile, "utf-8");
   session.coverage = measuredTargets(session).map((target) => ({ target, coverage: readCoverage(xml, target) }));
   const gaps = session.coverage.filter((c) => !isFullyCovered(c.coverage));
-  const failed = session.failedTests.length > 0 ? `\nFailing tests (reported, not blocking): ${session.failedTests.join(", ")}` : "";
+  const failed =
+    session.failedDetails.length > 0
+      ? `\nFailing tests (reported with their cause, not blocking, never edited or disabled):\n${session.failedDetails.map((d) => `- ${d.id}: ${d.message || d.type || "(no message)"}`).join("\n")}`
+      : "";
   if (gaps.length === 0) {
     session.verification = "covered";
     return advance(session, "report", `Every target is fully covered.${failed}`);
