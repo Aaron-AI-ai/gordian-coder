@@ -90,26 +90,22 @@ export function badgeFor(submission: StoredSubmission, judgments: LogJudgments, 
 const L = {
   ko: {
     summary: "## 요약", raw: "## 스택 원문", path: "## 진입점 → 원인 경로", cause: "## 원인 상세와 근거", fix: "## 해결 방안",
-    alts: "## 검토한 대안", gaps: "## 못 본 것", judge: "## 심사 이력", run: "## 실행 정보",
-    none: "제출 없음", noGaps: "누락 없음 — 로그의 예외·용의 파일·관측이 모두 다뤄졌다.",
-    gapsNote: "누락이 있어도 되돌리지 않는다. 다시 돌릴지는 읽는 사람이 정한다.",
+    run: "## 실행 정보", none: "제출 없음",
     env: "환경 원인 가능 — 코드 수정 전 설정·인프라를 먼저 확인.", mitigation: "⚠️ 원인 제거가 아닌 증상 완화(mitigation)다.",
-    confidence: "신뢰도", entry: "진입점", causeFrame: "원인 프레임", unexplained: "설명 안 된 예외", unread: "안 읽은 용의 파일", unresolved: "미해결 관측",
-    rounds: "라운드", tools: "툴 호출", rules: "적용 룰", kb: "주입 KB", runs: "실행 상세", judgeNone: "심사 안 함", terminal: "임계값 미달 — 최고점 라운드 채택",
-    partial: "분석 미완 — 모델이 제출 전에 중단", forced: "강제 수락", skipped: "심사 생략",
+    entry: "진입점", causeFrame: "원인 프레임",
+    rounds: "라운드", tools: "툴 호출", rules: "적용 룰", kb: "주입 KB", runs: "실행 상세", terminal: "임계값 미달 — 최고점 라운드 채택",
+    partial: "분석 미완 — 모델이 제출 전에 중단", forced: "강제 수락",
     target: "## 분석 대상", source: "로그 파일", pasted: "직접 붙여넣은 로그", time: "발생 시각", svc: "서비스 ID", code: "에러 코드",
     trace: "추적 ID · 사용자", where: "호스트 · 스레드", logLine: "로그 메시지", exception: "예외", logger: "기록 위치",
     materials: "근거 자료", kbRef: "참고한 프레임워크 KB", usedInFix: "수정 코드에 사용", rulesRef: "적용한 분석 룰", filesRead: "분석 중 읽은 파일",
   },
   en: {
     summary: "## Summary", raw: "## Stack trace", path: "## Entry point → cause path", cause: "## Cause and evidence", fix: "## Resolution",
-    alts: "## Alternatives considered", gaps: "## Not examined", judge: "## Judge history", run: "## Run info",
-    none: "no submission", noGaps: "No gaps — every exception, suspect file and observation was covered.",
-    gapsNote: "Gaps are reported, not looped back. Re-running is the reader's call.",
+    run: "## Run info", none: "no submission",
     env: "Possible environment cause — check configuration/infrastructure before changing code.", mitigation: "⚠️ This is a mitigation, not a root-cause fix.",
-    confidence: "confidence", entry: "entry", causeFrame: "cause frame", unexplained: "unexplained exceptions", unread: "unread suspect files", unresolved: "unresolved observations",
-    rounds: "rounds", tools: "tool calls", rules: "rules applied", kb: "KB injected", runs: "run details", judgeNone: "not judged", terminal: "below threshold — best-scoring round adopted",
-    partial: "analysis incomplete — the model stopped before submitting", forced: "force-accepted", skipped: "judge skipped",
+    entry: "entry", causeFrame: "cause frame",
+    rounds: "rounds", tools: "tool calls", rules: "rules applied", kb: "KB injected", runs: "run details", terminal: "below threshold — best-scoring round adopted",
+    partial: "analysis incomplete — the model stopped before submitting", forced: "force-accepted",
     target: "## Analyzed request", source: "Log file", pasted: "pasted log", time: "Occurred at", svc: "Service ID", code: "Error code",
     trace: "Trace ID · user", where: "Host · thread", logLine: "Log message", exception: "Exception", logger: "Logged by",
     materials: "Evidence materials", kbRef: "Framework KB consulted", usedInFix: "used in the fix", rulesRef: "Analysis rules applied", filesRead: "Files read during analysis",
@@ -176,7 +172,7 @@ function quote(cwd: string, file: string, from: number, to: number): string {
   return renderFileContent(file, content, from, end, EVIDENCE_MAX_LINES);
 }
 
-export function renderLogReport(i: FinalizeInput, gaps: Gaps, badge: Badge, lang: "ko" | "en", now: Date): string {
+export function renderLogReport(i: FinalizeInput, badge: Badge, lang: "ko" | "en", now: Date): string {
   const t = L[lang];
   const s = i.submission;
   const empty = !s.cause.summary;
@@ -186,7 +182,7 @@ export function renderLogReport(i: FinalizeInput, gaps: Gaps, badge: Badge, lang
 
   out.push(`# f-log ${i.plan.runId} — **${badge}**`, `${localTimestamp(now)} · ${i.cwd.split(/[\\/]/).at(-1)}`, "");
   out.push(t.target, ...targetRows(i, t).map(([k, v, mono]) => `- **${k}**: ${mono ? `\`${v}\`` : v}`), "");
-  out.push(t.summary, empty ? `_${t.none}_` : `**${s.cause.summary}** (${t.confidence} ${s.confidence})`);
+  out.push(t.summary, empty ? `_${t.none}_` : `**${s.cause.summary}**`);
   if (s.envCause) out.push(`- ${t.env}`);
   if (s.resolution.kind === "mitigation" && !empty) out.push(`- ${t.mitigation}`);
   if (badge === "TERMINAL") out.push(`- ${t.terminal}`);
@@ -231,31 +227,6 @@ export function renderLogReport(i: FinalizeInput, gaps: Gaps, badge: Badge, lang
   }
   out.push("");
 
-  out.push(t.alts);
-  for (const a of s.alternatives) if (a.hypothesis) out.push(`- ${a.hypothesis} — ${a.rejectedBecause}`);
-  for (const r of i.judgments.rejected) out.push(`- (R${r.round}, judge) ${r.cause} — ${r.feedback}`);
-  if (!s.alternatives.some((a) => a.hypothesis) && !i.judgments.rejected.length) out.push("- —");
-  out.push("");
-
-  out.push(t.gaps);
-  const anyGap = gaps.unexplainedExceptions.length + gaps.unreadSuspects.length + gaps.unresolvedObservations.length > 0;
-  if (!anyGap) out.push(t.noGaps);
-  else {
-    if (gaps.unexplainedExceptions.length) out.push(`- ${t.unexplained}: ${gaps.unexplainedExceptions.join(", ")}`);
-    if (gaps.unreadSuspects.length) out.push(`- ${t.unread}: ${gaps.unreadSuspects.join(", ")}`);
-    if (gaps.unresolvedObservations.length) out.push(`- ${t.unresolved}: ${gaps.unresolvedObservations.join("; ")}`);
-    out.push(`- _${t.gapsNote}_`);
-  }
-  out.push("");
-
-  out.push(t.judge);
-  if (i.judgments.skipped) out.push(`- ${t.skipped}: ${i.judgments.skipped}`);
-  else if (!i.judgments.attempts.length) out.push(`- ${t.judgeNone}`);
-  for (const a of i.judgments.attempts) {
-    out.push(`- R${a.round}: ${a.total} (obs ${a.scores.observation} / alt ${a.scores.alternatives} / root ${a.scores.rootCause}) → ${a.verdict}${a.unexplained.length ? ` · unexplained: ${a.unexplained.join("; ")}` : ""}`);
-  }
-  out.push("");
-
   out.push(t.run);
   out.push(`- runId: ${i.plan.runId}`, `- ${t.tools}: ${i.session.toolCalls}/${i.session.maxToolCalls}`, `- ${t.rounds}: ${i.session.rounds}`);
   out.push(`- ${t.rules}: ${i.plan.ruleFiles.join(", ") || "—"}`, `- ${t.kb}: ${i.plan.kbDocs.map((d) => d.path).join(", ") || "—"}`, `- ${t.runs}: runs/${i.plan.runId}/`);
@@ -267,13 +238,13 @@ const H = {
   ko: {
     title: "로그 분석 리포트", project: "프로젝트", analysis: "로그 분석", causeTitle: "원인", fixTitle: "해결 방안",
     verdict: "판정", observations: "로그 관측", explained: "설명됨", notExplained: "설명 안 됨", evidence: "근거 코드",
-    copy: "복사", copyAll: "해결 방안 전체 복사", copied: "복사됨", copyFail: "복사 실패", exceptions: "예외", gaps: "누락",
+    copy: "복사", copyAll: "해결 방안 전체 복사", copied: "복사됨", copyFail: "복사 실패", exceptions: "예외",
     noChanges: "구체적인 코드 변경 없음",
   },
   en: {
     title: "Log Analysis Report", project: "Project", analysis: "Log analysis", causeTitle: "Cause", fixTitle: "Resolution",
     verdict: "Verdict", observations: "Log observations", explained: "explained", notExplained: "not explained", evidence: "Evidence",
-    copy: "Copy", copyAll: "Copy whole resolution", copied: "Copied", copyFail: "Copy failed", exceptions: "exceptions", gaps: "gaps",
+    copy: "Copy", copyAll: "Copy whole resolution", copied: "Copied", copyFail: "Copy failed", exceptions: "exceptions",
     noChanges: "no concrete code change",
   },
 } as const;
@@ -304,7 +275,7 @@ function copyBtn(id: string, label: string, h: (typeof H)[keyof typeof H]): stri
   return `<button class="copy" type="button" data-copy="${id}" data-done="${esc(h.copied)}" data-fail="${esc(h.copyFail)}">${esc(label)}</button>`;
 }
 
-export function renderLogHtml(i: FinalizeInput, gaps: Gaps, badge: Badge, lang: "ko" | "en", now: Date): string {
+export function renderLogHtml(i: FinalizeInput, badge: Badge, lang: "ko" | "en", now: Date): string {
   const t = L[lang];
   const h = H[lang];
   const sec = (s: string) => s.slice(3);
@@ -314,7 +285,6 @@ export function renderLogHtml(i: FinalizeInput, gaps: Gaps, badge: Badge, lang: 
   const tone = BADGE_TONE[badge];
   const stamp = localTimestamp(now);
   const project = i.cwd.split(/[\\/]/).at(-1) ?? "";
-  const gapCount = gaps.unexplainedExceptions.length + gaps.unreadSuspects.length + gaps.unresolvedObservations.length;
   const exceptionCount = i.plan.observations.filter((o) => /^예외 \d+\/\d+: /.test(o)).length;
   const causeAt = s.cause.file ? `${s.cause.file}${s.cause.line ? `:${s.cause.line}` : ""}` : "";
 
@@ -327,16 +297,14 @@ export function renderLogHtml(i: FinalizeInput, gaps: Gaps, badge: Badge, lang: 
   ].filter((n): n is string => !!n);
   const verdict = [
     `<div class="verdict ${tone}" role="status">`,
-    `<div class="head"><span class="badge ${tone}">${esc(badge)}</span> ${esc(t.confidence)} ${s.confidence}${causeAt ? ` &middot; <code>${esc(causeAt)}</code>` : ""}</div>`,
+    `<div class="head"><span class="badge ${tone}">${esc(badge)}</span>${causeAt ? ` <code>${esc(causeAt)}</code>` : ""}</div>`,
     `<div class="cause">${empty ? esc(t.none) : esc(s.cause.summary)}</div>`,
     notes.length ? `<ul>${notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : "",
     `</div>`,
   ].join("\n  ");
 
   const stats = [
-    `<div class="stat ${s.confidence >= 70 ? "good" : s.confidence < 40 ? "bad" : ""}"><div class="n">${s.confidence}</div><div class="l">${esc(t.confidence)}</div></div>`,
     `<div class="stat"><div class="n">${exceptionCount}</div><div class="l">${esc(h.exceptions)}</div></div>`,
-    `<div class="stat ${gapCount ? "bad" : "good"}"><div class="n">${gapCount}</div><div class="l">${esc(h.gaps)}</div></div>`,
     `<div class="stat"><div class="n">${s.resolution.changes.length}</div><div class="l">${esc(h.fixTitle)}</div></div>`,
   ].join("\n    ");
 
@@ -399,26 +367,9 @@ export function renderLogHtml(i: FinalizeInput, gaps: Gaps, badge: Badge, lang: 
 
   // Appendix: everything the reader may want to audit, collapsed.
   const li = (xs: string[]) => `<ul>${xs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
-  const alts = [
-    ...s.alternatives.filter((a) => a.hypothesis).map((a) => `${a.hypothesis} — ${a.rejectedBecause}`),
-    ...i.judgments.rejected.map((r) => `(R${r.round}, judge) ${r.cause} — ${r.feedback}`),
-  ];
-  const gapLines = [
-    ...(gaps.unexplainedExceptions.length ? [`${t.unexplained}: ${gaps.unexplainedExceptions.join(", ")}`] : []),
-    ...(gaps.unreadSuspects.length ? [`${t.unread}: ${gaps.unreadSuspects.join(", ")}`] : []),
-    ...(gaps.unresolvedObservations.length ? [`${t.unresolved}: ${gaps.unresolvedObservations.join("; ")}`] : []),
-  ];
-  const judge = i.judgments.skipped
-    ? [`${t.skipped}: ${i.judgments.skipped}`]
-    : i.judgments.attempts.length
-      ? i.judgments.attempts.map((a) => `R${a.round}: ${a.total} (obs ${a.scores.observation} / alt ${a.scores.alternatives} / root ${a.scores.rootCause}) → ${a.verdict}${a.unexplained.length ? ` · unexplained: ${a.unexplained.join("; ")}` : ""}`)
-      : [t.judgeNone];
   const more = (title: string, body: string, count?: number) =>
     `<details class="more"><summary>${esc(title)}${count !== undefined ? ` <span class="dim">(${count})</span>` : ""}</summary><div class="body">${body}</div></details>`;
   const appendix = [
-    more(sec(t.alts), alts.length ? li(alts) : "—", alts.length),
-    more(sec(t.gaps), gapLines.length ? li([...gapLines, t.gapsNote]) : esc(t.noGaps), gapCount),
-    more(sec(t.judge), li(judge)),
     more(sec(t.run), li([
       `runId: ${i.plan.runId}`, `${t.tools}: ${i.session.toolCalls}/${i.session.maxToolCalls}`, `${t.rounds}: ${i.session.rounds}`,
       `${t.rules}: ${i.plan.ruleFiles.join(", ") || "—"}`, `${t.kb}: ${i.plan.kbDocs.map((d) => d.path).join(", ") || "—"}`, `${t.runs}: runs/${i.plan.runId}/`,
@@ -490,7 +441,7 @@ export function finalizeRun(runId: string, cwd: string): string {
     source: meta.source, kbShown: readRunJson<string[]>(runId, cwd, "kbShown.json") ?? [], readFiles };
   const lang = meta.language === "en" ? "en" : "ko";
   const now = new Date();
-  const md = renderLogReport(reportInput, gaps, badge, lang, now);
+  const md = renderLogReport(reportInput, badge, lang, now);
   const requested = reportPath(cwd, cfg, runId, meta.output);
   mkdirSync(dirname(requested), { recursive: true });
   // This run has never finalized before (the `prior` check above returned
@@ -507,14 +458,14 @@ export function finalizeRun(runId: string, cwd: string): string {
   }
   writeFileSync(path, md);
   const html = htmlReportPath(path);
-  writeFileSync(html, renderLogHtml(reportInput, gaps, badge, lang, now));
+  writeFileSync(html, renderLogHtml(reportInput, badge, lang, now));
   const rel = relOf(path);
   const g = `${gaps.unexplainedExceptions.length} / ${gaps.unreadSuspects.length} / ${gaps.unresolvedObservations.length}`;
   const response = [
     `✅ f-log finished — ${badge}`,
     `Report: ${rel}`,
     `HTML: ${relOf(html)}`,
-    `Cause: ${best.submission.cause.summary || "(no submission)"} (confidence ${best.submission.confidence})`,
+    `Cause: ${best.submission.cause.summary || "(no submission)"}`,
     ...fixLine(best.submission),
     `Gaps: ${g === "0 / 0 / 0" ? "none" : `${g} (unexplained exceptions / unread suspects / unresolved observations)`}`,
     ...(collisionNote ? [collisionNote] : []),
