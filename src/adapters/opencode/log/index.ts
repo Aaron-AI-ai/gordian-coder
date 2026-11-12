@@ -80,7 +80,7 @@ export function createLogModule(input: PluginInput): {
     args: {
       runId: z.string().min(1),
       submitToken: z.string().min(1),
-      cause: z.object({ file: z.string(), line: z.number().int().positive().optional(), summary: z.string(), mechanism: z.string() }),
+      cause: z.object({ file: z.string(), line: z.number().int().positive().optional(), summary: z.string().describe("ONE short sentence (<= 150 chars): what is wrong, where. It is the report headline; the explanation goes in mechanism."), mechanism: z.string() }),
       evidence: z.array(z.object({ file: z.string(), lines: z.tuple([z.number().int().positive(), z.number().int().positive()]), why: z.string() })),
       observations: z.array(z.object({ observation: z.string(), explained: z.boolean(), how: z.string().optional() })),
       alternatives: z.array(z.object({ hypothesis: z.string(), rejectedBecause: z.string() })),

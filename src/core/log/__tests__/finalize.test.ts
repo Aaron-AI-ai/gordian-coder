@@ -69,17 +69,22 @@ describe("renderLogReport", () => {
   const input: FinalizeInput = { plan, input: "java.lang.NullPointerException: x\n\tat a.Svc.run(Svc.java:2)\n", submission: sub, judgments: judged, attempt: judged.attempts[0], session: { toolCalls: 4, maxToolCalls: 10, rounds: 1 }, cwd };
   const gaps = computeGaps(plan, sub, judged, {}, ["src/a/Svc.java"], []);
 
-  test("nine sections, ko labels, evidence quoted from the actual file, gaps listed", () => {
-    const md = renderLogReport(input, gaps, "PASS", "ko", new Date("2026-09-16T01:00:00Z"));
-    for (const h of ["## 요약", "## 스택 원문", "## 진입점 → 원인 경로", "## 원인 상세와 근거", "## 해결 방안", "## 검토한 대안", "## 못 본 것", "## 심사 이력", "## 실행 정보"]) expect(md).toContain(h);
+  test("six sections, ko labels, evidence quoted from the actual file; alternatives, gaps and judge history left out", () => {
+    const md = renderLogReport(input, "PASS", "ko", new Date("2026-09-16T01:00:00Z"));
+    for (const h of ["## 요약", "## 스택 원문", "## 진입점 → 원인 경로", "## 원인 상세와 근거", "## 해결 방안", "## 실행 정보"]) expect(md).toContain(h);
+    for (const h of ["검토한 대안", "못 본 것", "심사 이력"]) expect(md).not.toContain(h);
     expect(md).toContain("PASS");
     expect(md).toContain("map.get(k).size()");       // quoted from src/a/Svc.java
-    expect(md).toContain("src/a/Ctl.java");          // unread suspect
-    expect(md).toContain("핸들러 errorCode=1001");   // unresolved
     expect(md).toContain("a.Ctl.go");                // entry
-    expect(md).toContain("75");                      // judge total
     expect(md).toContain("4/10");                    // tool calls
     expect(md).toContain("npe.md");
+  });
+
+  test("no confidence anywhere in the report (md, html, en)", () => {
+    for (const lang of ["ko", "en"] as const) {
+      expect(renderLogReport(input, "PASS", lang, new Date())).not.toMatch(/신뢰도|confidence/i);
+      expect(renderLogHtml(input, "PASS", lang, new Date())).not.toMatch(/신뢰도|confidence/i);
+    }
   });
   test("a change with code renders a fenced block tagged by the file extension under the change line", () => {
     const withCode = { ...sub, resolution: { ...sub.resolution, changes: [
@@ -87,7 +92,7 @@ describe("renderLogReport", () => {
       { file: "src/main/resources/application.yml", description: "eager init 끄기", code: "redis:\n  eager-initialization: false" },
       { file: "src/a/Other.java", description: "코드 없음" },
     ] } };
-    const md = renderLogReport({ ...input, submission: withCode }, { unexplainedExceptions: [], unreadSuspects: [], unresolvedObservations: [] }, "PASS", "ko", new Date());
+    const md = renderLogReport({ ...input, submission: withCode }, "PASS", "ko", new Date());
     const fix = md.split("## 해결 방안")[1].split("## 검토한 대안")[0];
     expect(fix).toContain("- src/a/Svc.java: null 검사 후 PBOnlineException\n\n```java\nif (row == null) {");
     expect(fix).toContain("```yml\nredis:\n  eager-initialization: false\n```");
@@ -98,7 +103,7 @@ describe("renderLogReport", () => {
     const withNestedFence = { ...sub, resolution: { ...sub.resolution, changes: [
       { file: "src/a/Svc.java", description: "예시 포함", code: "// example:\n```java\nfoo();\n```" },
     ] } };
-    const md = renderLogReport({ ...input, submission: withNestedFence }, { unexplainedExceptions: [], unreadSuspects: [], unresolvedObservations: [] }, "PASS", "ko", new Date());
+    const md = renderLogReport({ ...input, submission: withNestedFence }, "PASS", "ko", new Date());
     const fix = md.split("## 해결 방안")[1].split("## 검토한 대안")[0];
     expect(fix).toContain("````java\n// example:\n```java\nfoo();\n```\n````");
   });
@@ -110,19 +115,19 @@ describe("renderLogReport", () => {
   };
 
   test("the report opens with the request it analyzed: log file, time, URI, service, error code, trace", () => {
-    const md = renderLogReport(sourced, gaps, "PASS", "ko", new Date());
+    const md = renderLogReport(sourced, "PASS", "ko", new Date());
     const target = md.slice(md.indexOf("## 분석 대상"), md.indexOf("## 요약"));
     for (const v of ["logs/app.log", "2026-07-01 15:32:08.194", "host1", "http-nio-8080-exec-1", "/ON/SONAQ001", "SONAQ001", "1001", "t9", "user01", "java.lang.NullPointerException: x"]) expect(target).toContain(v);
     expect(md.indexOf("## 분석 대상")).toBeLessThan(md.indexOf("## 요약"));
     // pasted input without a log prefix: says so, and lists only what it knows
-    const pasted = renderLogReport(input, gaps, "PASS", "ko", new Date());
+    const pasted = renderLogReport(input, "PASS", "ko", new Date());
     const t2 = pasted.slice(pasted.indexOf("## 분석 대상"), pasted.indexOf("## 요약"));
     expect(t2).toContain("직접 붙여넣은 로그");
     expect(t2).not.toContain("URI");
   });
 
   test("the cause section lists the materials it rests on: KB pages (marked when the fix uses them), rules, files read", () => {
-    const md = renderLogReport(sourced, gaps, "PASS", "ko", new Date());
+    const md = renderLogReport(sourced, "PASS", "ko", new Date());
     const refs = md.slice(md.indexOf("### 근거 자료"), md.indexOf("## 해결 방안"));
     expect(refs).toContain("Fw — .fico/kb/Fw.md (수정 코드에 사용)");
     expect(refs).toContain("Other — .fico/kb/Other.md");
@@ -131,16 +136,16 @@ describe("renderLogReport", () => {
     expect(refs).toContain("src/a/Svc.java");
   });
 
-  test("en labels, mitigation warning, envCause line, empty gaps text", () => {
-    const md = renderLogReport({ ...input, submission: { ...sub, envCause: true, resolution: { ...sub.resolution, kind: "mitigation" } } }, { unexplainedExceptions: [], unreadSuspects: [], unresolvedObservations: [] }, "PASS", "en", new Date());
+  test("en labels, mitigation warning, envCause line", () => {
+    const md = renderLogReport({ ...input, submission: { ...sub, envCause: true, resolution: { ...sub.resolution, kind: "mitigation" } } }, "PASS", "en", new Date());
     expect(md).toContain("## Summary");
     expect(md).toContain("mitigation");
     expect(md).toContain("environment");
-    expect(md).toContain("No gaps");
+    expect(md).not.toContain("Alternatives considered");
   });
   test("FORCED with empty submission renders placeholders instead of crashing", () => {
     const empty: StoredSubmission = { ...sub, forced: " — after 5 invalid submissions", cause: { file: "", summary: "", mechanism: "" }, evidence: [], observations: [], alternatives: [], resolution: { summary: "", changes: [], kind: "mitigation" }, confidence: 0 };
-    const md = renderLogReport({ ...input, submission: empty, attempt: undefined }, gaps, "FORCED", "ko", new Date());
+    const md = renderLogReport({ ...input, submission: empty, attempt: undefined }, "FORCED", "ko", new Date());
     expect(md).toContain("FORCED");
     expect(md).toContain("제출 없음");
   });
@@ -157,15 +162,16 @@ describe("renderLogHtml", () => {
   const input: FinalizeInput = { plan, input: "java.lang.NullPointerException: <script>alert(1)</script>\n\tat a.Svc.run(Svc.java:2)\n", submission: withCode, judgments: judged, attempt: judged.attempts[0], session: { toolCalls: 4, maxToolCalls: 10, rounds: 1 }, cwd };
 
   test("three numbered steps, verdict with cause, evidence with the cause line highlighted", () => {
-    const html = renderLogHtml(input, noGaps, "PASS", "ko", new Date());
-    for (const s of ["로그 분석", "원인", "해결 방안", "검토한 대안", "못 본 것", "심사 이력", "실행 정보"]) expect(html).toContain(s);
+    const html = renderLogHtml(input, "PASS", "ko", new Date());
+    for (const s of ["로그 분석", "원인", "해결 방안", "실행 정보"]) expect(html).toContain(s);
+    for (const s of ["검토한 대안", "못 본 것", "심사 이력"]) expect(html).not.toContain(s);
     expect(html).toContain(`<div class="verdict pass"`);
     expect(html).toContain("map.get(k) is null");
     expect(html).toContain(`<span class="hit"><span class="ln">2</span>  void run() { map.get(k).size(); }</span>`);
     expect(html).not.toContain("{{");
   });
   test("each code change is its own copy target holding the code alone; the whole resolution is copyable as markdown", () => {
-    const html = renderLogHtml(input, noGaps, "PASS", "ko", new Date());
+    const html = renderLogHtml(input, "PASS", "ko", new Date());
     expect(html).toContain(`<pre id="fix-0">if (v == null) {\n    return List.of();\n}</pre>`);
     expect(html).toContain(`data-copy="fix-0"`);
     expect(html).toContain(`data-copy="fix-all"`);
@@ -175,7 +181,7 @@ describe("renderLogHtml", () => {
     const html = renderLogHtml({
       ...input, source: "logs/app.log", kbShown: [".fico/kb/Fw.md"], readFiles: ["src/a/Svc.java"],
       input: "[ERROR:t9:u1][host1:2026-07-01 15:32:08.194][exec-1][a.B:m:1] PB CommonException: URI=/ON/SONAQ001, code=1001\njava.lang.NullPointerException: x\n\tat a.Svc.run(Svc.java:2)\n",
-    }, noGaps, "PASS", "ko", new Date());
+    }, "PASS", "ko", new Date());
     expect(html).toContain("분석 대상");
     expect(html).toContain("<code>/ON/SONAQ001</code>");
     expect(html).toContain("logs/app.log");
@@ -187,8 +193,8 @@ describe("renderLogHtml", () => {
   });
   test("the cause path shows each frame once and does not repeat the entry point", () => {
     const dup = { ...input, input: "java.lang.NullPointerException: x\n\tat a.Svc.run(Svc.java:2)\n\tat a.Svc.run(Svc.java:2)\n\tat a.Ctl.go(Ctl.java:3)\n" };
-    const html = renderLogHtml(dup, noGaps, "PASS", "ko", new Date());
-    const md = renderLogReport(dup, noGaps, "PASS", "ko", new Date());
+    const html = renderLogHtml(dup, "PASS", "ko", new Date());
+    const md = renderLogReport(dup, "PASS", "ko", new Date());
     // the path section only: the raw trace below keeps every line as logged
     for (const out of [html.slice(html.indexOf(`<ul class="path">`), html.indexOf("</ul>", html.indexOf(`<ul class="path">`))), md.slice(md.indexOf("## 진입점"), md.indexOf("## 원인 상세"))]) {
       expect(out.split("a.Svc.run(Svc.java:2)").length - 1).toBe(1);
@@ -198,17 +204,17 @@ describe("renderLogHtml", () => {
   });
 
   test("KB pages the fix code uses are listed first", () => {
-    const html = renderLogHtml({ ...input, kbShown: [".fico/kb/Other.md", ".fico/kb/Fw.md"], submission: { ...withCode, resolution: { ...withCode.resolution, changes: [{ file: "src/a/Svc.java", description: "d", code: "Fw.create()" }] } } }, noGaps, "PASS", "ko", new Date());
+    const html = renderLogHtml({ ...input, kbShown: [".fico/kb/Other.md", ".fico/kb/Fw.md"], submission: { ...withCode, resolution: { ...withCode.resolution, changes: [{ file: "src/a/Svc.java", description: "d", code: "Fw.create()" }] } } }, "PASS", "ko", new Date());
     expect(html.indexOf(".fico/kb/Fw.md")).toBeLessThan(html.indexOf(".fico/kb/Other.md"));
   });
   test("log text is escaped", () => {
-    const html = renderLogHtml(input, noGaps, "PASS", "ko", new Date());
+    const html = renderLogHtml(input, "PASS", "ko", new Date());
     expect(html).not.toContain("<script>alert(1)");
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
   });
   test("FORCED empty submission renders a fail verdict with no copy buttons", () => {
     const empty: StoredSubmission = { ...sub, forced: " — x", cause: { file: "", summary: "", mechanism: "" }, evidence: [], observations: [], alternatives: [], resolution: { summary: "", changes: [], kind: "mitigation" }, confidence: 0 };
-    const html = renderLogHtml({ ...input, submission: empty, attempt: undefined }, noGaps, "FORCED", "en", new Date());
+    const html = renderLogHtml({ ...input, submission: empty, attempt: undefined }, "FORCED", "en", new Date());
     expect(html).toContain(`<div class="verdict fail"`);
     expect(html).toContain("no submission");
     expect(html).not.toContain(`data-copy=`);

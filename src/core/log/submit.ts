@@ -125,6 +125,14 @@ function constantUses(cwd: string, changes: { file: string; code?: string }[]): 
   return uses;
 }
 
+export const SUMMARY_MAX_CHARS = 150;
+
+/** One sentence: no sentence end followed by more text ("a.b" identifiers have no space after the dot). */
+function isOneLiner(text: string): boolean {
+  const t = text.trim();
+  return t.length <= SUMMARY_MAX_CHARS && !/[.!?。]\s+\S/.test(t) && !/\n/.test(t);
+}
+
 export function submitLog(payload: unknown, sessionId: string): string {
   const st = getLogState(sessionId);
   if (!st?.active) return NO_ACTIVE_LOG;
@@ -196,6 +204,13 @@ export function submitLog(payload: unknown, sessionId: string): string {
   const foreign = [...new Set(prose.flatMap((t) => strayScript(t, language)))];
   if (foreign.length) {
     const bounce = reject(`Non-${languageName(language)} script in your text: ${describeScripts(foreign.slice(0, 10))}. Rewrite those words in ${languageName(language)} and resubmit.`);
+    if (bounce) return bounce;
+  }
+
+  // Gate 3b: the report headline is cause.summary — one short sentence; the
+  // why goes in mechanism. Past the cap stored as written, like Gate 3.
+  if (!isOneLiner(sub.cause.summary)) {
+    const bounce = reject(`cause.summary must be ONE short sentence (≤ ${SUMMARY_MAX_CHARS} chars): what is wrong, where. Move the explanation into cause.mechanism and resubmit.`);
     if (bounce) return bounce;
   }
 

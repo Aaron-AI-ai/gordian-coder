@@ -79,6 +79,29 @@ describe("submitLog", () => {
     expect(stored.cause.mechanism).toContain("返回");
   });
 
+  test("cause.summary of two sentences or too long → rejected; past the cap stored as written, not forced", () => {
+    const cwd = repo();
+    const { runId, st } = start(cwd, "s-sum");
+    const p = valid(runId, st.submitToken);
+    p.cause.summary = "Svc.run이 map.get(k)를 검사 없이 호출한다. k가 없으면 null이 되어 NPE가 난다.";
+    const out = submitLog(p, "s-sum");
+    expect(out).toContain("cause.summary must be ONE short sentence");
+    p.cause.summary = "가".repeat(151);
+    expect(submitLog(p, "s-sum")).toContain("cause.summary must be ONE short sentence");
+    for (let i = 3; i <= MAX_FAILED_SUBMITS; i++) submitLog(p, "s-sum");
+    expect(submitLog(p, "s-sum")).toContain("✅");
+    const stored = readRunJson<StoredSubmission>(runId, cwd, "submission-1.json")!;
+    expect(stored.forced).toBeUndefined();
+  });
+
+  test("one sentence with dotted identifiers is accepted", () => {
+    const cwd = repo();
+    const { runId, st } = start(cwd, "s-sum1");
+    const p = valid(runId, st.submitToken);
+    p.cause.summary = "SONAU001Service.checkParameter가 비어 있어 accountName null이 java.sql 제약까지 내려간다.";
+    expect(submitLog(p, "s-sum1")).toContain("✅");
+  });
+
   test("missing observation → rejected with the missing line named", () => {
     const cwd = repo();
     const { runId, st } = start(cwd, "s-obs");
