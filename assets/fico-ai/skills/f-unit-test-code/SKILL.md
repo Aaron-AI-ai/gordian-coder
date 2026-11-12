@@ -52,4 +52,7 @@ This skill does NOT modify production code or the project's build files.
 | `--out` | `-Out` | Output directory (stale results are removed first) |
 | `--project` (optional) | `-Project` (optional) | Project root, default the current directory |
 
+   - The script runs Gradle offline first (`--offline`, from the Gradle cache) and retries online only when the offline run failed on dependency resolution; the last line of `gradle.log` names the mode used.
+   - A dependency/network failure (e.g. `Could not resolve`, `status code 429` from Nexus) is an environment problem: report it to the user and stop. Never "fix" it in test code.
+
 3. Fix compile errors. Fill coverage gaps by adding cases (at most 3 rounds). Mapper targets are not JaCoCo-measured; every method the Mapper declares must be called in its test (`<MapperName>Test.java`). Report unreachable branches with a reason; do not fix failing tests.

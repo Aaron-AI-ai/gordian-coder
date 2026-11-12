@@ -29,19 +29,33 @@ write_status() { # compile coverage logfile
     | LC_ALL=C awk 'BEGIN{printf "{\"compile\":\"%s\",\"log\":\"", "'"$1"'"} NR>1{printf "\\n"} {printf "%s",$0} END{printf "\",\"coverage\":\"%s\"}\n", "'"$2"'"}' > "$OUT/status.json"
 }
 
+# Dependency/network failures (the plugin's env-failure.ts carries the same pattern). Only these go online.
+RESOLUTION='No cached version|offline mode|Could not resolve|Could not GET|Could not HEAD|Unable to load Maven meta-data|status code (401|403|407|429|5[0-9][0-9])|Connection (refused|reset|timed out)|UnknownHost|Read timed out'
+# run_gradle <args>: offline first (no repository round-trip for cached SNAPSHOTs); once online only when the
+# offline run failed on dependency resolution. Output to $LOG, closed by a line naming the mode used.
+run_gradle() {
+  MODE=offline
+  $GR "$@" --offline > "$LOG" 2>&1; RC=$?
+  if [ $RC -ne 0 ] && LC_ALL=C grep -qiE "$RESOLUTION" "$LOG"; then
+    MODE='offline failed on dependency resolution -> retried online'
+    $GR "$@" > "$LOG" 2>&1; RC=$?
+  fi
+  echo "[run-coverage] gradle mode: $MODE" >> "$LOG"
+  return $RC
+}
+
 rm -rf "$OUT/jacoco.exec" "$OUT/jacoco.xml" "$OUT/test-results" "$OUT/status.json"
 LOG=$OUT/gradle.log
 if [ -f ./gradlew ]; then GR="sh ./gradlew"
 elif command -v gradle >/dev/null 2>&1; then GR=gradle
 else echo "neither ./gradlew nor gradle found" > "$LOG"; write_status fail missing "$LOG"; exit 0; fi
 
-$GR ":$GMOD:testClasses" -I "$HERE/init.gradle" > "$LOG" 2>&1 \
-  || { write_status fail missing "$LOG"; exit 0; }
+run_gradle ":$GMOD:testClasses" -I "$HERE/init.gradle" || { write_status fail missing "$LOG"; exit 0; }
 
 rm -rf "$MDIR/build/test-results/test"
 # cleanTest forces a real run; a cached/UP-TO-DATE test task would write no jacoco.exec
-$GR ":$GMOD:cleanTest" ":$GMOD:test" --continue -I "$HERE/init.gradle" \
-  "-Pfut.agent=$TOOLS/jacocoagent.jar" "-Pfut.exec=$OUT/jacoco.exec" "-Pfut.tests=$TESTS" > "$LOG" 2>&1
+run_gradle ":$GMOD:cleanTest" ":$GMOD:test" --continue -I "$HERE/init.gradle" \
+  "-Pfut.agent=$TOOLS/jacocoagent.jar" "-Pfut.exec=$OUT/jacoco.exec" "-Pfut.tests=$TESTS"
 
 [ -d "$MDIR/build/test-results/test" ] && cp -R "$MDIR/build/test-results/test" "$OUT/test-results"
 

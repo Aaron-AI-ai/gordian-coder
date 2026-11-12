@@ -34,7 +34,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-coverage.ps1 -Mo
 
 두 스크립트는 같은 파일을 만든다. Windows는 PowerShell 스크립트를 쓴다. 단 이 개발 환경에서는 PowerShell 실행을 검증하지 못했다(not verified in the development environment).
 
-결과 디렉터리에 `status.json`, `jacoco.xml`, `test-results/`, `gradle.log`가 생긴다. 확인 항목은 두 가지다.
+결과 디렉터리에 `status.json`, `jacoco.xml`, `test-results/`, `gradle.log`가 생긴다.
+
+- 스크립트는 Gradle을 먼저 오프라인(`--offline`, Gradle 캐시)으로 돌리고, 오프라인 실행이 의존성 해석 실패일 때만 온라인으로 한 번 더 돌린다. `gradle.log` 마지막 줄에 사용한 모드가 남는다.
+- 의존성·네트워크 실패(`Could not resolve`, Nexus의 `status code 429` 등)는 환경 문제다. 사용자에게 알리고 멈춘다. 테스트 코드로 "고치지" 않는다. 확인 항목은 두 가지다.
 
 1. **빌드(컴파일) 성공.** 실패하면 오류 메시지의 파일·줄을 보고 테스트 코드를 고친 뒤 다시 돌린다(컴파일 재시도는 보강 횟수에 포함하지 않는다).
 2. **대상 클래스의 JaCoCo 라인·분기 커버리지** (목표 100%).

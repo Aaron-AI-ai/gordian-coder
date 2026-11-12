@@ -19,6 +19,7 @@ import { checkTestSource, testMethodNames } from "./test-check";
 import { writeReport } from "./report";
 import { checkMapperTargets, mapperDefects, type MapperCheck } from "./mapper";
 import { BASH_RULE, bashAllowed, coverageCommandLine, type BashContext } from "./bash-gate";
+import { environmentFailureLine } from "./env-failure";
 
 export { MAX_WAIT_CALLS, UNIT_TEST_SKILL_NAME };
 
@@ -483,6 +484,28 @@ function sendBackToFix(session: FutSession, problems: string[]): string {
   return advance(session, "execute", `Back to execute (fix ${session.fixRetries}/${MAX_FIX_RETRIES}). Fix:\n${detail}`);
 }
 
+/**
+ * A build that failed on dependency resolution or the network: not a test-code defect, so it stays in verify
+ * (no new write needed) and the model must hand it to the user. Still a fix retry, so the loop ends.
+ */
+function environmentFailure(session: FutSession, line: string): string {
+  const reason = `The build failed on a dependency/network problem in the environment, not in the tests: ${line}`;
+  session.lastProblems = [reason];
+  session.fixRetries += 1;
+  if (session.fixRetries > MAX_FIX_RETRIES) {
+    session.verification = "incomplete";
+    return advance(session, "report", `Fix limit (${MAX_FIX_RETRIES}) reached. Report this run as INCOMPLETE.\n${reason}`);
+  }
+  // The same status.json must not be judged again: the next verify needs a fresh run of the script.
+  session.verifyBaseline["status.json"] = fs.statSync(path.join(session.cwd, session.runDir!, "status.json")).mtimeMs;
+  return [
+    `Rejected (fix retry ${session.fixRetries}/${MAX_FIX_RETRIES}): this is a dependency/network problem in the environment, not in the test code.`,
+    `First matching line: ${line}`,
+    "So do NOT edit the tests. Tell the user what failed (for example a Nexus/repository rate limit, authentication or network failure) and END YOUR TURN.",
+    `After the user has fixed it, run the coverage script again and call ${STAGE_TOOL} with stage "verify" again.`,
+  ].join("\n");
+}
+
 const RERUN = `Rejected: run run-coverage.sh first in this verify stage (its status.json and jacoco.xml must be newer than the stage entry).`;
 
 /** A verify call without fresh facts. It burns a fix retry so a run that never measures still ends. */
@@ -509,6 +532,8 @@ function completeVerify(session: FutSession, input: StageInput): string {
   session.verifyNote = input.note;
   session.failedTests = readFailedTests(path.join(session.cwd, session.runDir!, "test-results"));
 
+  const envLine = status.compile === "fail" ? environmentFailureLine(status.log ?? "") : null;
+  if (envLine) return environmentFailure(session, envLine);
   if (status.compile !== "ok") return sendBackToFix(session, [`Test compilation failed:\n${status.log ?? "(no log)"}`]);
   session.mapperChecks = mapperChecksOf(session);
   const defects = [...testDefects(session), ...mapperDefects(session.mapperChecks)];

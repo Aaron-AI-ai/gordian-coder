@@ -77,6 +77,10 @@ describe("f-unit-test-code coverage scripts", () => {
       expect(text).not.toContain("POSIX shell");
     }
     expect(read("SKILL.md")).toContain("not verified in the development environment");
+    for (const doc of ["SKILL.md", "docs/f-unit-test-verification-rule.md"]) {
+      expect(read(doc)).toContain("--offline");
+      expect(read(doc)).toContain("status code 429");
+    }
   });
 });
 

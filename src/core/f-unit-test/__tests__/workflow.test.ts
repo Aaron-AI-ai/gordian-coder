@@ -328,6 +328,48 @@ describe("verify", () => {
     expect(session().gapRounds).toBe(0);
   });
 
+  test("a dependency/network failure stays in verify, counts a retry and tells the model to stop", () => {
+    reachVerify();
+    const line = "> Could not HEAD 'http://nexus/m.xml'. Received status code 429 from server: Too many authentication attempts";
+    runCoverage({ compile: "fail", xml: null, log: `FAILURE: Build failed\n${line}\nBUILD FAILED in 6s` });
+    const out = done({ stage: "verify", note: "n" });
+    expect(session().stage).toBe("verify");
+    expect(session().fixRetries).toBe(1);
+    expect(out).toContain(line.trim());
+    expect(out).toContain("END YOUR TURN");
+    expect(out).toContain("do NOT edit the tests");
+    expect(out).not.toContain("defects in the tests");
+    // No new write is needed: a fresh rerun of the script is judged again in verify.
+    runCoverage();
+    expect(done({ stage: "verify", note: "n" })).toContain("fully covered");
+    expect(session().stage).toBe("report");
+  });
+
+  test("after an environment failure the old status.json is not judged again", () => {
+    reachVerify();
+    runCoverage({ compile: "fail", xml: null, log: "> Could not resolve a:b:1." });
+    done({ stage: "verify", note: "n" });
+    expect(done({ stage: "verify", note: "n" })).toContain("run run-coverage.sh first");
+    expect(session().fixRetries).toBe(2);
+  });
+
+  test("environment failures over the cap end incomplete with the reason in report.md", () => {
+    reachVerify();
+    for (let i = 1; i <= MAX_FIX_RETRIES; i++) {
+      runCoverage({ compile: "fail", xml: null, log: "> Could not resolve a:b:1." });
+      done({ stage: "verify", note: "n" });
+      expect(session().stage).toBe("verify");
+    }
+    runCoverage({ compile: "fail", xml: null, log: "> Could not resolve a:b:1." });
+    done({ stage: "verify", note: "n" });
+    expect(session().stage).toBe("report");
+    expect(session().verification).toBe("incomplete");
+    const out = done({ stage: "report", note: "s" });
+    const report = fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8");
+    expect(report).toContain("Could not resolve a:b:1.");
+    expect(report).toMatch(/dependency\/network/);
+  });
+
   test("fix retries over the cap end the run as incomplete", () => {
     reachVerify();
     for (let i = 1; i <= MAX_FIX_RETRIES; i++) {

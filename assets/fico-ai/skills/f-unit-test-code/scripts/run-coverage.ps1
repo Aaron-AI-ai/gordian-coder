@@ -61,6 +61,23 @@ function Invoke-Logged([string]$exe, [string[]]$argv, [bool]$append) {
   return $code
 }
 
+# Dependency/network failures (the plugin's env-failure.ts carries the same pattern). Only these go online.
+$resolution = 'No cached version|offline mode|Could not resolve|Could not GET|Could not HEAD|Unable to load Maven meta-data|status code (401|403|407|429|5[0-9][0-9])|Connection (refused|reset|timed out)|UnknownHost|Read timed out'
+
+# Offline first (no repository round-trip for cached SNAPSHOTs); once online only when the offline run failed
+# on dependency resolution. Output to gradle.log, closed by a line naming the mode used. Returns the exit code.
+function Invoke-Gradle([string[]]$argv) {
+  $mode = 'offline'
+  $code = Invoke-Logged $gradle ($prefix + $argv + @('--offline')) $false
+  # -match is case-insensitive, like grep -i in the sh version.
+  if ($code -ne 0 -and ([System.IO.File]::ReadAllText($log, [System.Text.Encoding]::UTF8) -match $resolution)) {
+    $mode = 'offline failed on dependency resolution -> retried online'
+    $code = Invoke-Logged $gradle ($prefix + $argv) $false
+  }
+  Write-Log @("[run-coverage] gradle mode: $mode") $true
+  return $code
+}
+
 try {
   foreach ($stale in @('jacoco.exec', 'jacoco.xml', 'test-results', 'status.json')) {
     Remove-Item -LiteralPath "$out/$stale" -Recurse -Force -ErrorAction SilentlyContinue
@@ -77,13 +94,13 @@ try {
     exit 0
   }
 
-  $code = Invoke-Logged $gradle ($prefix + @(":${gmod}:testClasses", '-I', $init)) $false
+  $code = Invoke-Gradle @(":${gmod}:testClasses", '-I', $init)
   if ($code -ne 0) { Write-Status 'fail' 'missing'; exit 0 }
 
   Remove-Item -LiteralPath "$mdir/build/test-results/test" -Recurse -Force -ErrorAction SilentlyContinue
   # cleanTest forces a real run; a cached/UP-TO-DATE test task would write no jacoco.exec
-  $null = Invoke-Logged $gradle ($prefix + @(":${gmod}:cleanTest", ":${gmod}:test", '--continue', '-I', $init,
-      "-Pfut.agent=$tools/jacocoagent.jar", "-Pfut.exec=$out/jacoco.exec", "-Pfut.tests=$testList")) $false
+  $null = Invoke-Gradle @(":${gmod}:cleanTest", ":${gmod}:test", '--continue', '-I', $init,
+    "-Pfut.agent=$tools/jacocoagent.jar", "-Pfut.exec=$out/jacoco.exec", "-Pfut.tests=$testList")
 
   if (Test-Path -LiteralPath "$mdir/build/test-results/test" -PathType Container) {
     Copy-Item -LiteralPath "$mdir/build/test-results/test" -Destination "$out/test-results" -Recurse -Force

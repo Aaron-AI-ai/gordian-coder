@@ -41,7 +41,7 @@ describe.skipIf(skip)("run-coverage.ps1", () => {
   test("tests pass but no jacoco.exec => coverage missing", () => {
     const { proj, out } = project();
     expect(run(["-Module", "app", "-Tests", "a.B", "-Out", out, "-Project", proj]).exitCode).toBe(0);
-    expect(status(out)).toEqual({ compile: "ok", log: "tests ran", coverage: "missing" });
+    expect(status(out)).toEqual({ compile: "ok", log: "tests ran\n[run-coverage] gradle mode: offline", coverage: "missing" });
   });
 
   test("log keeps only the last 40 lines", () => {
@@ -50,7 +50,8 @@ describe.skipIf(skip)("run-coverage.ps1", () => {
     run(["-Module", "app", "-Tests", "a.B", "-Out", out, "-Project", proj]);
     const s = status(out);
     expect(s.log.split("\n")).toHaveLength(40);
-    expect(s.log.startsWith("line61")).toBe(true);
+    expect(s.log.startsWith("line62")).toBe(true);
+    expect(s.log.endsWith("[run-coverage] gradle mode: offline")).toBe(true);
   });
 
   test("missing -Module, missing -Tests or an unknown argument exits 2 with usage", () => {
@@ -109,5 +110,64 @@ describe.skipIf(skip)("run-coverage.ps1", () => {
     const { proj, out } = project();
     run(["-Module", "app", "-Tests", "a.B", "-Out", out, "-Project", proj]);
     expect(fs.readFileSync(path.join(out, "status.json"))[0]).toBe(0x7b);
+  });
+  describe("offline first", () => {
+    const RESOLUTION = "> Could not HEAD 'http://nexus/m.xml'. Received status code 429 from server: Too many authentication attempts";
+    /** Offline and online calls print and exit as given; every call is recorded. */
+    function fake(proj: string, offline: [string, number], online: [string, number]): string {
+      const rec = path.join(proj, "calls.txt");
+      fs.writeFileSync(path.join(proj, "gradlew"),
+        `echo "$@" >> '${rec}'\ncase "$*" in\n  *--offline*) echo "${offline[0]}"; exit ${offline[1]};;\n  *) echo "${online[0]}"; exit ${online[1]};;\nesac\n`);
+      return rec;
+    }
+    const calls = (rec: string): string[] => fs.readFileSync(rec, "utf8").split("\n").filter(Boolean);
+
+    test("offline success never goes online", () => {
+      const { proj, out } = project();
+      const rec = fake(proj, ["offline ok", 0], ["online ok", 0]);
+      run(["-Module", "app", "-Tests", "a.B", "-Out", out, "-Project", proj]);
+      expect(calls(rec).every((c) => c.includes("--offline"))).toBe(true);
+      expect(calls(rec)).toHaveLength(2);
+      const s = status(out);
+      expect(s.compile).toBe("ok");
+      expect(s.log).toContain("[run-coverage] gradle mode: offline");
+      expect(fs.readFileSync(path.join(out, "gradle.log"), "utf8")).toContain("[run-coverage] gradle mode: offline");
+    });
+
+    test("an offline resolution failure is retried once online", () => {
+      const { proj, out } = project();
+      const rec = fake(proj, [RESOLUTION, 1], ["online ok", 0]);
+      run(["-Module", "app", "-Tests", "a.B", "-Out", out, "-Project", proj]);
+      // testClasses and the test run each: offline, then online
+      expect(calls(rec).map((c) => c.includes("--offline"))).toEqual([true, false, true, false]);
+      const s = status(out);
+      expect(s.compile).toBe("ok");
+      expect(s.log).toContain("online ok");
+      expect(s.log).toContain("[run-coverage] gradle mode: offline failed on dependency resolution -> retried online");
+    });
+
+    test("a javac error offline is not retried online", () => {
+      const { proj, out } = project();
+      const rec = fake(proj, ["X.java:3: error: cannot find symbol", 1], ["online ok", 0]);
+      run(["-Module", "app", "-Tests", "a.B", "-Out", out, "-Project", proj]);
+      expect(calls(rec)).toHaveLength(1);
+      const s = status(out);
+      expect(s.compile).toBe("fail");
+      expect(s.log).toContain("cannot find symbol");
+      expect(s.log).toContain("[run-coverage] gradle mode: offline");
+      expect(s.log).not.toContain("retried online");
+    });
+
+    test("a resolution failure online too is a compile failure with the online output", () => {
+      const { proj, out } = project();
+      const rec = fake(proj, ["> No cached version of a:b:1 available for offline mode.", 1], [RESOLUTION, 1]);
+      run(["-Module", "app", "-Tests", "a.B", "-Out", out, "-Project", proj]);
+      expect(calls(rec)).toHaveLength(2);
+      const s = status(out);
+      expect(s.compile).toBe("fail");
+      expect(s.log).toContain("status code 429");
+      expect(s.log).not.toContain("No cached version");
+      expect(s.log).toContain("retried online");
+    });
   });
 });
