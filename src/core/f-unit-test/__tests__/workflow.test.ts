@@ -161,6 +161,22 @@ describe("plan", () => {
     expect(session().plan).toBeUndefined();
   });
 
+  test("plan guide tells the model to ask the user when a required input is missing", () => {
+    const guide = renderStageGuide("plan", session());
+    expect(guide).toContain("ASK THE USER and END YOUR TURN");
+    expect(guide).toContain("--program ID matches no");
+    expect(guide).toContain("Gradle module");
+  });
+
+  test("a rejected plan tells the model to ask the user for what it cannot determine, not to guess", () => {
+    const missing = done({ stage: "plan", note: "p", inputs: { ...okPlan(), module: "" } });
+    expect(missing).toStartWith("Rejected:");
+    expect(missing).toContain("ask the user");
+    expect(missing).toContain("END YOUR TURN");
+    expect(done({ stage: "plan", note: "  ", inputs: okPlan() })).toContain("ask the user");
+    expect(session().plan).toBeUndefined();
+  });
+
   test("plan accepts skip_reason instead of cases", () => {
     const plan = okPlan();
     plan.cases[0] = { target: TARGET, method: "toString", normal: [], boundary: [], exception: [], mocks: [], skip_reason: "generated getter" };

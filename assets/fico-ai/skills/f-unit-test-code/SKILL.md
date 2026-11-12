@@ -23,6 +23,7 @@ This skill does NOT modify production code or the project's build files.
    - `docs/f-unit-test-case-rule.md`
 2. Read each target class. List its public methods, the external collaborators to mock, and the Spring Boot version (root `build.gradle`) and test profile situation.
 3. For every target class decide the cases per method (normal 2, boundary, exception) following the case rule. Methods you skip need a `skip_reason`.
+4. If a required input is missing, ask the user and stop; never guess. That means: no target (no `--files`, no `--program`, and git shows no changed Java file), a `--program` ID that matches no Controller/Service class, a `--files` path that does not exist, a Gradle module that is unclear (targets in none or in several modules), or case details you cannot derive from the code (for example which exception a branch should raise).
 
 ### 2. Implement with the templates
 1. Pick the template:

@@ -105,6 +105,10 @@ interface Stage {
 
 const WRITES = ["edit", "write", "apply_patch", "multiedit", "patch"];
 const SCRIPT = "scripts/run-coverage.sh";
+/** What the plan cannot do without; shared by the plan guide and the plan rejection text. */
+const ASK_USER_WHEN =
+  "(1) the target: no --files and no --program was given and git shows no changed Java file, or the --program ID matches no Controller/Service class, or a --files path does not exist; (2) the Gradle module, when the targets sit in none or in several modules; (3) the case details you cannot derive from the code, such as which exception a branch is meant to raise";
+const ASK_USER_NOTE = `If a value cannot be determined from the request or the project, ask the user for it and END YOUR TURN; do not guess or leave placeholders. Then submit the plan again.`;
 const POSIX_NOTE = "The verify step needs a POSIX shell (Git Bash or WSL on Windows); Windows execution of the coverage script is untested.";
 
 export const STAGES: Record<StageId, Stage> = {
@@ -114,6 +118,7 @@ export const STAGES: Record<StageId, Stage> = {
       `Load the \`${UNIT_TEST_SKILL_NAME}\` skill with the skill tool and read its docs/ rules and templates/. If the skill is missing, STOP and tell the user to run \`gdc fico-check\`.`,
       'Pick the mode from the request: `--files <paths>` → "files"; `--program <ID>` → "program" (the Controller, Service and, if needed, In/Out VO whose class names start with the ID); no argument → "git" (working tree and staged changes against HEAD, or the last commit when there are none; read-only git commands are allowed in bash).',
       "Find the Gradle module of the targets (e.g. `on-stk-ord-online`) and check the Spring Boot version in the root build.gradle (below 3.4: @MockBean instead of @MockitoBean).",
+      `If a required input is missing or cannot be settled from the request and the project, ASK THE USER and END YOUR TURN before doing anything else; never guess and never put a placeholder in \`inputs\`. Required inputs: ${ASK_USER_WHEN}.`,
       "For every public method of each target define cases: at least two normal, one boundary and one exception, plus the external classes to mock (other modules, Mappers, Redis, external API clients). A method that really needs no test gets `skip_reason` instead.",
       "Test files go under the module's src/test/java in the target's package as `<ClassName>Test.java`; a test profile may go under src/test/resources. An existing test file is extended, never replaced: keep every existing @Test method.",
       `Write the plan for the user in your reply, then call ${STAGE_TOOL} with stage "plan", the plan as \`note\` and \`inputs\` = { mode, module, targets, files, cases: [{ target, method, normal, boundary, exception, mocks, skip_reason? }] } with project-relative paths. Once it is accepted, END YOUR TURN. Any further tool call while the plan waits is refused, and repeated calls stop the turn.`,
@@ -374,11 +379,11 @@ function planProblems(p: PlanInputs, cwd: string): string[] {
 }
 
 function submitPlan(session: FutSession, input: StageInput): string {
-  if (!input.note?.trim()) return "Rejected: the plan needs a `note` describing it for the user.";
+  if (!input.note?.trim()) return `Rejected: the plan needs a \`note\` describing it for the user.\n${ASK_USER_NOTE}`;
   const inputs = normalizeInputs(input.inputs ?? {}, session.cwd);
   const problems = planProblems(inputs, session.cwd);
   if (problems.length > 0) {
-    return `Rejected: the plan is not valid. Fix these fields and submit again:\n${problems.map((p) => `- ${p}`).join("\n")}`;
+    return `Rejected: the plan is not valid. Fix these fields and submit again:\n${problems.map((p) => `- ${p}`).join("\n")}\n${ASK_USER_NOTE}`;
   }
   session.previousMethods = {};
   for (const f of inputs.files) {
