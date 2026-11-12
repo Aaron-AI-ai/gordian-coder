@@ -25,10 +25,14 @@ MDIR=$(printf '%s' "$GMOD" | sed 's#:#/#g')
 # Patterns shared with the plugin's env-failure.ts (a test checks they are identical; keep them in sync).
 # Dependency/network failures:
 RESOLUTION='No cached version|offline mode|Could not resolve|Could not GET|Could not HEAD|Could not download|Could not find [A-Za-z0-9_.:-]+:[A-Za-z0-9_.-]+:|Unable to load Maven meta-data|status code (401|403|407|429|5[0-9][0-9])|Server returned HTTP response code: (401|403|407|429|5[0-9][0-9])|Connection (refused|reset|timed out)|UnknownHost|Read timed out'
-# javac errors (case-sensitive): javac echoes source lines, so a log with one is never a resolution failure.
-JAVAC='\.java:[0-9]+: error:'
+# javac errors or summary lines, English or Korean locale (case-sensitive, per line): javac echoes source lines,
+# so a log with one is never a resolution failure.
+JAVAC='\.java:[0-9]+: (error|오류):|^[0-9]+ errors?$|^오류 [0-9]+개$'
 # javac errors in production sources: offline, a stale cached SNAPSHOT looks like this.
-MAIN_JAVAC='src[/\\]main[/\\]java[/\\].*\.java:[0-9]+: error:'
+MAIN_JAVAC='src[/\\]main[/\\]java[/\\].*\.java:[0-9]+: (error|오류):'
+# English diagnostics where the JVM honours it (a Gradle daemon started earlier keeps its own locale; JAVAC covers ko).
+# Exported for this script's process only.
+export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Duser.language=en -Duser.country=US"
 
 write_status() { # compile coverage logfile
   # The first environment line leads the tail: the plugin judges from status.json, which keeps only 40 lines.

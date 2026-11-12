@@ -168,6 +168,28 @@ describe.skipIf(skip)("run-coverage.ps1", () => {
       expect(s.log).not.toContain("first environment line");
     });
 
+    test("a Korean-locale javac error mentioning UnknownHost is not retried online", () => {
+      const { proj, out } = project();
+      const rec = fake(proj, ["/p/app/src/test/java/x/AT.java:3: 오류: 심볼을 찾을 수 없습니다 UnknownHostException", 1], ["online ok", 0]);
+      run(["-Module", "app", "-Tests", "a.B", "-Out", out, "-Project", proj]);
+      expect(calls(rec)).toHaveLength(1);
+      expect(status(out).log).not.toContain("first environment line");
+    });
+
+    test("Gradle sees JAVA_TOOL_OPTIONS with an English locale appended to the caller's value", () => {
+      const { proj, out } = project();
+      const rec = path.join(proj, "jto.txt");
+      fs.writeFileSync(path.join(proj, "gradlew"), `echo "$JAVA_TOOL_OPTIONS" >> '${rec}'\n`);
+      run(["-Module", "app", "-Tests", "a.B", "-Out", out, "-Project", proj], { JAVA_TOOL_OPTIONS: "-Xmx1g" });
+      const seen = fs.readFileSync(rec, "utf8").split("\n").filter(Boolean);
+      expect(seen).toHaveLength(2);
+      for (const v of seen) expect(v).toBe("-Xmx1g -Duser.language=en -Duser.country=US");
+      const { JAVA_TOOL_OPTIONS: _drop, ...env } = process.env;
+      fs.writeFileSync(rec, "");
+      Bun.spawnSync([shell!, "-NoProfile", "-File", script, ...["-Module", "app", "-Tests", "a.B", "-Out", out, "-Project", proj]], { env });
+      expect(fs.readFileSync(rec, "utf8").split("\n")[0]!.trim()).toBe("-Duser.language=en -Duser.country=US");
+    });
+
     test("main-source javac errors offline (stale SNAPSHOT) are retried once online", () => {
       const { proj, out } = project();
       const rec = fake(proj, ["/p/app/src/main/java/x/A.java:3: error: cannot find symbol", 1], ["online ok", 0]);

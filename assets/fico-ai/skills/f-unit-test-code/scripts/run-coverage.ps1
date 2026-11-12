@@ -43,12 +43,15 @@ function Write-Log([string[]]$lines, [bool]$append) {
 # Patterns shared with the plugin's env-failure.ts (a test checks they are identical; keep them in sync).
 # Dependency/network failures (matched case-insensitively, like grep -i):
 $resolution = 'No cached version|offline mode|Could not resolve|Could not GET|Could not HEAD|Could not download|Could not find [A-Za-z0-9_.:-]+:[A-Za-z0-9_.-]+:|Unable to load Maven meta-data|status code (401|403|407|429|5[0-9][0-9])|Server returned HTTP response code: (401|403|407|429|5[0-9][0-9])|Connection (refused|reset|timed out)|UnknownHost|Read timed out'
-# javac errors (case-sensitive, -cmatch): javac echoes source lines, so a log with one is never a resolution failure.
-$javac = '\.java:[0-9]+: error:'
+# javac errors or summary lines, English or Korean locale (case-sensitive -cmatch, per line): javac echoes source
+# lines, so a log with one is never a resolution failure. Korean is spelled \uXXXX: 5.1 reads a BOM-less .ps1 as ANSI.
+$javac = '\.java:[0-9]+: (error|\uC624\uB958):|^[0-9]+ errors?$|^\uC624\uB958 [0-9]+\uAC1C$'
 # javac errors in production sources: offline, a stale cached SNAPSHOT looks like this.
-$mainJavac = 'src[/\\]main[/\\]java[/\\].*\.java:[0-9]+: error:'
+$mainJavac = 'src[/\\]main[/\\]java[/\\].*\.java:[0-9]+: (error|\uC624\uB958):'
 
 function Read-Log { [System.IO.File]::ReadAllText($log, [System.Text.Encoding]::UTF8) }
+# True when a line of gradle.log matches (case-sensitive), like grep without -i.
+function Test-LogLine([string]$pattern) { @(((Read-Log) -split '\r?\n') -cmatch $pattern).Count -gt 0 }
 
 function Write-Status([string]$compile, [string]$coverage) {
   $tail = ''
@@ -57,7 +60,7 @@ function Write-Status([string]$compile, [string]$coverage) {
     $lines = @([System.IO.File]::ReadAllLines($log, [System.Text.Encoding]::UTF8))
     $last = @($lines | Select-Object -Last 40)
     # The first environment line leads the tail: the plugin judges from status.json, which keeps only 40 lines.
-    if (-not ((Read-Log) -cmatch $javac)) {
+    if (-not (Test-LogLine $javac)) {
       $envLine = @($lines | Where-Object { $_ -match $resolution } | Select-Object -First 1)
       if ($envLine.Count -gt 0) { $last = @("[run-coverage] first environment line: $($envLine[0])") + $last }
     }
@@ -84,14 +87,18 @@ function Invoke-Gradle([string[]]$argv) {
   $mode = 'offline'
   $code = Invoke-Logged $gradle ($prefix + $argv + @('--offline')) $false
   if ($code -ne 0) {
-    $text = Read-Log
-    if ($text -cmatch $mainJavac) { $mode = 'offline failed with main-source errors -> retried online' }
-    elseif (-not ($text -cmatch $javac) -and ($text -match $resolution)) { $mode = 'offline failed on dependency resolution -> retried online' }
+    if (Test-LogLine $mainJavac) { $mode = 'offline failed with main-source errors -> retried online' }
+    elseif (-not (Test-LogLine $javac) -and ((Read-Log) -match $resolution)) { $mode = 'offline failed on dependency resolution -> retried online' }
     if ($mode -ne 'offline') { $code = Invoke-Logged $gradle ($prefix + $argv) $false }
   }
   Write-Log @("[run-coverage] gradle mode: $mode") $true
   return $code
 }
+
+# English diagnostics where the JVM honours it (a Gradle daemon started earlier keeps its own locale; $javac covers ko).
+# Restored in finally, so a caller's session keeps its value even when the script is run in-process.
+$savedJto = $env:JAVA_TOOL_OPTIONS
+if ($savedJto) { $env:JAVA_TOOL_OPTIONS = "$savedJto -Duser.language=en -Duser.country=US" } else { $env:JAVA_TOOL_OPTIONS = '-Duser.language=en -Duser.country=US' }
 
 try {
   foreach ($stale in @('jacoco.exec', 'jacoco.xml', 'test-results', 'status.json')) {
@@ -140,5 +147,7 @@ try {
   # Never leave the run without facts: an unexpected error is recorded as a failed build.
   try { Write-Log @("run-coverage.ps1 error: $($_.Exception.Message)") $true } catch { }
   try { Write-Status 'fail' 'missing' } catch { }
+} finally {
+  $env:JAVA_TOOL_OPTIONS = $savedJto
 }
 exit 0

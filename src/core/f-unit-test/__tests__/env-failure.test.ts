@@ -55,6 +55,16 @@ describe("environment failure", () => {
     expect(isEnvironmentFailure(`FAILURE\n${NEXUS_429}`)).toBe(true);
   });
 
+  test("a Korean-locale javac error (오류:) or summary line is still a javac error", () => {
+    expect(isEnvironmentFailure("/p/m/src/test/java/x/AT.java:5: 오류: 심볼을 찾을 수 없습니다\nimport java.net.UnknownHostException;")).toBe(false);
+    expect(isEnvironmentFailure("import java.net.UnknownHostException;\n오류 1개")).toBe(false);
+    expect(isEnvironmentFailure("import java.net.UnknownHostException;\n2 errors")).toBe(false);
+    expect(isEnvironmentFailure("import java.net.UnknownHostException;\r\n1 error\r\n")).toBe(false);
+    // a summary-like phrase inside a longer line is not a javac summary
+    expect(isEnvironmentFailure(`Retried 3 errors later\n${NEXUS_429}`)).toBe(true);
+    expect(new RegExp(MAIN_JAVAC_ERROR_PATTERN).test("C:\\p\\src\\main\\java\\x\\A.java:3: 오류: x")).toBe(true);
+  });
+
   test("main-source javac errors are told apart from test-source ones (both path styles)", () => {
     const main = new RegExp(MAIN_JAVAC_ERROR_PATTERN);
     const javac = new RegExp(JAVAC_ERROR_PATTERN);
@@ -71,9 +81,14 @@ describe("environment failure", () => {
     expect(environmentFailureLine("error: cannot find symbol")).toBeNull();
   });
 
+  // Windows PowerShell 5.1 reads a BOM-less .ps1 in the ANSI code page (CP949 on Korean Windows), so the .ps1 stays
+  // pure ASCII and spells non-ASCII pattern characters as .NET \uXXXX escapes; sh carries them literally (UTF-8 bytes).
+  const psEscaped = (p: string): string => p.replace(/[^\x00-\x7f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}`);
   test.each(["run-coverage.sh", "run-coverage.ps1"])("%s retries online on exactly the plugin's pattern", (name) => {
     const src = fs.readFileSync(path.join(resolveAssetsDir(), "fico-ai/skills", UNIT_TEST_SKILL_NAME, "scripts", name), "utf8");
-    for (const p of [ENV_FAILURE_PATTERN, JAVAC_ERROR_PATTERN, MAIN_JAVAC_ERROR_PATTERN]) expect(src).toContain(`'${p}'`);
+    const spell = name.endsWith(".ps1") ? psEscaped : (p: string): string => p;
+    for (const p of [ENV_FAILURE_PATTERN, JAVAC_ERROR_PATTERN, MAIN_JAVAC_ERROR_PATTERN]) expect(src).toContain(`'${spell(p)}'`);
+    if (name.endsWith(".ps1")) expect(src).toMatch(/^[\x00-\x7f]*$/);
     expect(src).toContain("--offline");
   });
 });
