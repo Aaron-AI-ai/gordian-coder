@@ -10,7 +10,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 > **설치는 PowerShell에서** `install.ps1`을 직접 실행하세요. OpenCode 실행은 Git Bash를 권장합니다
-> ([OpenCode 가이드 부록](opencode-install-windows.md#부록-실행-터미널-선택--git-bash-권장) 참고).
+> ([OpenCode 가이드 부록](01-opencode-install.md#부록-실행-터미널-선택--git-bash-권장) 참고).
 
 ### 진행 단계
 
@@ -210,7 +210,7 @@ gdc --init                        Cline 훅 설치 (.clinerules\hooks)
 gdc --deinit                      Cline 훅 제거
 gdc --init-opencode --global      OpenCode 플러그인 등록
 gdc --deinit-opencode --global    OpenCode 플러그인 해제
-gdc kb-sync                       git wiki → KB 동기화 (사용법: f-review-usage.md 5장)
+gdc kb-sync                       git wiki → KB 동기화 (사용법: 03-f-review.md 의 4장)
 ```
 
 | 대상 | 경로 |

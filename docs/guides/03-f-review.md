@@ -5,6 +5,15 @@ gordian-coder를 OpenCode 플러그인으로 붙이면 `/f-review` 명령이 생
 
 > 이 문서의 명령과 경로는 모두 **Windows Git Bash** 기준입니다 (`C:\workspace` → `/c/workspace`).
 
+| 장 | 이럴 때 보세요 |
+|---|---|
+| [1. 개요](#1-개요) | 동작 구조와 서브에이전트 |
+| [2. 기본 사용법](#2-기본-사용법) | 처음 리뷰를 돌려볼 때. 실행 위치, 대상 지정, 자주 쓰는 옵션 |
+| [3. 설정](#3-설정) | 동시 실행 수·모델·출력 경로를 바꾸거나 프로젝트 전용 규칙(`rulesDir`)을 추가할 때 |
+| [4. KB 동기화](#4-kb-동기화-gdc-kb-sync) | 사내 프레임워크 KB(wiki)를 받아야 할 때, `gdc kb-sync`가 실패할 때 |
+| [5. 리포트와 산출물](#5-리포트와-산출물) | 리포트 위치, 리뷰가 멈췄거나 결과가 이상할 때 중간 산출물 확인 |
+| [6. 일괄 실행 명령 모음](#6-일괄-실행-명령-모음-복사용-한-줄) | 프로젝트 전체·모듈 단위로 한꺼번에 돌릴 때 (복사해서 쓰는 명령) |
+
 ---
 
 ## 1. 개요
@@ -29,13 +38,11 @@ gordian-coder를 OpenCode 플러그인으로 붙이면 `/f-review` 명령이 생
 
 ### 세 가지 서브에이전트
 
-
 | 에이전트           | 역할                      | 도구                                            |
 | -------------- | ----------------------- | --------------------------------------------- |
 | **f-reviewer** | 파일 하나를 규칙 체크리스트로 리뷰     | `f_review_context`, 탐색 6종, `f_review_submit`  |
 | **f-judge**    | 제출된 리뷰를 적대적으로 채점(0-100) | `f_review_judge_context`, `f_review_judge`    |
 | **f-fixer**    | fcq 위반의 수정 코드(TO-BE) 작성 | `f_review_fix_context`, `f_review_fix_submit` |
-
 
 각 에이전트는 `"*": "deny"` 기본에 필요한 도구만 열려 있습니다. bash·write·edit 같은
 OpenCode 내장 도구는 전부 차단되어 있어 **리뷰 중 코드가 수정되지 않습니다.**
@@ -100,14 +107,12 @@ OpenCode TUI에서 **리뷰할 파일을 지정**합니다.
 
 ### 자주 쓰는 옵션
 
-
 | 옵션            | 설명                         |
 | ------------- | -------------------------- |
 | `--output=경로` | 리포트 경로 (파일 또는 디렉터리)        |
 | `--deep=N`    | 파일당 리뷰 라운드 1~5 (기본 1)      |
 | `--judge`     | 판정 게이트 켜기                  |
 | `--fcq`       | 정적 분석(fcq) 실행 후 결과를 증거로 주입 |
-
 
 **예시**
 
@@ -124,7 +129,7 @@ OpenCode TUI에서 **리뷰할 파일을 지정**합니다.
 > 이 옵션들은 **설정 파일에 미리 넣어두면 매번 입력하지 않아도 됩니다.**
 > `--output` → `output`, `--deep=N` → `deepPasses`, `--judge` → `judge`,
 > `--fcq` → `fcq` 로 대응됩니다. 명령에 준 값이 설정보다 우선합니다.
-> 작성 방법은 [4. 설정 파일](#4-설정-파일)을 참고하세요.
+> 작성 방법은 [3. 설정](#3-설정)을 참고하세요.
 
 ### 리뷰 관점 6가지
 
@@ -137,27 +142,9 @@ OpenCode TUI에서 **리뷰할 파일을 지정**합니다.
 
 ---
 
-## 3. git commit 단위 리뷰
+## 3. 설정
 
-`/f-review`는 파일 지정 없이 **커밋(또는 범위)** 만으로도 대상을 정할 수 있습니다.
-
-```
-대상 = (커밋 diff 파일) ∪ (--files) − exclude
-```
-
-
-| 구분                    | 명령 예시                                           | 해석되는 범위            | 설명                                             |
-| --------------------- | ----------------------------------------------- | ------------------ | ---------------------------------------------- |
-| 기본값 (인자 없음)           | `/f-review`                                     | `HEAD~1..HEAD`     | 최근 커밋 1개만 리뷰. 커밋을 만든 직후 바로 확인할 때.              |
-| HEAD·단일 커밋            | `/f-review HEAD`<br>`/f-review a1b2c3d`         | `<ref>~1..<ref>`   | 특정 커밋 하나만 콕 집어 그 변경분만 리뷰.                      |
-| 범위 (A..B)             | `/f-review main..feature/x`                     | `A..B` (그대로)       | A와 B 두 커밋 사이의 diff 전체를 한 번에 리뷰                 |
-| from/to 범위 분리 지정      | `--from=main --to=feature/x`<br>`--from=v1.2.0` | `A..B` / `A..HEAD` | `to` 생략 시 HEAD까지. bare 범위와 결과 동일.              |
-| 파일만 (커밋 없이 `--files`) | `--files=A.java,B.java`                         | 커밋 diff 없음 (파일 모드) | 지정 파일 자체가 대상, 전체 파일 검토. 아직 커밋 안 한 작업 중 파일에 적합. |
-
-
----
-
-## 4. 설정 파일
+`.fico/config/fico_ai.json`과 프로젝트 규칙(`rulesDir`)을 설정하는 방법입니다.
 
 ### 위치
 
@@ -219,7 +206,6 @@ f-review 설정은 **`review` 키 아래**에 넣습니다. `review` 섹션의 �
 
 ### 전체 키
 
-
 | 키              | 타입       | 기본값                    | 설명                                                  |
 | -------------- | -------- | ---------------------- | --------------------------------------------------- |
 | `language`     | string   | `"ko"`                 | 리포트·지적 언어. `ko` / `en` / `ja`                       |
@@ -257,7 +243,7 @@ f-review 설정은 **`review` 키 아래**에 넣습니다. `review` 섹션의 �
 globs: "*.java"
 ---
 
-#### 트랜잭션 규칙
+### 트랜잭션 규칙
 - Service 의 쓰기 메서드에는 @Transactional 을 붙인다
 - Controller 에서 트랜잭션을 시작하지 않는다
 ```
@@ -271,10 +257,9 @@ globs: "*.java"
 - 한 파일에 적용되는 규칙 본문은 **합계 20,000자**까지만 들어갑니다. 넘으면 뒤가 잘리니 `globs`로 나누세요
 - 같은 디렉터리를 f-log도 읽습니다. f-log용 조건(`exceptions:`, `handler:`)만 있고 `globs`가 없는 규칙은 특정 에러에 대한 내용이라 f-review에서는 건너뜁니다
 
-
 ---
 
-## 5. KB 동기화 (`gdc kb-sync`)
+## 4. KB 동기화 (`gdc kb-sync`)
 
 git wiki(`<저장소>.wiki.git`)의 `.md` 문서를 프로젝트 안의 KB 디렉터리로 내려받습니다.
 f-review의 `framework_kb` 규칙이 이 디렉터리를 참조하므로, **리뷰 전에 한 번 받아두면 됩니다.**
@@ -283,7 +268,7 @@ f-review의 `framework_kb` 규칙이 이 디렉터리를 참조하므로, **리�
 - 방식: **미러** — 받을 때마다 대상 디렉터리를 지우고 다시 채웁니다. 그 안에 직접 만든 파일은 사라집니다
 - 실행 위치: **프로젝트 루트** (설정 파일을 현재 디렉터리 기준으로 찾습니다)
 
-### 5.1 사전 설정 ① — wiki 주소 등록
+### 사전 설정 ① — wiki 주소 등록
 
 `.fico/config/fico_ai.json` 의 `wikiKb`에 등록합니다. (`review` 섹션 밖, 최상위)
 
@@ -303,7 +288,7 @@ f-review의 `framework_kb` 규칙이 이 디렉터리를 참조하므로, **리�
 | `url` | ✔ | wiki의 **git 주소**. 웹 주소 뒤에 `.wiki.git`이 붙습니다 (브라우저 주소 `.../fico-wiki/-/wikis/home` → `.../fico-wiki.wiki.git`) |
 | `tokenEnv` | | 토큰을 담은 **환경변수 이름**. 토큰 값 자체를 적지 마세요 |
 
-### 5.2 사전 설정 ② — git 토큰
+### 사전 설정 ② — git 토큰
 
 폐쇄망 GitLab이 로그인 없이 읽기를 허용하지 않으면 **PAT(Personal Access Token)** 가 필요합니다.
 
@@ -327,7 +312,7 @@ source ~/.bashrc
 자격증명(Windows 자격 증명 관리자, SSH 키, `~/.netrc`)을 그대로 사용합니다. 사내에서 이미
 `git clone`이 되는 환경이면 토큰 설정 없이도 동작합니다.
 
-### 5.3 사용
+### 사용
 
 ```bash
 cd /c/workspace/내프로젝트
@@ -345,7 +330,7 @@ gdc kb-sync                  # 동기화
 
 옵션 없이 실행하면 **원격 커밋이 그대로일 때 다운로드를 건너뜁니다.** 매일 돌려도 부담 없습니다.
 
-### 5.4 정상 동작 확인
+### 정상 동작 확인
 
 **① 명령 출력**
 
@@ -370,9 +355,9 @@ find .fico/kb/fico_framework -name '*.md' | wc -l
 
 ---
 
-## 6. 리포트가 만들어지는 과정
+## 5. 리포트와 산출물
 
-### 6.1 산출물 위치
+### 산출물 위치
 
 ```
 .fico/report/f-review/report-<날짜>-<runId>/review.md      ← 리포트 (실행마다 디렉터리 하나)
@@ -393,7 +378,7 @@ AI 리뷰 → 구분선 → 정적 분석 순으로 묶입니다. `fcq+AI` 행�
 > 최신 결과는 디렉터리 이름(날짜)이나 수정 시각으로 찾습니다. 예전 버전의 리포트는 `fcq/report/f-review/`에 남아 있습니다. (이전 버전은 쓸 때마다 폴더째
 > `f-review.<타임스탬프>`로 옮겼고, 그 때문에 리포트가 여러 폴더로 갈라졌습니다.)
 
-### 6.2 중간 산출물
+### 중간 산출물
 
 리뷰가 도는 동안 모든 상태가 디스크에 남습니다. 문제 추적의 출발점입니다.
 
@@ -414,3 +399,117 @@ AI 리뷰 → 구분선 → 정적 분석 순으로 묶입니다. `fcq+AI` 행�
 한 번에 최대 100개 파일, 동시 서브에이전트 수는 `batchSize`(기본 5). 1000줄 초과
 whole-file 대상은 세그먼트 unit(`path#start-end`)으로 쪼개져 각각 디스패치되고,
 리포트에서는 파일 1개 섹션으로 합쳐진다(겹침 구간 중복 제거 포함).
+
+---
+
+## 6. 일괄 실행 명령 모음 (복사용 한 줄)
+
+프로젝트 루트(예: `/Users/koscom/workspace/fico/on-stk-ord`)에서 실행합니다. 모델은 필요에 맞게 바꾸세요.
+한 run에 최대 100파일. 파일만 넘기면 whole-file 모드로 돌고, 1000줄 초과 파일은 500줄 unit으로 쪼개져 병렬 리뷰됩니다.
+
+### OpenCode TUI에서 (디렉터리·글롭 직접 지정 — 셸 전개 불필요)
+
+`--files` 항목에 디렉터리, `.`, 글롭을 그대로 쓸 수 있습니다 (추적+미추적, `.gitignore` 존중).
+
+```
+/f-review --files=on-stk-ord-online/src/main
+```
+
+```
+/f-review --files=**/src/main/**/*.java --exclude=**/evosuite-cp/**
+```
+
+```
+/f-review --files=. --exclude=**/test/**,**/evosuite-cp/**
+```
+
+터미널에서도 같은 형태가 가장 짧고, 오케스트레이터가 긴 경로 목록을 다시 타이핑할 일이 없어 안전합니다:
+
+```bash
+cd /Users/koscom/workspace/fico/on-stk-ord && opencode run --command f-review -m openrouter/qwen/qwen3.8-27b -- "--files=on-stk-ord-online/src/main"
+```
+
+아래의 `$(git ls-files …)` 변형은 글롭 지원 이전 방식이며, 100파일 초과 시 청크 루프에는 여전히 필요합니다.
+
+### 모듈 단위 (권장)
+
+> on-stk-ord 2026-10-13 기준: online 55 · bsm 9 · daemon 9 파일 (미추적 포함). online 인자 길이 약 5.4KB.
+
+```bash
+cd /Users/koscom/workspace/fico/on-stk-ord && opencode run --command f-review -m openrouter/qwen/qwen3.8-27b -- "--files=$(git ls-files -co --exclude-standard 'on-stk-ord-online/src/main/**/*.java' | paste -sd, -)"
+```
+
+```bash
+cd /Users/koscom/workspace/fico/on-stk-ord && opencode run --command f-review -m openrouter/qwen/qwen3.8-27b -- "--files=$(git ls-files -co --exclude-standard 'on-stk-ord-bsm/src/main/**/*.java' | paste -sd, -)"
+```
+
+```bash
+cd /Users/koscom/workspace/fico/on-stk-ord && opencode run --command f-review -m openrouter/qwen/qwen3.8-27b -- "--files=$(git ls-files -co --exclude-standard 'on-stk-ord-daemon/src/main/**/*.java' | paste -sd, -)"
+```
+
+### main Java 전체 (모듈 합산, 100파일 이하일 때)
+
+> 2026-10-13 기준 on-stk-ord는 미추적 포함 **99파일**이라 상한(100) 직전입니다. 파일이 하나라도
+> 늘면 plan이 거부하므로 그때는 아래 청크 루프를 쓰세요. 개수 확인:
+> `git ls-files -co --exclude-standard '*/src/main/**/*.java' | grep -vc evosuite-cp`
+
+```bash
+cd /Users/koscom/workspace/fico/on-stk-ord && opencode run --command f-review -m openrouter/qwen/qwen3.8-27b -- "--files=$(git ls-files -co --exclude-standard '*/src/main/**/*.java' | grep -v evosuite-cp | paste -sd, -) --exclude=**/evosuite-cp/**"
+```
+
+### 100파일 초과 — 60개씩 청크로 순차 실행 (Java + 매퍼 XML 포함, on-stk-ord 기준 153파일 → 3청크)
+
+```bash
+cd /Users/koscom/workspace/fico/on-stk-ord && git ls-files -co --exclude-standard '*.java' '*/src/main/**/*.xml' | grep -v evosuite-cp | split -l 60 - /tmp/freview-chunk- && for c in /tmp/freview-chunk-*; do opencode run --command f-review -m openrouter/qwen/qwen3.8-27b -- "--files=$(paste -sd, - < "$c")"; done; rm -f /tmp/freview-chunk-*
+```
+
+### 최근 변경분만 (diff 모드, 가장 가벼움)
+
+```bash
+cd /Users/koscom/workspace/fico/on-stk-ord && opencode run --command f-review -m openrouter/qwen/qwen3.8-27b -- "--from=v1.0.0"
+```
+
+```bash
+cd /Users/koscom/workspace/fico/on-stk-ord && opencode run --command f-review -m openrouter/qwen/qwen3.8-27b -- "HEAD~5..HEAD"
+```
+
+### 단일 파일 (세그먼트 분할 확인용 — 1,507줄 픽스처)
+
+```bash
+cd /Users/koscom/workspace/fico/on-stk-ord && opencode run --command f-review -m openrouter/qwen/qwen3.8-27b -- "--files=on-stk-ord-online/src/main/java/kr/co/koscom/pb/on/stk/ord/online/qry/service/SONAQ009Service.java"
+```
+
+### 백그라운드로 돌리고 로그로 지켜보기
+
+```bash
+cd /Users/koscom/workspace/fico/on-stk-ord && nohup opencode run --command f-review -m openrouter/qwen/qwen3.8-27b -- "--files=$(git ls-files -co --exclude-standard 'on-stk-ord-online/src/main/**/*.java' | paste -sd, -)" > /tmp/freview-$(date +%H%M%S).log 2>&1 & echo "log: $(ls -t /tmp/freview-*.log | head -1)"
+```
+
+```bash
+tail -f $(ls -t /tmp/freview-*.log | head -1) | grep --line-buffered -E "Agent|judged|REWORK|PASS|finalize|Report|complete|INCOMPLETE|rror"
+```
+
+### 결과 확인
+
+```bash
+cd /Users/koscom/workspace/fico/on-stk-ord && ls -td .fico/report/f-review/report-*/review.md | head -1 | xargs -I{} sh -c 'echo {}; grep -E "^\*\*|^## |Verdict" {} | head -20'
+```
+
+---
+
+#### 전체 스윕 전에 설정을 가볍게 (`.fico/config/fico_ai.json` → `review`)
+
+| 키 | 현장값 | 스윕 권장 | 이유 |
+|---|---|---|---|
+| `batchSize` | 5 | 8~10 | 동시 unit 수. 레이트리밋이 받아주는 선에서 |
+| `deepPasses` | 2 | 1 | 라운드당 리뷰어 턴 전체가 한 번 더 돈다 (`--deep=1`로 CLI 지정도 가능) |
+| `judge` | true | false | unit당 judge 세션 + 미달 시 전체 재리뷰. CLI로는 끌 수 없음 |
+| `fcqFix` | true | false | 위반 많은 파일마다 f-fixer 세션 추가 |
+
+현장 설정 그대로면 unit당 20~30분 × (unit 수 ÷ batchSize) 배치. 가볍게 바꾸면 67 unit 기준 1시간 안팎.
+
+#### 주의
+
+- 긴 `--files` 인자는 오케스트레이터 모델이 `f_review_plan` 인자로 **다시 타이핑**합니다. plan 출력의 `N file(s)`가 넘긴 개수와 같은지 확인하세요. 모듈 단위로 나누면 누락 위험이 줄어듭니다.
+- `-co --exclude-standard`는 미추적 파일도 포함합니다. 추적 파일만 원하면 두 옵션을 빼세요.
+- 같은 모델로 run을 동시에 둘 띄우면 레이트리밋을 나눠 써서 둘 다 느려집니다. 하나씩.

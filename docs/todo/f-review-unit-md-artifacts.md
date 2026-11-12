@@ -15,7 +15,7 @@
    - 그대로 둔다 (디버깅용으로 의미가 있으면).
    - 설정으로 끄게 한다 (기본 생성 유지).
    - 생성을 없애고, 필요하면 `.json`에서 렌더링한다.
-3. 바꿀 경우: `writeFileReview` 반환값을 쓰는 곳 정리, 테스트(`run.test.ts`의 `writeFileReview` 호출) 수정, `docs/guides/f-review-usage.md` 5.2 중간 산출물 설명 수정.
+3. 바꿀 경우: `writeFileReview` 반환값을 쓰는 곳 정리, 테스트(`run.test.ts`의 `writeFileReview` 호출) 수정, `docs/guides/03-f-review.md` 5장(리포트와 산출물)의 중간 산출물 설명 수정.
 
 ## 관련
 
