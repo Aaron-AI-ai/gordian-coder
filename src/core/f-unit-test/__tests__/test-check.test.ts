@@ -153,3 +153,36 @@ describe("mock 이름 비교", () => {
     expect(checkTestSource(healthy, { mocks: ["Account"] }).some((x) => x.includes("Account"))).toBe(true)
   })
 })
+
+describe("트랜잭션 안전 결함", () => {
+  const withClassBody = (extra: string): string => healthy.replace("@Transactional", `@Transactional\n${extra}`)
+
+  test.each([
+    ["@Commit", "@Commit"],
+    ["@Rollback(false)", "@Rollback(false)"],
+    ["@Rollback(value = false)", "@Rollback(value = false)"],
+    ["NOT_SUPPORTED", "@Transactional(propagation = Propagation.NOT_SUPPORTED)"],
+    ["REQUIRES_NEW", "@Transactional(propagation = Propagation.REQUIRES_NEW)"],
+    ["NEVER", "@Transactional(propagation = Propagation.NEVER)"],
+    ["SUPPORTS", "@Transactional(propagation = Propagation.SUPPORTS)"],
+  ])("%s 는 결함", (_label, construct) => {
+    const d = checkTestSource(withClassBody(construct), { mocks })
+    expect(d.some((x) => x.includes("롤백") || x.includes("트랜잭션"))).toBe(true)
+  })
+
+  test("확장 중인 기존 파일에도 적용된다", () => {
+    const d = checkTestSource(withClassBody("@Commit"), { mocks, previousMethods: ["sonaq001_normal1"] })
+    expect(d.some((x) => x.includes("@Commit"))).toBe(true)
+  })
+
+  test("평범한 @Transactional 클래스와 주석·문자열 속 언급은 통과", () => {
+    expect(checkTestSource(healthy, { mocks })).toEqual([])
+    expect(checkTestSource(withClassBody('// @Commit Propagation.NEVER\n/* @Rollback(false) */'), { mocks })).toEqual([])
+  })
+
+  test("Mapper 테스트(mock 없음)는 mock 점검을 받지 않는다", () => {
+    const mapper = readFileSync(join(TPL_DIR, "MapperTestTemplate.java"), "utf8")
+      .replaceAll("{PackagePath}", "x").replaceAll("{ClassName}", "AccountMapperTest").replaceAll("{TargetClass}", "AccountMapper")
+    expect(checkTestSource(mapper, { mocks: [] })).toEqual([])
+  })
+})

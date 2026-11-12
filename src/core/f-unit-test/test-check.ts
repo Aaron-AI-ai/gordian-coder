@@ -13,7 +13,7 @@ export interface TestCheckOptions {
 }
 
 // 주석은 제거, 문자열·문자 리터럴은 내용만 비운다 (그 안의 @Test, {Name}, assert 오탐 방지)
-function strip(source: string): string {
+export function strip(source: string): string {
   return source.replace(
     /\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])'/g,
     (m) => (m.startsWith("/") ? " " : m[0] + m[0]),
@@ -94,6 +94,14 @@ export function checkTestSource(source: string, opts: TestCheckOptions): string[
       if (!mentions(code, simple)) defects.push(`mock 대상 ${simple}이(가) 테스트에 없습니다.`)
     }
     if (!/@(?:MockitoBean|MockBean)\b/.test(code)) defects.push("@MockitoBean(또는 @MockBean)이 하나도 없습니다. mock 대상 필드에 붙이세요.")
+  }
+
+  // 트랜잭션 안전: 테스트 데이터가 DB에 남는 구성은 모든 테스트에서 금지 (Mapper 테스트는 실제 DB라 특히 중요)
+  if (/@Commit\b/.test(code)) defects.push("@Commit이 있습니다. 테스트 트랜잭션은 롤백되어야 하므로 제거하세요.")
+  if (/@Rollback\s*\(\s*(?:value\s*=\s*)?false\s*\)/.test(code)) defects.push("@Rollback(false)가 있습니다. 테스트 트랜잭션은 롤백되어야 하므로 제거하세요.")
+  const propagation = [...new Set([...code.matchAll(/\bPropagation\.(NOT_SUPPORTED|REQUIRES_NEW|NEVER|SUPPORTS)\b/g)].map((m) => m[1]!))]
+  if (propagation.length > 0) {
+    defects.push(`Propagation.${propagation.join(", Propagation.")}이(가) 있습니다. 테스트 트랜잭션 밖에서 실행되거나 따로 커밋되므로 쓰지 말고 하나의 @Transactional 안에서 처리하세요.`)
   }
 
   const names = new Set(methods.map((m) => m.name))

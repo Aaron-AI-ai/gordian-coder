@@ -17,6 +17,7 @@ import { MAX_WAIT_CALLS, awaitingReply, noteReply, takeAbort, type PlanGateState
 import { isFullyCovered, readCoverage, readFailedTests, type FileCoverage } from "./coverage";
 import { checkTestSource, testMethodNames } from "./test-check";
 import { writeReport } from "./report";
+import { checkMapperTargets, mapperDefects, type MapperCheck } from "./mapper";
 import { BASH_RULE, bashAllowed, coverageCommandLine, type BashContext } from "./bash-gate";
 
 export { MAX_WAIT_CALLS, UNIT_TEST_SKILL_NAME };
@@ -90,6 +91,8 @@ export interface FutSession extends PlanGateState {
   verification: Verification;
   coverage: TargetCoverage[];
   failedTests: string[];
+  /** Mapper targets (judged by the static call check, not JaCoCo) with which methods the planned test calls. */
+  mapperChecks: MapperCheck[];
   /** The last defects or compile log that sent the run back, kept for an incomplete report. */
   lastProblems: string[];
   verifyNote?: string;
@@ -107,7 +110,7 @@ const WRITES = ["edit", "write", "apply_patch", "multiedit", "patch"];
 const SCRIPT = "scripts/run-coverage.sh";
 /** What the plan cannot do without; shared by the plan guide and the plan rejection text. */
 const ASK_USER_WHEN =
-  "(1) the target: no --files and no --program was given and git shows no changed Java file, or the --program ID matches no Controller/Service class, or a --files path does not exist; (2) the Gradle module, when the targets sit in none or in several modules; (3) the case details you cannot derive from the code, such as which exception a branch is meant to raise";
+  "(1) the target: no --files and no --program was given and git shows no changed Java file, or the --program ID matches no Controller/Service class, or a --files path does not exist; (2) the Gradle module, when the targets sit in none or in several modules; (3) the case details you cannot derive from the code, such as which exception a branch is meant to raise; (4) for a Mapper target, the test profile: the project has several (e.g. test, test-oracle, test-postgres) and the request does not say which, or has none (never invent an H2 profile)";
 const ASK_USER_NOTE = `If a value cannot be determined from the request or the project, ask the user for it and END YOUR TURN; do not guess or leave placeholders. Then submit the plan again.`;
 const POSIX_NOTE = "The verify step needs a POSIX shell (Git Bash or WSL on Windows); Windows execution of the coverage script is untested.";
 
@@ -120,6 +123,7 @@ export const STAGES: Record<StageId, Stage> = {
       "Find the Gradle module of the targets (e.g. `on-stk-ord-online`) and check the Spring Boot version in the root build.gradle (below 3.4: @MockBean instead of @MockitoBean).",
       `If a required input is missing or cannot be settled from the request and the project, ASK THE USER and END YOUR TURN before doing anything else; never guess and never put a placeholder in \`inputs\`. Required inputs: ${ASK_USER_WHEN}.`,
       "For every public method of each target define cases: at least two normal, one boundary and one exception, plus the external classes to mock (other modules, Mappers, Redis, external API clients). A method that really needs no test gets `skip_reason` instead.",
+      "A Mapper interface (MyBatis `@Mapper`, or a `*Mapper.java` interface) is tested against the real DB of the test profile, not mocked: give it its own case(s) covering every method, put the chosen test profile in the plan `note`, and list no mocks for it. If the project has several test profiles or none, ask the user which to use and END YOUR TURN. In --program mode include the Mappers the target Service uses in the same Gradle module; a Mapper of another module must be named with --files and its test goes in that module. Controller and Service tests still mock their Mappers.",
       "Test files go under the module's src/test/java in the target's package as `<ClassName>Test.java`; a test profile may go under src/test/resources. An existing test file is extended, never replaced: keep every existing @Test method.",
       `Write the plan for the user in your reply, then call ${STAGE_TOOL} with stage "plan", the plan as \`note\` and \`inputs\` = { mode, module, targets, files, cases: [{ target, method, normal, boundary, exception, mocks, skip_reason? }] } with project-relative paths. Once it is accepted, END YOUR TURN. Any further tool call while the plan waits is refused, and repeated calls stop the turn.`,
       `After the user approves, call ${STAGE_TOOL} with stage "plan" and user_approved=true. If they ask for changes, submit a new \`note\` and \`inputs\` and ask again.`,
@@ -132,7 +136,7 @@ export const STAGES: Record<StageId, Stage> = {
     goal: "Write the planned tests from the skill's rules and templates.",
     steps: [
       "Write only the planned `files`; any other path is refused. If another file is really needed, say so in the report.",
-      "Follow the skill's format rule: @SpringBootTest, @Transactional, @BeforeEach, @AfterEach; mock every external module or resource, keep same-module pure collaborators real.",
+      "Follow the skill's format rule: @SpringBootTest, @Transactional, @BeforeEach, @AfterEach; mock every external module or resource (a Mapper test is the exception: the Mapper under test is real and runs on the planned profile), keep same-module pure collaborators real.",
       "Keep every existing @Test method of a file you extend. Replace every template placeholder.",
       "You may compile with gradle in bash, without quotes (e.g. `./gradlew :<module>:compileTestJava`; `--tests` takes a full test class name, no wildcards). Failing tests are not your job to fix here; they are reported.",
     ],
@@ -178,6 +182,7 @@ export function startSession(sessionId: string, request: string, cwd: string): F
     verification: "pending",
     coverage: [],
     failedTests: [],
+    mapperChecks: [],
     lastProblems: [],
   };
   sessions.set(sessionId, session);
@@ -443,10 +448,19 @@ function testDefects(session: FutSession): string[] {
   return defects;
 }
 
-/** Targets with at least one case to test; a target whose every case has skip_reason is only reported as skipped. */
+/** Mapper targets with a case to test, each with the methods the planned test calls. */
+function mapperChecksOf(session: FutSession): MapperCheck[] {
+  const cases = session.inputs?.cases ?? [];
+  const tested = (session.inputs?.targets ?? []).filter((t) => cases.some((c) => c.target === t && !c.skip_reason?.trim()));
+  const skipped = (t: string): string[] => cases.filter((c) => c.target === t && c.skip_reason?.trim()).map((c) => c.method);
+  return checkMapperTargets(session.cwd, tested, (session.inputs?.files ?? []).filter((f) => f.endsWith(".java")), skipped);
+}
+
+/** Targets JaCoCo judges: with at least one case to test, and not a Mapper (its SQL is in XML). A target whose every case has skip_reason is only reported as skipped. */
 export function measuredTargets(session: FutSession): string[] {
   const cases = session.inputs?.cases ?? [];
-  return (session.inputs?.targets ?? []).filter((t) => cases.some((c) => c.target === t && !c.skip_reason?.trim()));
+  const mappers = new Set(mapperChecksOf(session).map((m) => m.target));
+  return (session.inputs?.targets ?? []).filter((t) => !mappers.has(t) && cases.some((c) => c.target === t && !c.skip_reason?.trim()));
 }
 
 function describeGap(c: TargetCoverage): string {
@@ -496,7 +510,8 @@ function completeVerify(session: FutSession, input: StageInput): string {
   session.failedTests = readFailedTests(path.join(session.cwd, session.runDir!, "test-results"));
 
   if (status.compile !== "ok") return sendBackToFix(session, [`Test compilation failed:\n${status.log ?? "(no log)"}`]);
-  const defects = testDefects(session);
+  session.mapperChecks = mapperChecksOf(session);
+  const defects = [...testDefects(session), ...mapperDefects(session.mapperChecks)];
   if (defects.length > 0) return sendBackToFix(session, [`The plugin found defects in the tests:\n${defects.join("\n")}`]);
   // Compiled but no coverage: the test run itself broke. Bounded by the fix retries, not an endless rerun.
   if (status.coverage === "missing") return sendBackToFix(session, [`Tests compiled but produced no coverage:\n${status.log ?? "(no log)"}`]);

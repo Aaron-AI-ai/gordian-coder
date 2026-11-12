@@ -606,3 +606,98 @@ describe("final review fixes", () => {
     }
   });
 });
+
+describe("Mapper targets", () => {
+  const MAPPER = `${MODULE}/src/main/java/kr/co/koscom/pb/on/stk/ord/online/mapper/AccountOnlineMapper.java`;
+  const MAPPER_TEST = `${MODULE}/src/test/java/kr/co/koscom/pb/on/stk/ord/online/mapper/AccountOnlineMapperTest.java`;
+  const MAPPER_SRC = `package x;
+import org.apache.ibatis.annotations.Mapper;
+/** doc */
+@Mapper
+public interface AccountOnlineMapper {
+  List<R> selectAccountList(P parameter, RowBounds rowBounds);
+  long countAccountList(@Param("p") P parameter);
+  int insert(P parameter);
+}
+`;
+  const mapperTest = (calls: string[]): string => `@SpringBootTest
+@ActiveProfiles("test")
+@Transactional
+class AccountOnlineMapperTest {
+  @Autowired AccountOnlineMapper mapper;
+  @BeforeEach void setUp() {}
+  @AfterEach void tearDown() {}
+  @Test void a_normal1() { assertEquals(1, mapper.${calls[0] ?? "noop"}(null)); }
+${calls.slice(1).map((c, i) => `  @Test void b${i}_normal2() { assertEquals(1, mapper.${c}(null)); }`).join("\n")}
+}
+`;
+  const mapperCase = {
+    target: MAPPER,
+    method: "all",
+    normal: ["a", "b"],
+    boundary: ["c"],
+    exception: ["d"],
+    mocks: [] as string[],
+  };
+
+  function mapperPlan(withService: boolean): PlanInputs {
+    const plan = okPlan();
+    if (!withService) {
+      plan.targets = [];
+      plan.cases = [];
+    }
+    plan.targets.push(MAPPER);
+    plan.files.push(MAPPER_TEST);
+    plan.cases.push(mapperCase);
+    return plan;
+  }
+
+  function toVerify(withService: boolean, calls: string[]): void {
+    put(MAPPER, MAPPER_SRC);
+    approve(mapperPlan(withService));
+    if (withService) writeTest();
+    put(MAPPER_TEST, mapperTest(calls));
+    expect(writeOk("write", { filePath: path.join(cwd, MAPPER_TEST) })).toBeNull();
+    done({ stage: "execute" });
+    expect(session().stage).toBe("verify");
+  }
+
+  test("a test calling only some methods is a defect: fix retry, no coverage round", () => {
+    toVerify(false, ["selectAccountList", "insert"]);
+    runCoverage({ xml: `<report name="x"></report>` });
+    const out = done({ stage: "verify", note: "n" });
+    expect(session().stage).toBe("execute");
+    expect(out).toContain("countAccountList");
+    expect(out).not.toContain("selectAccountList,");
+    expect(session().fixRetries).toBe(1);
+    expect(session().gapRounds).toBe(0);
+  });
+
+  test("all methods called: covered, no gap for the Mapper, report lists per-method calls", () => {
+    toVerify(false, ["selectAccountList", "countAccountList", "insert"]);
+    runCoverage({ xml: `<report name="x"></report>` });
+    done({ stage: "verify", note: "n" });
+    expect(session().stage).toBe("report");
+    expect(session().verification).toBe("covered");
+    expect(session().coverage).toEqual([]);
+    const out = done({ stage: "report", note: "s" });
+    const report = fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8");
+    expect(report).toContain("커버리지 측정 안 함 (XML SQL은 JaCoCo가 보지 않음)");
+    expect(report).toContain("selectAccountList: 호출함");
+  });
+
+  test("a mixed plan judges only the Service by JaCoCo", () => {
+    toVerify(true, ["selectAccountList", "countAccountList", "insert"]);
+    runCoverage({ xml: jacoco(1, 0) });
+    done({ stage: "verify", note: "n" });
+    expect(session().stage).toBe("execute");
+    expect(session().gapRounds).toBe(1);
+    expect(session().coverage.map((c) => c.target)).toEqual([TARGET]);
+  });
+
+  test("the plan guide asks for the Mapper test profile", () => {
+    const guide = renderStageGuide("plan");
+    expect(guide).toContain("test profile");
+    expect(guide).toContain("real DB");
+  });
+});

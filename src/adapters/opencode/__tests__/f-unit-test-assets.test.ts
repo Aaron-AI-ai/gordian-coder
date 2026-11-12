@@ -27,6 +27,28 @@ describe("f-unit-test-code skill assets", () => {
     expect(src).toContain("{TargetClass}");
   });
 
+  test("MapperTestTemplate.java hits the real DB: transactional, profile, real mapper, no mock", () => {
+    const src = read("templates/MapperTestTemplate.java");
+    for (const token of ["@SpringBootTest", "@ActiveProfiles", "@Transactional", "@Autowired", "@BeforeEach", "@AfterEach", "UT_"]) {
+      expect(src).toContain(token);
+    }
+    expect(src).not.toMatch(/@MockitoBean|@MockBean/);
+    for (const suffix of ["_normal1", "_normal2", "_boundary", "_exception"]) {
+      expect(src).toMatch(new RegExp(`@Test[\\s\\S]*?void \\w+${suffix}\\(`));
+    }
+    for (const token of ["{PackagePath}", "{ClassName}", "{TargetClass}"]) expect(src).toContain(token);
+    expect(src).not.toMatch(/\{Profile|\{profile/i);
+  });
+
+  test("the docs and SKILL.md state the Mapper exception", () => {
+    expect(read("docs/f-unit-test-format-rule.md")).toContain("Mapper 테스트");
+    expect(read("docs/f-unit-test-case-rule.md")).toContain("Mapper");
+    expect(read("docs/f-unit-test-verification-rule.md")).toContain("JaCoCo");
+    const skillMd = read("SKILL.md");
+    expect(skillMd).toContain("MapperTestTemplate.java");
+    expect(skillMd).toMatch(/Mapper test is the one exception/);
+  });
+
   test("rule docs exist and the format rule covers mocks, profiles and Boot versions", () => {
     for (const d of ["format", "case", "verification"]) {
       expect(fs.existsSync(path.join(skill, `docs/f-unit-test-${d}-rule.md`))).toBe(true);

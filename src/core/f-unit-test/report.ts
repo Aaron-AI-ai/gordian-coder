@@ -36,7 +36,11 @@ export function writeReport(session: FutSession, summary: string): string {
         ? `- ${c.target}: 미실행 줄 ${c.coverage.uncoveredLines.join(", ") || "없음"}, 분기 일부 미실행 줄 ${c.coverage.partialLines.join(", ") || "없음"}`
         : `- ${c.target}: 어떤 테스트도 실행하지 않음`,
     );
-  const measured = new Set(measuredTargets(session));
+  const measured = new Set([...measuredTargets(session), ...session.mapperChecks.map((m) => m.target)]);
+  const mapperLines = session.mapperChecks.flatMap((m) => [
+    `- ${m.target}: 커버리지 측정 안 함 (XML SQL은 JaCoCo가 보지 않음) — 테스트 ${m.testFile ?? "없음"}`,
+    ...m.methods.map((x) => `  - ${x.name}: ${x.called ? "호출함" : x.skipped ? "건너뜀 (skip_reason)" : "호출 안 함"}`),
+  ]);
   const skipped = (session.inputs?.cases ?? [])
     .filter((c) => c.skip_reason?.trim())
     .map((c) => `- ${c.target}#${c.method}: ${c.skip_reason!.trim()}${measured.has(c.target) ? "" : " (대상 전체 제외, 커버리지 측정 안 함)"}`);
@@ -57,6 +61,7 @@ export function writeReport(session: FutSession, summary: string): string {
     "## 커버리지",
     ...(rows.length > 0 ? ["| 대상 | 라인 | 분기 |", "|---|---|---|", ...rows] : ["측정 결과 없음"]),
     "",
+    ...(mapperLines.length > 0 ? ["## Mapper (실제 DB 테스트)", ...mapperLines, ""] : []),
     ...(gaps.length > 0 ? ["## 남은 공백", ...gaps, ""] : []),
     ...(skipped.length > 0 ? ["## 테스트하지 않은 메서드", ...skipped, ""] : []),
     ...(session.verification === "incomplete" ? ["## 마지막 오류", ...session.lastProblems, ""] : []),

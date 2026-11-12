@@ -14,6 +14,8 @@
 
 ## mock 대상 (외부 모듈이나 외부 자원에 닿는 것은 전부 mock)
 
+**예외: Mapper 테스트.** 테스트 대상이 MyBatis Mapper(`@Mapper` 인터페이스 또는 `*Mapper.java`) 자체일 때만 그 Mapper는 mock하지 않고 `@Autowired`로 받은 실제 빈으로 프로필 DB를 조회한다(아래 "Mapper 테스트"). Controller·Service 테스트에서는 Mapper가 여전히 아래 표대로 mock이다.
+
 | mock으로 둔다 | 예 |
 |---|---|
 | 외부 모듈 클래스 (다른 Gradle 모듈, common-*, 프레임워크 jar의 서비스·유틸 중 외부 자원에 닿는 것) | `AccountBSM` (on-stk-ord-bsm) |
@@ -44,8 +46,18 @@
 
 사용자 프로젝트의 `build.gradle` 등 빌드 파일은 수정하지 않는다. 의존성이 모자라 컴파일이 안 되면 수정하지 말고 보고한다.
 
+## Mapper 테스트 (실제 DB)
+
+예제는 `templates/MapperTestTemplate.java`. 위치/이름은 소스와 같은 패키지의 `<MapperName>Test`(Mapper가 다른 모듈이면 그 모듈의 `src/test`).
+
+- 클래스에 `@SpringBootTest`, `@ActiveProfiles("<프로필>")`, `@Transactional`, `@BeforeEach`, `@AfterEach`. Mapper는 `@Autowired` 실제 빈이고 `@MockitoBean`/`@MockBean`을 쓰지 않는다.
+- **프로필:** 프로젝트에 테스트 프로필이 하나면 그것을, 여럿이면(예: `test`, `test-oracle`, `test-postgres`) 계획 단계에서 사용자에게 묻고, 하나도 없으면 사용자에게 묻는다. Mapper 테스트용 H2 프로필을 임의로 만들지 않는다(스키마·Oracle SQL 호환성을 알 수 없다). 고른 프로필은 계획의 `note`에 적는다. 위 "테스트 프로필"의 2·3번(프로필 새로 만들기, 데이터소스 제외)은 Mapper 테스트에 적용하지 않는다.
+- **트랜잭션 안전(정적 점검 결함):** `@Transactional`이 있어야 하고, `@Commit`, `@Rollback(false)`, `@Rollback(value = false)`, `Propagation.NOT_SUPPORTED`/`REQUIRES_NEW`/`NEVER`/`SUPPORTS`는 모든 테스트에서 금지다. 한 테스트에서 쓰기가 여러 번이어도 하나의 `@Transactional` 안에서 처리하고 `REQUIRES_NEW`로 쪼개지 않는다. `@Sql`로 DDL을 실행하지 않는다(문서 규칙).
+- **시드·정리:** `@BeforeEach`는 테스트 데이터를 Mapper(또는 테스트 트랜잭션 안의 `@Sql`)로 넣고, 키는 충돌을 피하도록 `UT_` 접두어 + 유일 값을 쓴다. `@AfterEach`는 트랜잭션 안에서 만든 행을 지우고 사라졌는지 단언한다(어차피 롤백되지만 필수).
+- 쓰기 케이스(insert/update/delete)는 같은 테스트 안에서 Mapper로 다시 조회해 결과를 단언한다.
+
 ## 금지
 
-- 실제 DB·Redis·외부 서비스에 붙는 테스트.
+- Mapper 테스트가 아닌 곳에서 실제 DB·Redis·외부 서비스에 붙는 테스트. (Mapper 테스트의 프로필 DB 조회는 허용)
 - 단언 없는 테스트, `assertNotNull`만 있는 테스트.
 - 테스트를 통과시키려고 대상(운영) 코드를 고치는 것.
