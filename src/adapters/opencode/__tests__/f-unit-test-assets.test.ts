@@ -58,6 +58,28 @@ describe("f-unit-test-code skill assets", () => {
   });
 });
 
+describe("f-unit-test-code coverage scripts", () => {
+  test("run-coverage.ps1 exists, declares its parameters and finds tools/ from its own folder", () => {
+    const ps = read("scripts/run-coverage.ps1");
+    expect(ps).toContain("param(");
+    for (const p of ["$Module", "$Tests", "$Out", "$Project"]) expect(ps).toContain(p);
+    expect(ps).toContain("PSScriptRoot");
+    expect(ps).toContain("init.gradle");
+    // PowerShell 7-only syntax would break Windows PowerShell 5.1.
+    expect(ps).not.toMatch(/\?\?|&&|\|\||-AsHashTable|\$IsWindows/);
+  });
+
+  test("SKILL.md and the verification rule document both scripts and the unverified Windows run", () => {
+    for (const doc of ["SKILL.md", "docs/f-unit-test-verification-rule.md"]) {
+      const text = read(doc);
+      expect(text).toContain("run-coverage.sh --module");
+      expect(text).toContain("run-coverage.ps1 -Module");
+      expect(text).not.toContain("POSIX shell");
+    }
+    expect(read("SKILL.md")).toContain("not verified in the development environment");
+  });
+});
+
 describe("f-unit-test-code bundled JaCoCo", () => {
   test.each(["jacocoagent.jar", "jacococli.jar"])("%s is a real jar", (name) => {
     const buf = fs.readFileSync(path.join(skill, "tools", name));

@@ -13,11 +13,28 @@
 
 ## 검증 실행
 
+macOS/Linux:
+
 ```
-scripts/run-coverage.sh --module <gradle 모듈> --tests <FQCN,FQCN,...> --out <디렉터리>
+sh scripts/run-coverage.sh --module <gradle 모듈> --tests <FQCN,FQCN,...> --out <디렉터리>
 ```
 
-`--out`에 `status.json`, `jacoco.xml`, `test-results/`가 생긴다. 확인 항목은 두 가지다.
+Windows (PowerShell, 경로는 슬래시):
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-coverage.ps1 -Module <gradle 모듈> -Tests <FQCN,FQCN,...> -Out <디렉터리>
+```
+
+| `run-coverage.sh` | `run-coverage.ps1` | 의미 |
+|---|---|---|
+| `--module` | `-Module` | Gradle 모듈 (`a`, `a/b`, `:a:b`, `a:b`) |
+| `--tests` | `-Tests` | 테스트 클래스 FQCN, 쉼표 구분 |
+| `--out` | `-Out` | 결과 디렉터리 (이전 결과는 먼저 지운다) |
+| `--project` (선택) | `-Project` (선택) | 프로젝트 루트, 기본값은 현재 디렉터리 |
+
+두 스크립트는 같은 파일을 만든다. Windows는 PowerShell 스크립트를 쓴다. 단 이 개발 환경에서는 PowerShell 실행을 검증하지 못했다(not verified in the development environment).
+
+결과 디렉터리에 `status.json`, `jacoco.xml`, `test-results/`, `gradle.log`가 생긴다. 확인 항목은 두 가지다.
 
 1. **빌드(컴파일) 성공.** 실패하면 오류 메시지의 파일·줄을 보고 테스트 코드를 고친 뒤 다시 돌린다(컴파일 재시도는 보강 횟수에 포함하지 않는다).
 2. **대상 클래스의 JaCoCo 라인·분기 커버리지** (목표 100%).

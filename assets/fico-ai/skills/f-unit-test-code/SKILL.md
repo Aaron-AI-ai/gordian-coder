@@ -41,5 +41,15 @@ This skill does NOT modify production code or the project's build files.
 
 ### 3. Verify
 1. Read `docs/f-unit-test-verification-rule.md` and run its self-check list.
-2. Run `scripts/run-coverage.sh --module <gradle module> --tests <comma separated FQCNs> --out <dir>`; it writes `status.json`, `jacoco.xml` and `test-results/` into `--out`. The verify step needs a POSIX shell (Git Bash or WSL on Windows); Windows execution of the coverage script is untested.
+2. Run the coverage script; it writes `status.json`, `jacoco.xml`, `test-results/` and `gradle.log` into the output directory. Both scripts take the same arguments and write the same files.
+   - macOS/Linux: `sh scripts/run-coverage.sh --module <gradle module> --tests <comma separated FQCNs> --out <dir>`
+   - Windows: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-coverage.ps1 -Module <gradle module> -Tests <comma separated FQCNs> -Out <dir>` (forward slashes in paths). Its execution is not verified in the development environment.
+
+| `run-coverage.sh` | `run-coverage.ps1` | Meaning |
+|---|---|---|
+| `--module` | `-Module` | Gradle module (`a`, `a/b`, `:a:b` or `a:b`) |
+| `--tests` | `-Tests` | Test class FQCNs, comma separated |
+| `--out` | `-Out` | Output directory (stale results are removed first) |
+| `--project` (optional) | `-Project` (optional) | Project root, default the current directory |
+
 3. Fix compile errors. Fill coverage gaps by adding cases (at most 3 rounds). Mapper targets are not JaCoCo-measured; every method the Mapper declares must be called in its test (`<MapperName>Test.java`). Report unreachable branches with a reason; do not fix failing tests.

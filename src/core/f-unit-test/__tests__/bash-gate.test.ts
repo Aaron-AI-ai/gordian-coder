@@ -11,6 +11,10 @@ const HOME = "/home/u";
 const ctx = (tests: string[] = [FQCN], cwd = CWD, home = HOME): BashContext => ({ cwd, home, coverage: { module: MODULE, tests, out: OUT } });
 const PROJECT_SCRIPT = ".opencode/skills/f-unit-test-code/scripts/run-coverage.sh";
 const GLOBAL_SCRIPT = `${HOME}/.config/opencode/skills/f-unit-test-code/scripts/run-coverage.sh`;
+const PS_PROJECT = PROJECT_SCRIPT.replace(/\.sh$/, ".ps1");
+const PS_GLOBAL = GLOBAL_SCRIPT.replace(/\.sh$/, ".ps1");
+const PS_ARGS = `-Module ${MODULE} -Tests ${FQCN} -Out ${OUT}`;
+const PS = `powershell -NoProfile -ExecutionPolicy Bypass -File ${PS_PROJECT} ${PS_ARGS}`;
 
 describe("bash gate", () => {
   const MUST_REFUSE: [string, string][] = [
@@ -99,12 +103,54 @@ describe("bash gate", () => {
     ["verify", `sh f-unit-test-code/scripts/run-coverage.sh ${ARGS}`],
     ["verify", `sh skills/f-unit-test-code/scripts/run-coverage.sh ${ARGS}`],
     ["verify", `sh x/.opencode/skills/f-unit-test-code/scripts/run-coverage.sh ${ARGS}`],
+    // PowerShell form
+    ["verify", `powershell -Command ${PS_PROJECT} ${PS_ARGS}`],
+    ["verify", `powershell -Command & ${PS_PROJECT} ${PS_ARGS}`],
+    ["verify", `powershell -NoProfile -File .opencode/skills/f-unit-test-code/scripts/evil.ps1 ${PS_ARGS}`],
+    ["verify", `powershell -File /tmp/evil/skills/f-unit-test-code/scripts/run-coverage.ps1 ${PS_ARGS}`],
+    ["verify", `powershell -File run-coverage.ps1 ${PS_ARGS}`],
+    ["verify", `powershell -File mod/src/test/resources/run-coverage.ps1 ${PS_ARGS}`],
+    ["verify", `${PS} -Project ..`],
+    ["verify", `${PS} extra`],
+    ["verify", `powershell -NoProfile -NoProfile -File ${PS_PROJECT} ${PS_ARGS}`],
+    ["verify", `powershell -NoLogo -File ${PS_PROJECT} ${PS_ARGS}`],
+    ["verify", `powershell -ExecutionPolicy Unrestricted -File ${PS_PROJECT} ${PS_ARGS}`],
+    ["verify", `powershell -ExecutionPolicy -File ${PS_PROJECT} ${PS_ARGS}`],
+    ["verify", `powershell -EncodedCommand ZQBjAGgAbwA= -File ${PS_PROJECT} ${PS_ARGS}`],
+    ["verify", "powershell -EncodedCommand ZQBjAGgAbwA="],
+    ["verify", `pwsh -c ${PS_PROJECT} ${PS_ARGS}`],
+    ["verify", `pwsh -File ${PS_PROJECT} -Module ${MODULE} -Tests ${FQCN}`],
+    ["verify", `pwsh -File ${PS_PROJECT} -module ${MODULE} -tests ${FQCN} -out ${OUT}`],
+    ["verify", `pwsh -File ${PS_PROJECT} --module ${MODULE} --tests ${FQCN} --out ${OUT}`],
+    ["verify", `powershell.exe -File ${PS_PROJECT} ${PS_ARGS}`],
+    ["verify", `cmd -File ${PS_PROJECT} ${PS_ARGS}`],
+    ["verify", `sh ${PS_PROJECT} ${ARGS}`],
+    ["verify", `sh ${PS_PROJECT} ${PS_ARGS}`],
+    ["verify", `powershell -File ${PROJECT_SCRIPT} ${PS_ARGS}`],
+    ["verify", `powershell -File ${PROJECT_SCRIPT} ${ARGS}`],
+    ["verify", `powershell -File "${PS_PROJECT}" ${PS_ARGS}`],
+    ["verify", `powershell -File '${PS_PROJECT}' ${PS_ARGS}`],
+    ["verify", `powershell -File .opencode\\skills\\f-unit-test-code\\scripts\\run-coverage.ps1 ${PS_ARGS}`],
+    ["verify", `${PS}; Remove-Item x`],
+    ["verify", `${PS} & calc`],
+    ["verify", `${PS} | Out-File x`],
+    ["verify", `powershell -File ${PS_PROJECT} -Module $env:X -Tests ${FQCN} -Out ${OUT}`],
+    ["verify", `powershell -File ${PS_PROJECT} -Module \`whoami\` -Tests ${FQCN} -Out ${OUT}`],
+    ["verify", `powershell -File ${PS_PROJECT} -Module ${MODULE} -Tests ${FQCN} -Out ${OUT}\`n`],
+    ["execute", "./gradlew.bat wrapper"],
+    ["execute", "gradlew.cmd test"],
   ];
   const MUST_ALLOW: [string, string][] = [
     ["plan", "git diff HEAD~1 -- src"],
     ["plan", "git log -3 --oneline"],
     ["execute", `./gradlew :${MODULE}:testClasses`],
     ["execute", "gradlew.bat test --parallel"],
+    ["execute", "./gradlew.bat :m:cleanTest :m:test --tests com.x.FooTest"],
+    ["verify", PS],
+    ["verify", `pwsh -File ${PS_PROJECT} ${PS_ARGS}`],
+    ["verify", `powershell -NoProfile -File ${PS_GLOBAL} ${PS_ARGS}`],
+    ["verify", `powershell -ExecutionPolicy Bypass -File ./${PS_PROJECT} ${PS_ARGS}`],
+    ["verify", `pwsh -NoProfile -ExecutionPolicy Bypass -File ${CWD}/${PS_PROJECT} ${PS_ARGS}`],
     ["execute", "git status"],
     ["execute", "./gradlew :m:cleanTest :m:test --tests com.x.FooTest --offline"],
     ["execute", "gradle test --tests com.x.FooTest -q --no-daemon --console=plain"],
@@ -164,8 +210,24 @@ describe("bash gate", () => {
     expect(bashAllowed("verify", line!, ctx())).toBe(true);
   });
 
+  test("verify compares PowerShell -Tests as a set", () => {
+    const c = ctx([FQCN, FQCN2]);
+    expect(bashAllowed("verify", `powershell -File ${PS_PROJECT} -Module ${MODULE} -Tests ${FQCN2},${FQCN} -Out ${OUT}`, c)).toBe(true);
+    expect(bashAllowed("verify", `powershell -File ${PS_PROJECT} -Module ${MODULE} -Tests ${FQCN},${FQCN},${FQCN2} -Out ${OUT}`, c)).toBe(false);
+    expect(bashAllowed("verify", `powershell -File ${PS_PROJECT} -Module ${MODULE} -Tests ${FQCN} -Out ${OUT}`, c)).toBe(false);
+  });
+
+  test("on win32 the guide prints the PowerShell command, which the gate accepts", () => {
+    const line = coverageCommandLine(ctx(), "win32");
+    expect(line).toBe(`powershell -NoProfile -ExecutionPolicy Bypass -File ${PS_GLOBAL} ${PS_ARGS}`);
+    expect(bashAllowed("verify", line!, ctx())).toBe(true);
+    expect(coverageCommandLine(ctx(), "linux")).toBe(`sh ${GLOBAL_SCRIPT} ${ARGS}`);
+    expect(guideScriptPath(CWD, HOME, "run-coverage.ps1")).toBe(PS_GLOBAL);
+  });
+
   test("no command is offered when the global skill path has whitespace", () => {
     expect(coverageCommandLine(ctx([FQCN], CWD, "/Users/Jane Doe"))).toBeNull();
+    expect(coverageCommandLine(ctx([FQCN], CWD, "C:/Users/Jane Doe"), "win32")).toBeNull();
   });
 
   test("the refusal rule names the forbidden characters", () => {

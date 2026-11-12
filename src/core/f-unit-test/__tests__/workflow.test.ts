@@ -467,9 +467,9 @@ describe("review round 1: gate bypasses", () => {
   });
 
   test("plan refuses a planned file named like run-coverage.sh", () => {
-    for (const name of ["run-coverage.sh", "evilrun-coverage.sh", "Run-Coverage.SH"]) {
+    for (const name of ["run-coverage.sh", "evilrun-coverage.sh", "Run-Coverage.SH", "run-coverage.ps1", "Run-Coverage.PS1"]) {
       const out = done({ stage: "plan", note: "p", inputs: { ...okPlan(), files: [TEST_FILE, `${MODULE}/src/test/resources/${name}`] } });
-      expect(out).toContain("run-coverage.sh");
+      expect(out).toContain("run-coverage");
       expect(out).toStartWith("Rejected:");
     }
   });
@@ -562,8 +562,29 @@ describe("final review fixes", () => {
     expect(fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8")).toContain("without fresh run-coverage.sh results");
   });
 
-  test("the verify guide says it needs a POSIX shell", () => {
-    expect(renderStageGuide("verify")).toContain("POSIX shell (Git Bash or WSL on Windows)");
+  test("the verify guide names the PowerShell script for Windows and that it is unverified", () => {
+    const guide = renderStageGuide("verify");
+    expect(guide).toContain("run-coverage.ps1");
+    expect(guide).toContain("not verified in the development environment");
+    expect(guide).not.toContain("POSIX shell");
+  });
+
+  test("the verify guide prints the PowerShell command on win32 and the sh command elsewhere; the gate accepts both", () => {
+    approve();
+    writeTest();
+    done({ stage: "execute" });
+    const runLine = (platform: NodeJS.Platform): string => {
+      const line = renderStageGuide("verify", session(), platform).split("\n").find((l) => l.startsWith("Run exactly"))!;
+      return line.slice(line.indexOf(": ") + 2);
+    };
+    const win = runLine("win32");
+    expect(win).toStartWith("powershell -NoProfile -ExecutionPolicy Bypass -File ");
+    expect(win).toContain(`run-coverage.ps1 -Module ${MODULE} -Tests ${FQCN} -Out ${session().runDir}`);
+    expect(gateTool(SID, "bash", { command: win })).toBeNull();
+    const posix = runLine("darwin");
+    expect(posix).toStartWith("sh ");
+    expect(posix).toContain(`run-coverage.sh --module ${MODULE}`);
+    expect(gateTool(SID, "bash", { command: posix })).toBeNull();
   });
 
   test("a target whose cases are all skipped is not a coverage gap and is listed as skipped", () => {

@@ -107,12 +107,11 @@ interface Stage {
 }
 
 const WRITES = ["edit", "write", "apply_patch", "multiedit", "patch"];
-const SCRIPT = "scripts/run-coverage.sh";
 /** What the plan cannot do without; shared by the plan guide and the plan rejection text. */
 const ASK_USER_WHEN =
   "(1) the target: no --files and no --program was given and git shows no changed Java file, or the --program ID matches no Controller/Service class, or a --files path does not exist; (2) the Gradle module, when the targets sit in none or in several modules; (3) the case details you cannot derive from the code, such as which exception a branch is meant to raise; (4) for a Mapper target, the test profile: the project has several (e.g. test, test-oracle, test-postgres) and the request does not say which, or has none (never invent an H2 profile)";
 const ASK_USER_NOTE = `If a value cannot be determined from the request or the project, ask the user for it and END YOUR TURN; do not guess or leave placeholders. Then submit the plan again.`;
-const POSIX_NOTE = "The verify step needs a POSIX shell (Git Bash or WSL on Windows); Windows execution of the coverage script is untested.";
+const WINDOWS_NOTE = "Windows uses the PowerShell script `scripts/run-coverage.ps1`; its execution is not verified in the development environment.";
 
 export const STAGES: Record<StageId, Stage> = {
   plan: {
@@ -147,11 +146,11 @@ export const STAGES: Record<StageId, Stage> = {
   verify: {
     goal: "Measure. The plugin reads the build and coverage facts itself; you do not report pass or fail.",
     steps: [
-      `Run the skill's \`${SCRIPT}\` with bash using exactly the command below. It leaves status.json, jacoco.xml and test-results/ in --out. ${POSIX_NOTE}`,
+      `Run the skill's coverage script (\`scripts/run-coverage.sh\` with sh, or \`scripts/run-coverage.ps1\` with PowerShell on Windows) with bash using exactly the command below. It leaves status.json, jacoco.xml and test-results/ in the output directory. ${WINDOWS_NOTE}`,
       `Then call ${STAGE_TOOL} with stage "verify" and a \`note\`: for any line or branch you consider unreachable, the reason. Compile errors, static-check defects and coverage gaps send you back to execute with the details.`,
     ],
-    tools: ["bash (run-coverage.sh only)", "read", "grep"],
-    blocked: [...WRITES, "task", "bash (except run-coverage.sh)"],
+    tools: ["bash (run-coverage.sh/.ps1 only)", "read", "grep"],
+    blocked: [...WRITES, "task", "bash (except run-coverage.sh/.ps1)"],
     finish: "`note` = reasons for any gap you leave; the plugin judges from the files",
   },
   report: {
@@ -243,7 +242,8 @@ function coverageParts(session: FutSession): { module: string; tests: string[]; 
 
 const bashContext = (session: FutSession): BashContext => ({ cwd: session.cwd, coverage: coverageParts(session) });
 
-export function renderStageGuide(stageId: StageId, session?: FutSession): string {
+/** `platform` picks the verify command (PowerShell on win32); tests pass it instead of mocking process.platform. */
+export function renderStageGuide(stageId: StageId, session?: FutSession, platform: NodeJS.Platform = process.platform): string {
   const stage = STAGES[stageId];
   const lines = [
     `[${COMMAND_NAME}] Current stage: ${stageId} (plan → execute → verify → report)`,
@@ -253,7 +253,7 @@ export function renderStageGuide(stageId: StageId, session?: FutSession): string
     ...stage.steps.map((step, i) => `${i + 1}. ${step}`),
   ];
   if (stageId === "verify" && session) {
-    const command = coverageCommandLine(bashContext(session));
+    const command = coverageCommandLine(bashContext(session), platform);
     lines.push(
       command
         ? `Run exactly (no quotes, no extra arguments): ${command}`
@@ -364,8 +364,8 @@ function planProblems(p: PlanInputs, cwd: string): string[] {
   for (const f of p.files) {
     const ok = !escapes(f) && `/${f}`.includes("/src/test/") && (f.endsWith(".java") || `/${f}`.includes("/src/test/resources/"));
     if (!ok) problems.push(`files: ${f} must be a .java file under src/test or a file under src/test/resources, inside the project`);
-    // verify allows bash only for run-coverage.sh; a planned file of that name could forge its facts.
-    else if (path.posix.basename(f).toLowerCase().endsWith("run-coverage.sh")) problems.push(`files: ${f} may not be named like run-coverage.sh`);
+    // verify allows bash only for run-coverage.sh/.ps1; a planned file of that name could forge its facts.
+    else if (/run-coverage\.(sh|ps1)$/.test(path.posix.basename(f).toLowerCase())) problems.push(`files: ${f} may not be named like run-coverage.sh or run-coverage.ps1`);
     else if (f.endsWith(".java") && !/^[\w.]+$/.test(fqcn(f) ?? "")) problems.push(`files: ${f} must be under src/test/java with a plain package path (it becomes a --tests class name)`);
   }
   for (const c of p.cases) {

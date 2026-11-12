@@ -14,7 +14,7 @@ import { UNIT_TEST_SKILL_NAME } from "../pb-online/names";
 
 export type BashStage = "plan" | "execute" | "verify" | "report";
 
-/** The run-coverage.sh arguments of one session. */
+/** The coverage script arguments of one session (run-coverage.sh and run-coverage.ps1 take the same three). */
 export interface CoverageArgs {
   module: string;
   tests: string[];
@@ -36,17 +36,20 @@ const plain = (t: string): boolean => PLAIN_TOKEN.test(t) && !/^[~=]/.test(t);
 
 const GIT_SUBCOMMANDS = new Set(["diff", "status", "log", "show", "rev-parse"]);
 const GIT_FORBIDDEN = ["--output", "--ext-diff", "--textconv", "-c", "--exec-path", "--git-dir", "--work-tree", "-C"];
-const GRADLE_EXE = new Set(["./gradlew", "gradlew", "gradlew.bat", "gradle"]);
+const GRADLE_EXE = new Set(["./gradlew", "gradlew", "gradlew.bat", "./gradlew.bat", "gradle"]);
 const GRADLE_TASK = /^(:[\w-]+)*:?(classes|testClasses|compileJava|compileTestJava|test|cleanTest)$/;
 const GRADLE_FLAGS = new Set(["--offline", "--console=plain", "-q", "--quiet", "--no-daemon", "--parallel", "--continue", "--stacktrace"]);
 /** Full class names only: a wildcard would be a shell glob. */
 const TEST_FILTER = /^[\w.]+$/;
-const SKILL_SCRIPT = `skills/${UNIT_TEST_SKILL_NAME}/scripts/run-coverage.sh`;
+const SH_SCRIPT = "run-coverage.sh";
+const PS_SCRIPT = "run-coverage.ps1";
+type ScriptName = typeof SH_SCRIPT | typeof PS_SCRIPT;
+const skillScript = (name: ScriptName): string => `skills/${UNIT_TEST_SKILL_NAME}/scripts/${name}`;
 
 export const BASH_RULE =
   "bash runs one plain command, written without quotes or backslashes and without ; & | < > ` $ * ? [ ] { } ! # ( ) or newlines. " +
   "plan: git diff|status|log|show|rev-parse with plain arguments. execute: that, or gradle/./gradlew with only classes, testClasses, compileJava, compileTestJava, test, cleanTest tasks (optionally :module:-prefixed), --tests <full test class name> and --offline, --console=plain, -q, --quiet, --no-daemon, --parallel, --continue, --stacktrace. " +
-  "verify: only the run-coverage.sh command shown in the guide, exactly.";
+  "verify: only the run-coverage.sh (sh/bash) or run-coverage.ps1 (powershell/pwsh -File) command shown in the guide, exactly.";
 
 /** git accepts any unambiguous prefix of a long option (`--outp` is `--output`), so a prefix is refused too. */
 function forbiddenGitArg(a: string): boolean {
@@ -80,38 +83,60 @@ function driveForms(p: string): string[] {
 }
 
 /** Every spelling of the installed script the verify gate accepts: project install first, then global. */
-export function scriptPaths(cwd: string, home: string = os.homedir()): string[] {
+export function scriptPaths(cwd: string, home: string = os.homedir(), name: ScriptName = SH_SCRIPT): string[] {
+  const script = skillScript(name);
   return [
-    `.opencode/${SKILL_SCRIPT}`,
-    `./.opencode/${SKILL_SCRIPT}`,
-    ...driveForms(`${slashes(cwd)}/.opencode/${SKILL_SCRIPT}`),
-    ...driveForms(`${slashes(home)}/.config/opencode/${SKILL_SCRIPT}`),
+    `.opencode/${script}`,
+    `./.opencode/${script}`,
+    ...driveForms(`${slashes(cwd)}/.opencode/${script}`),
+    ...driveForms(`${slashes(home)}/.config/opencode/${script}`),
   ];
 }
 
 /** The spelling the guide prints: project-relative when the project has the skill, else the global path. */
-export function guideScriptPath(cwd: string, home: string = os.homedir()): string {
-  return fs.existsSync(path.join(cwd, ".opencode", SKILL_SCRIPT)) ? `.opencode/${SKILL_SCRIPT}` : `${slashes(home)}/.config/opencode/${SKILL_SCRIPT}`;
+export function guideScriptPath(cwd: string, home: string = os.homedir(), name: ScriptName = SH_SCRIPT): string {
+  const script = skillScript(name);
+  return fs.existsSync(path.join(cwd, ".opencode", script)) ? `.opencode/${script}` : `${slashes(home)}/.config/opencode/${script}`;
 }
 
 /**
  * The exact verify command; the guide prints it and `bashAllowed` accepts it (tests in any order).
+ * win32 gets the PowerShell script, every other platform the sh one; the gate accepts both everywhere.
  * Null when the script path has whitespace: such a path can never be one plain token.
  */
-export function coverageCommandLine(ctx: BashContext): string | null {
+export function coverageCommandLine(ctx: BashContext, platform: NodeJS.Platform = process.platform): string | null {
   const { module, tests, out } = ctx.coverage;
-  const script = guideScriptPath(ctx.cwd, ctx.home);
+  const win = platform === "win32";
+  const script = guideScriptPath(ctx.cwd, ctx.home, win ? PS_SCRIPT : SH_SCRIPT);
   if (/\s/.test(script)) return null;
-  return `sh ${script} --module ${module} --tests ${tests.join(",") || "<FQCN,...>"} --out ${out}`;
+  const list = tests.join(",") || "<FQCN,...>";
+  return win
+    ? `powershell -NoProfile -ExecutionPolicy Bypass -File ${script} -Module ${module} -Tests ${list} -Out ${out}`
+    : `sh ${script} --module ${module} --tests ${list} --out ${out}`;
 }
 
-function coverageCommand([shell, script, ...rest]: string[], ctx: BashContext): boolean {
-  if ((shell !== "sh" && shell !== "bash") || !script || !scriptPaths(ctx.cwd, ctx.home).includes(script)) return false;
-  const want = ctx.coverage;
-  if (rest.length !== 6 || rest[0] !== "--module" || rest[2] !== "--tests" || rest[4] !== "--out") return false;
+/** `<flag> M <flag> T <flag> R`, exactly, with T compared to the session's tests as a set. */
+function sameArgs(rest: string[], [m, t, o]: [string, string, string], want: CoverageArgs): boolean {
+  if (rest.length !== 6 || rest[0] !== m || rest[2] !== t || rest[4] !== o) return false;
   const tests = rest[3]!.split(",");
-  const sameTests = tests.length === want.tests.length && new Set(tests).size === tests.length && tests.every((t) => want.tests.includes(t));
+  const sameTests = tests.length === want.tests.length && new Set(tests).size === tests.length && tests.every((x) => want.tests.includes(x));
   return rest[1] === want.module && sameTests && rest[5] === want.out;
+}
+
+/** `(sh|bash) run-coverage.sh --module M --tests T --out R`. */
+function shCoverage([shell, script, ...rest]: string[], ctx: BashContext): boolean {
+  if ((shell !== "sh" && shell !== "bash") || !script || !scriptPaths(ctx.cwd, ctx.home, SH_SCRIPT).includes(script)) return false;
+  return sameArgs(rest, ["--module", "--tests", "--out"], ctx.coverage);
+}
+
+/** `(powershell|pwsh) [-NoProfile] [-ExecutionPolicy Bypass] -File run-coverage.ps1 -Module M -Tests T -Out R`, in that order. */
+function psCoverage([shell, ...rest]: string[], ctx: BashContext): boolean {
+  if (shell !== "powershell" && shell !== "pwsh") return false;
+  let i = 0;
+  if (rest[i] === "-NoProfile") i += 1;
+  if (rest[i] === "-ExecutionPolicy" && rest[i + 1] === "Bypass") i += 2;
+  if (rest[i] !== "-File" || !scriptPaths(ctx.cwd, ctx.home, PS_SCRIPT).includes(rest[i + 1] ?? "")) return false;
+  return sameArgs(rest.slice(i + 2), ["-Module", "-Tests", "-Out"], ctx.coverage);
 }
 
 export function bashAllowed(stage: BashStage, command: string, ctx: BashContext): boolean {
@@ -123,7 +148,7 @@ export function bashAllowed(stage: BashStage, command: string, ctx: BashContext)
     case "execute":
       return gitRead(t) || gradle(t);
     case "verify":
-      return coverageCommand(t, ctx);
+      return shCoverage(t, ctx) || psCoverage(t, ctx);
     case "report":
       return false;
   }
