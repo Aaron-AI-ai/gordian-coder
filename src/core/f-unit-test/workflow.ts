@@ -18,7 +18,7 @@ import { isFullyCovered, readCoverage, readFailedTests, type FileCoverage } from
 import { checkTestSource, testMethodNames } from "./test-check";
 import { writeReport } from "./report";
 import { checkMapperTargets, mapperDefects, type MapperCheck } from "./mapper";
-import { BASH_RULE, bashAllowed, coverageCommandLine, type BashContext } from "./bash-gate";
+import { BASH_RULE, bashAllowed, coverageCommandLine, coverageScriptName, type BashContext } from "./bash-gate";
 import { environmentFailureLine } from "./env-failure";
 
 export { MAX_WAIT_CALLS, UNIT_TEST_SKILL_NAME };
@@ -110,7 +110,7 @@ interface Stage {
 const WRITES = ["edit", "write", "apply_patch", "multiedit", "patch"];
 /** What the plan cannot do without; shared by the plan guide and the plan rejection text. */
 const ASK_USER_WHEN =
-  "(1) the target: no --files and no --program was given and git shows no changed Java file, or the --program ID matches no Controller/Service class, or a --files path does not exist; (2) the Gradle module, when the targets sit in none or in several modules; (3) the case details you cannot derive from the code, such as which exception a branch is meant to raise; (4) for a Mapper target, the test profile: the project has several (e.g. test, test-oracle, test-postgres) and the request does not say which, or has none (never invent an H2 profile)";
+  "(1) the target: no --files and no --program was given and git shows no changed Java file, or the --program ID matches no Controller/Service class, or a --files path does not exist; (2) the Gradle module, when the targets sit in none or in several modules; (3) the case details you cannot derive from the code, such as which exception a branch is meant to raise; (4) for a Mapper target, the test profile: the project has several (e.g. test, test-oracle, test-postgres) and the request does not say which, or has none (never invent an H2 profile); (5) for a Mapper on a non-primary datasource (e.g. secondary, ext), the transaction manager bean name, when the project's datasource config classes do not show it";
 const ASK_USER_NOTE = `If a value cannot be determined from the request or the project, ask the user for it and END YOUR TURN; do not guess or leave placeholders. Then submit the plan again.`;
 const WINDOWS_NOTE = "Windows uses the PowerShell script `scripts/run-coverage.ps1`; its execution is not verified in the development environment.";
 
@@ -123,7 +123,7 @@ export const STAGES: Record<StageId, Stage> = {
       "Find the Gradle module of the targets (e.g. `on-stk-ord-online`) and check the Spring Boot version in the root build.gradle (below 3.4: @MockBean instead of @MockitoBean).",
       `If a required input is missing or cannot be settled from the request and the project, ASK THE USER and END YOUR TURN before doing anything else; never guess and never put a placeholder in \`inputs\`. Required inputs: ${ASK_USER_WHEN}.`,
       "For every public method of each target define cases: at least two normal, one boundary and one exception, plus the external classes to mock (other modules, Mappers, Redis, external API clients). A method that really needs no test gets `skip_reason` instead.",
-      "A Mapper interface (MyBatis `@Mapper`, or a `*Mapper.java` interface) is tested against the real DB of the test profile, not mocked: give it its own case(s) covering every method, put the chosen test profile in the plan `note`, and list no mocks for it. If the project has several test profiles or none, ask the user which to use and END YOUR TURN. In --program mode include the Mappers the target Service uses in the same Gradle module; a Mapper of another module must be named with --files and its test goes in that module. Controller and Service tests still mock their Mappers.",
+      "A Mapper interface (MyBatis `@Mapper`, or a `*Mapper.java` interface) is tested against the real DB of the test profile, not mocked: give it its own case(s) covering every method, put the chosen test profile in the plan `note`, and list no mocks for it. If the project has several test profiles or none, ask the user which to use and END YOUR TURN. In --program mode include the Mappers the target Service uses in the same Gradle module; a Mapper of another module must be named with --files and its test goes in that module. Controller and Service tests still mock their Mappers. A class-level @Transactional rolls back only the default transaction manager: for a Mapper on a non-primary datasource the test must use `@Transactional(\"<transactionManager bean>\")`; read the bean name from the datasource config classes, put it in the plan `note`, and ask the user when it cannot be read. A bulk-delete method (`deleteAll`, `truncate*`) may get `skip_reason`.",
       "Test files go under the module's src/test/java in the target's package as `<ClassName>Test.java`; a test profile may go under src/test/resources. An existing test file is extended, never replaced: keep every existing @Test method.",
       `Write the plan for the user in your reply, then call ${STAGE_TOOL} with stage "plan", the plan as \`note\` and \`inputs\` = { mode, module, targets, files, cases: [{ target, method, normal, boundary, exception, mocks, skip_reason? }] } with project-relative paths. Once it is accepted, END YOUR TURN. Any further tool call while the plan waits is refused, and repeated calls stop the turn.`,
       `After the user approves, call ${STAGE_TOOL} with stage "plan" and user_approved=true. If they ask for changes, submit a new \`note\` and \`inputs\` and ask again.`,
@@ -431,8 +431,18 @@ function freshFile(session: FutSession, name: string): string | null {
   return mtime >= (session.verifyStartedAt ?? 0) - MTIME_SLACK_MS ? file : null;
 }
 
+/**
+ * The Mapper a test file tests, by simple name: the planned test of a MyBatis Mapper target, or by file name
+ * `<X>MapperTest.java` / `<X>RepoTest.java`. Undefined for any other test.
+ */
+function mapperUnderTest(file: string, checks: MapperCheck[]): string | undefined {
+  const planned = checks.find((c) => c.testFile === file);
+  if (planned) return path.posix.basename(planned.target, ".java");
+  return /^(\w+(?:Mapper|Repo))Test\.java$/.exec(path.posix.basename(file))?.[1];
+}
+
 /** Static-check defects of the written test classes, as `file: defect`. */
-function testDefects(session: FutSession): string[] {
+function testDefects(session: FutSession, checks: MapperCheck[]): string[] {
   const defects: string[] = [];
   for (const file of session.touched) {
     if (!file.endsWith(".java")) continue;
@@ -443,7 +453,13 @@ function testDefects(session: FutSession): string[] {
     }
     const cls = path.posix.basename(file, ".java").replace(/Test$/, "");
     const mocks = [...new Set((session.inputs?.cases ?? []).filter((c) => path.posix.basename(c.target, ".java") === cls).flatMap((c) => c.mocks))];
-    const found = checkTestSource(fs.readFileSync(abs, "utf-8"), { mocks, previousMethods: session.previousMethods[file] });
+    const mapper = mapperUnderTest(file, checks);
+    const found = checkTestSource(fs.readFileSync(abs, "utf-8"), {
+      mocks,
+      previousMethods: session.previousMethods[file],
+      requireTransactional: mapper !== undefined,
+      mapperUnderTest: mapper,
+    });
     defects.push(...found.map((d) => `${file}: ${d}`));
   }
   return defects;
@@ -506,14 +522,16 @@ function environmentFailure(session: FutSession, line: string): string {
   ].join("\n");
 }
 
-const RERUN = `Rejected: run run-coverage.sh first in this verify stage (its status.json and jacoco.xml must be newer than the stage entry).`;
+/** The script name the verify guide prints on this machine, for rejection texts. */
+const SCRIPT_NAME = coverageScriptName();
+const RERUN = `Rejected: run ${SCRIPT_NAME} first in this verify stage (its status.json and jacoco.xml must be newer than the stage entry).`;
 
 /** A verify call without fresh facts. It burns a fix retry so a run that never measures still ends. */
 function rerun(session: FutSession): string {
   session.fixRetries += 1;
   if (session.fixRetries > MAX_FIX_RETRIES) {
     session.verification = "incomplete";
-    session.lastProblems = ["verify was called without fresh run-coverage.sh results (status.json/jacoco.xml) too many times"];
+    session.lastProblems = [`verify was called without fresh ${SCRIPT_NAME} results (status.json/jacoco.xml) too many times`];
     return advance(session, "report", `Fix limit (${MAX_FIX_RETRIES}) reached without coverage results. Report this run as INCOMPLETE.`);
   }
   return `${RERUN} This counts as a fix retry (${session.fixRetries}/${MAX_FIX_RETRIES}).\n\n${renderStageGuide("verify", session)}`;
@@ -527,16 +545,17 @@ function completeVerify(session: FutSession, input: StageInput): string {
   try {
     status = JSON.parse(fs.readFileSync(statusFile, "utf-8")) as typeof status;
   } catch {
-    return `Rejected: ${session.runDir}/status.json is not valid JSON. Run run-coverage.sh again.`;
+    return `Rejected: ${session.runDir}/status.json is not valid JSON. Run ${SCRIPT_NAME} again.`;
   }
   session.verifyNote = input.note;
   session.failedTests = readFailedTests(path.join(session.cwd, session.runDir!, "test-results"));
 
-  const envLine = status.compile === "fail" ? environmentFailureLine(status.log ?? "") : null;
+  // Compile failure, or a test step that left no coverage: either can be the environment's (resolution, network).
+  const envLine = status.compile === "fail" || status.coverage === "missing" ? environmentFailureLine(status.log ?? "") : null;
   if (envLine) return environmentFailure(session, envLine);
   if (status.compile !== "ok") return sendBackToFix(session, [`Test compilation failed:\n${status.log ?? "(no log)"}`]);
   session.mapperChecks = mapperChecksOf(session);
-  const defects = [...testDefects(session), ...mapperDefects(session.mapperChecks)];
+  const defects = [...testDefects(session, session.mapperChecks), ...mapperDefects(session.mapperChecks)];
   if (defects.length > 0) return sendBackToFix(session, [`The plugin found defects in the tests:\n${defects.join("\n")}`]);
   // Compiled but no coverage: the test run itself broke. Bounded by the fix retries, not an endless rerun.
   if (status.coverage === "missing") return sendBackToFix(session, [`Tests compiled but produced no coverage:\n${status.log ?? "(no log)"}`]);

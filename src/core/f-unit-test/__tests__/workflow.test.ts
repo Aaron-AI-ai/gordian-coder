@@ -345,6 +345,26 @@ describe("verify", () => {
     expect(session().stage).toBe("report");
   });
 
+  test("a javac error naming UnknownHostException is a test-code error, not the environment", () => {
+    reachVerify();
+    const log = `${MODULE}/src/test/java/x/AT.java:5: error: cannot find symbol\n  symbol: class UnknownHostException\nimport java.net.UnknownHostException;`;
+    runCoverage({ compile: "fail", xml: null, log });
+    const out = done({ stage: "verify", note: "n" });
+    expect(session().stage).toBe("execute");
+    expect(out).toContain("cannot find symbol");
+    expect(out).not.toContain("END YOUR TURN");
+  });
+
+  test("compiled but no coverage because the test step hit the network is an environment failure too", () => {
+    reachVerify();
+    runCoverage({ compile: "ok", xml: null, log: "> Could not resolve org.junit.platform:junit-platform-launcher:1.10.0.\nReceived status code 429 from server" });
+    const out = done({ stage: "verify", note: "n" });
+    expect(session().stage).toBe("verify");
+    expect(session().fixRetries).toBe(1);
+    expect(out).toContain("Could not resolve org.junit.platform");
+    expect(out).toContain("END YOUR TURN");
+  });
+
   test("after an environment failure the old status.json is not judged again", () => {
     reachVerify();
     runCoverage({ compile: "fail", xml: null, log: "> Could not resolve a:b:1." });
@@ -604,6 +624,12 @@ describe("final review fixes", () => {
     expect(fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8")).toContain("without fresh run-coverage.sh results");
   });
 
+  test("the plan guide asks for the transaction manager of a non-primary datasource Mapper", () => {
+    const guide = renderStageGuide("plan");
+    expect(guide).toContain("transaction manager");
+    expect(guide).toContain('@Transactional("<transactionManager bean>")');
+  });
+
   test("the verify guide names the PowerShell script for Windows and that it is unverified", () => {
     const guide = renderStageGuide("verify");
     expect(guide).toContain("run-coverage.ps1");
@@ -724,6 +750,33 @@ ${calls.slice(1).map((c, i) => `  @Test void b${i}_normal2() { assertEquals(1, m
     done({ stage: "execute" });
     expect(session().stage).toBe("verify");
   }
+
+  test("a Mapper test that mocks its own Mapper is a defect", () => {
+    put(MAPPER, MAPPER_SRC);
+    approve(mapperPlan(false));
+    put(MAPPER_TEST, mapperTest(["selectAccountList", "countAccountList", "insert"]).replace("@Autowired AccountOnlineMapper", "@MockitoBean AccountOnlineMapper"));
+    expect(writeOk("write", { filePath: path.join(cwd, MAPPER_TEST) })).toBeNull();
+    done({ stage: "execute" });
+    runCoverage({ xml: `<report name="x"></report>` });
+    const out = done({ stage: "verify", note: "n" });
+    expect(session().stage).toBe("execute");
+    expect(out).toContain("AccountOnlineMapper");
+    expect(out).toContain("실제");
+  });
+
+  test("an extended Mapper test must still carry @Transactional and @ActiveProfiles", () => {
+    put(MAPPER, MAPPER_SRC);
+    const noProfile = (calls: string[]): string => mapperTest(calls).replace('@ActiveProfiles("test")\n', "");
+    put(MAPPER_TEST, noProfile(["selectAccountList"]));
+    approve(mapperPlan(false));
+    put(MAPPER_TEST, noProfile(["selectAccountList", "countAccountList", "insert"]));
+    expect(writeOk("write", { filePath: path.join(cwd, MAPPER_TEST) })).toBeNull();
+    done({ stage: "execute" });
+    runCoverage({ xml: `<report name="x"></report>` });
+    const out = done({ stage: "verify", note: "n" });
+    expect(session().stage).toBe("execute");
+    expect(out).toContain("@ActiveProfiles");
+  });
 
   test("a test calling only some methods is a defect: fix retry, no coverage round", () => {
     toVerify(false, ["selectAccountList", "insert"]);

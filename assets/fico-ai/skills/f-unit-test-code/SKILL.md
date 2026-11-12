@@ -1,11 +1,11 @@
 ---
 name: f-unit-test-code
-description: 'Generates JUnit 5 + Mockito unit tests (@SpringBootTest, @Transactional) for existing FICO Java classes (Controller, Service) from their code, then verifies the test build and JaCoCo line/branch coverage. TRIGGER when user asks to create unit tests for existing code in Korean or English (e.g. 단위 테스트 만들어줘, XXXX 프로그램 단위 테스트 생성해줘, 변경분 테스트 보완해줘, generate unit tests for this class). DO NOT TRIGGER for requirement-based test design, integration tests against a real DB/Redis, or non-Java code.'
+description: 'Generates JUnit 5 + Mockito unit tests (@SpringBootTest, @Transactional) for existing FICO Java classes (Controller, Service, and Mapper (MyBatis) tests against the test-profile DB) from their code, then verifies the test build and JaCoCo line/branch coverage. TRIGGER when user asks to create unit tests for existing code in Korean or English (e.g. 단위 테스트 만들어줘, XXXX 프로그램 단위 테스트 생성해줘, Mapper 테스트 만들어줘, 변경분 테스트 보완해줘, generate unit tests for this class). Uses the real DB only for MyBatis Mapper tests; everything else is mocked. DO NOT TRIGGER for requirement-based test design, end-to-end tests against real Redis or external services, or non-Java code.'
 ---
 
 # f-unit-test-code
 
-Reads finished Java code and generates unit tests for it. Bean dependencies on other modules, Mappers, Redis and external APIs are all mocked; no real resource is touched. The Mapper test is the one exception: the MyBatis Mapper under test is real and runs against the test-profile DB, with every write rolled back by `@Transactional`.
+Reads finished Java code and generates unit tests for it. Controller and Service tests mock every bean dependency on other modules, Mappers, Redis and external APIs. The Mapper test is the one exception: the MyBatis Mapper under test is a real bean that runs against the DB of the chosen test profile inside a rolled-back test transaction (`@Transactional`, or `@Transactional("<transactionManager>")` for a non-primary datasource); everything else is mocked.
 This skill does NOT modify production code or the project's build files.
 
 ### Input (one of)
@@ -52,7 +52,7 @@ This skill does NOT modify production code or the project's build files.
 | `--out` | `-Out` | Output directory (stale results are removed first) |
 | `--project` (optional) | `-Project` (optional) | Project root, default the current directory |
 
-   - The script runs Gradle offline first (`--offline`, from the Gradle cache) and retries online only when the offline run failed on dependency resolution; the last line of `gradle.log` names the mode used.
+   - The script runs Gradle offline first (`--offline`, from the Gradle cache) and retries online only when the offline run failed on dependency resolution or on javac errors in `src/main/java` (a stale cached SNAPSHOT), never for javac errors in `src/test/java`; the last line of `gradle.log` names the mode used.
    - A dependency/network failure (e.g. `Could not resolve`, `status code 429` from Nexus) is an environment problem: report it to the user and stop. Never "fix" it in test code.
 
 3. Fix compile errors. Fill coverage gaps by adding cases (at most 3 rounds). Mapper targets are not JaCoCo-measured; every method the Mapper declares must be called in its test (`<MapperName>Test.java`). Report unreachable branches with a reason; do not fix failing tests.

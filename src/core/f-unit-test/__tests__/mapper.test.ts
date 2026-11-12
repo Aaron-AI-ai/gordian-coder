@@ -44,22 +44,36 @@ describe("mapperMethods", () => {
     ]);
   });
 
-  test("an @Mapper interface qualifies whatever its file name", () => {
-    expect(mapperMethods("@Mapper\npublic interface Foo { int a(); }", "Foo.java")).toEqual(["a"]);
+  test("a MyBatis @Mapper interface qualifies whatever its file name (import, wildcard or FQCN)", () => {
+    expect(mapperMethods("import org.apache.ibatis.annotations.Mapper;\n@Mapper\npublic interface Foo { int a(); }", "Foo.java")).toEqual(["a"]);
+    expect(mapperMethods("import org.apache.ibatis.annotations.*;\n@Mapper\npublic interface Foo { int a(); }", "Foo.java")).toEqual(["a"]);
+    expect(mapperMethods("@org.apache.ibatis.annotations.Mapper\npublic interface Foo { int a(); }", "Foo.java")).toEqual(["a"]);
   });
 
-  test("a Mapper-named interface qualifies without @Mapper", () => {
-    expect(mapperMethods("public interface FooMapper { int a(); }", "FooMapper.java")).toEqual(["a"]);
+  test("a Mapper-named interface qualifies without @Mapper only in a mapper/repo/repository package", () => {
+    for (const pkg of ["x.mapper", "x.repo", "x.y.repository.z"]) {
+      expect(mapperMethods(`package ${pkg};\npublic interface FooMapper { int a(); }`, "FooMapper.java")).toEqual(["a"]);
+    }
+    expect(mapperMethods("package x.util;\npublic interface FooMapper { int a(); }", "FooMapper.java")).toBeNull();
+    expect(mapperMethods("public interface FooMapper { int a(); }", "FooMapper.java")).toBeNull();
+  });
+
+  test("a MapStruct @Mapper and a util ObjectMapper are not MyBatis Mappers", () => {
+    expect(mapperMethods("package x.mapper;\nimport org.mapstruct.Mapper;\n@Mapper\npublic interface DtoMapper { Dto to(Vo v); }", "DtoMapper.java")).toBeNull();
+    expect(mapperMethods("package x.mapper;\n@org.mapstruct.Mapper\npublic interface DtoMapper { Dto to(Vo v); }", "DtoMapper.java")).toBeNull();
+    expect(mapperMethods("package x.util;\npublic interface ObjectMapper { String write(Object o); }", "ObjectMapper.java")).toBeNull();
+    expect(mapperMethods("package x;\n@Mapper\npublic interface Foo { int a(); }", "Foo.java")).toBeNull();
   });
 
   test("a plain interface, a class and an annotation type are not Mappers", () => {
     expect(mapperMethods("public interface Foo { int a(); }", "Foo.java")).toBeNull();
-    expect(mapperMethods("@Mapper\npublic class FooMapper { int a() { return 1; } }", "FooMapper.java")).toBeNull();
-    expect(mapperMethods("@Mapper public @interface FooMapper { String a(); }", "FooMapper.java")).toBeNull();
+    expect(mapperMethods("import org.apache.ibatis.annotations.Mapper;\n@Mapper\npublic class FooMapper { int a() { return 1; } }", "FooMapper.java")).toBeNull();
+    expect(mapperMethods("import org.apache.ibatis.annotations.Mapper;\n@Mapper public @interface FooMapper { String a(); }", "FooMapper.java")).toBeNull();
   });
 
   test("annotation-mapped SQL methods keep their names", () => {
-    const src = `@Mapper
+    const src = `import org.apache.ibatis.annotations.*;
+@Mapper
 public interface SqlMapper {
   @Select("SELECT a; FROM t WHERE x = #{x}")
   @Results({@Result(column = "a", property = "a")})

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { BASH_RULE, bashAllowed, coverageCommandLine, guideScriptPath, scriptPaths, type BashContext, type BashStage } from "../bash-gate";
+import { BASH_RULE, bashAllowed, coverageCommandLine, coverageScriptName, guideScriptPath, scriptPaths, type BashContext, type BashStage } from "../bash-gate";
 
 const MODULE = "on-stk-ord-online";
 const FQCN = "kr.co.koscom.pb.on.stk.ord.online.qry.service.SONAQ001ServiceTest";
@@ -223,6 +223,12 @@ describe("bash gate", () => {
     expect(bashAllowed("verify", line!, ctx())).toBe(true);
     expect(coverageCommandLine(ctx(), "linux")).toBe(`sh ${GLOBAL_SCRIPT} ${ARGS}`);
     expect(guideScriptPath(CWD, HOME, "run-coverage.ps1")).toBe(PS_GLOBAL);
+  });
+
+  test("the script name follows the platform, as the guide does", () => {
+    expect(coverageScriptName("win32")).toBe("run-coverage.ps1");
+    expect(coverageScriptName("linux")).toBe("run-coverage.sh");
+    expect(coverageCommandLine(ctx(), "win32")).toContain(coverageScriptName("win32"));
   });
 
   test("no command is offered when the global skill path has whitespace", () => {

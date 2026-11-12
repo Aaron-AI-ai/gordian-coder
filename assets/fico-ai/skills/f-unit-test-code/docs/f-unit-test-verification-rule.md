@@ -36,7 +36,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-coverage.ps1 -Mo
 
 결과 디렉터리에 `status.json`, `jacoco.xml`, `test-results/`, `gradle.log`가 생긴다.
 
-- 스크립트는 Gradle을 먼저 오프라인(`--offline`, Gradle 캐시)으로 돌리고, 오프라인 실행이 의존성 해석 실패일 때만 온라인으로 한 번 더 돌린다. `gradle.log` 마지막 줄에 사용한 모드가 남는다.
+- 스크립트는 Gradle을 먼저 오프라인(`--offline`, Gradle 캐시)으로 돌리고, 오프라인 실행이 의존성 해석 실패이거나 운영 소스(`src/main/java`)의 javac 오류(오래된 SNAPSHOT 캐시)일 때만 온라인으로 한 번 더 돌린다. 테스트 소스(`src/test/java`)의 javac 오류는 온라인으로 다시 돌리지 않는다. `gradle.log` 마지막 줄에 사용한 모드가 남는다.
 - 의존성·네트워크 실패(`Could not resolve`, Nexus의 `status code 429` 등)는 환경 문제다. 사용자에게 알리고 멈춘다. 테스트 코드로 "고치지" 않는다. 확인 항목은 두 가지다.
 
 1. **빌드(컴파일) 성공.** 실패하면 오류 메시지의 파일·줄을 보고 테스트 코드를 고친 뒤 다시 돌린다(컴파일 재시도는 보강 횟수에 포함하지 않는다).

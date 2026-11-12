@@ -31,6 +31,7 @@
 
 - Lombok이 만든 getter/setter, 단순 getter·상수 반환 (`skip_reason: "Lombok getter, 분기 없음"`)
 - 분기 없이 다른 클래스에 위임만 하는 메서드 (`skip_reason: "분기 없는 위임, 호출 대상이 mock이라 검증할 것이 없음"`)
+- Mapper의 일괄 삭제 메서드(`deleteAll`, `truncate*`처럼 조건 없이 테이블을 비우는 것): 롤백되는 트랜잭션 안이라도 다른 데이터소스·자동 커밋이면 실데이터를 지운다. `skip_reason`으로 건너뛸 수 있다 (`skip_reason: "조건 없는 일괄 삭제, 실데이터 보호"`).
 - 빈 훅 메서드(`preprocess()`처럼 본문이 없는 private 메서드)는 public 메서드 테스트로 함께 실행되므로 따로 만들지 않는다.
 
 "어려워서", "시간이 걸려서"는 사유가 아니다. 건너뛴 메서드는 리포트에 사유와 함께 남는다.

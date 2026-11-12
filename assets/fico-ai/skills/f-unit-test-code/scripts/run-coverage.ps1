@@ -40,12 +40,28 @@ function Write-Log([string[]]$lines, [bool]$append) {
   if ($append) { [System.IO.File]::AppendAllLines($log, $lines, $utf8) } else { [System.IO.File]::WriteAllLines($log, $lines, $utf8) }
 }
 
+# Patterns shared with the plugin's env-failure.ts (a test checks they are identical; keep them in sync).
+# Dependency/network failures (matched case-insensitively, like grep -i):
+$resolution = 'No cached version|offline mode|Could not resolve|Could not GET|Could not HEAD|Could not download|Could not find [A-Za-z0-9_.:-]+:[A-Za-z0-9_.-]+:|Unable to load Maven meta-data|status code (401|403|407|429|5[0-9][0-9])|Server returned HTTP response code: (401|403|407|429|5[0-9][0-9])|Connection (refused|reset|timed out)|UnknownHost|Read timed out'
+# javac errors (case-sensitive, -cmatch): javac echoes source lines, so a log with one is never a resolution failure.
+$javac = '\.java:[0-9]+: error:'
+# javac errors in production sources: offline, a stale cached SNAPSHOT looks like this.
+$mainJavac = 'src[/\\]main[/\\]java[/\\].*\.java:[0-9]+: error:'
+
+function Read-Log { [System.IO.File]::ReadAllText($log, [System.Text.Encoding]::UTF8) }
+
 function Write-Status([string]$compile, [string]$coverage) {
   $tail = ''
   if (Test-Path -LiteralPath $log) {
     # UTF8Encoding replaces invalid bytes (e.g. CP949 output) with U+FFFD instead of failing.
     $lines = @([System.IO.File]::ReadAllLines($log, [System.Text.Encoding]::UTF8))
-    $tail = (@($lines | Select-Object -Last 40) -join "`n") -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', ''
+    $last = @($lines | Select-Object -Last 40)
+    # The first environment line leads the tail: the plugin judges from status.json, which keeps only 40 lines.
+    if (-not ((Read-Log) -cmatch $javac)) {
+      $envLine = @($lines | Where-Object { $_ -match $resolution } | Select-Object -First 1)
+      if ($envLine.Count -gt 0) { $last = @("[run-coverage] first environment line: $($envLine[0])") + $last }
+    }
+    $tail = ($last -join "`n") -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', ''
   }
   $json = [ordered]@{ compile = $compile; log = [string]$tail; coverage = $coverage } | ConvertTo-Json -Compress
   [System.IO.File]::WriteAllText("$out/status.json", $json + "`n", $utf8)
@@ -61,18 +77,17 @@ function Invoke-Logged([string]$exe, [string[]]$argv, [bool]$append) {
   return $code
 }
 
-# Dependency/network failures (the plugin's env-failure.ts carries the same pattern). Only these go online.
-$resolution = 'No cached version|offline mode|Could not resolve|Could not GET|Could not HEAD|Unable to load Maven meta-data|status code (401|403|407|429|5[0-9][0-9])|Connection (refused|reset|timed out)|UnknownHost|Read timed out'
-
 # Offline first (no repository round-trip for cached SNAPSHOTs); once online only when the offline run failed
-# on dependency resolution. Output to gradle.log, closed by a line naming the mode used. Returns the exit code.
+# on dependency resolution or on main-source javac errors. Test-source javac errors never go online.
+# Output to gradle.log, closed by a line naming the mode used. Returns the exit code.
 function Invoke-Gradle([string[]]$argv) {
   $mode = 'offline'
   $code = Invoke-Logged $gradle ($prefix + $argv + @('--offline')) $false
-  # -match is case-insensitive, like grep -i in the sh version.
-  if ($code -ne 0 -and ([System.IO.File]::ReadAllText($log, [System.Text.Encoding]::UTF8) -match $resolution)) {
-    $mode = 'offline failed on dependency resolution -> retried online'
-    $code = Invoke-Logged $gradle ($prefix + $argv) $false
+  if ($code -ne 0) {
+    $text = Read-Log
+    if ($text -cmatch $mainJavac) { $mode = 'offline failed with main-source errors -> retried online' }
+    elseif (-not ($text -cmatch $javac) -and ($text -match $resolution)) { $mode = 'offline failed on dependency resolution -> retried online' }
+    if ($mode -ne 'offline') { $code = Invoke-Logged $gradle ($prefix + $argv) $false }
   }
   Write-Log @("[run-coverage] gradle mode: $mode") $true
   return $code

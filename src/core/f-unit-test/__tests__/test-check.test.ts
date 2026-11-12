@@ -186,3 +186,62 @@ describe("트랜잭션 안전 결함", () => {
     expect(checkTestSource(mapper, { mocks: [] })).toEqual([])
   })
 })
+
+describe("트랜잭션 매니저 지정·추가 결함 형태", () => {
+  const withClassBody = (extra: string): string => healthy.replace("@Transactional", `@Transactional\n${extra}`)
+  const mapperTpl = readFileSync(join(TPL_DIR, "MapperTestTemplate.java"), "utf8")
+    .replaceAll("{PackagePath}", "x").replaceAll("{ClassName}", "AccountMapperTest").replaceAll("{TargetClass}", "AccountMapper")
+
+  test.each(['@Transactional("secondaryTransactionManager")', '@Transactional(transactionManager = "extTransactionManager")'])(
+    "%s 는 @Transactional로 인정",
+    (form) => {
+      expect(checkTestSource(healthy.replace("@Transactional", form), { mocks })).toEqual([])
+      expect(checkTestSource(mapperTpl.replace("@Transactional", form), { mocks: [], requireTransactional: true, mapperUnderTest: "AccountMapper" })).toEqual([])
+    },
+  )
+
+  test.each([
+    ["FQCN @Commit", "@org.springframework.test.annotation.Commit"],
+    ["@Rollback(Boolean.FALSE)", "@Rollback(Boolean.FALSE)"],
+    ["@Rollback(value = Boolean.FALSE)", "@Rollback(value = Boolean.FALSE)"],
+    ["FQCN @Rollback(false)", "@org.springframework.test.annotation.Rollback(false)"],
+  ])("%s 는 결함", (_label, construct) => {
+    expect(checkTestSource(withClassBody(construct), { mocks }).some((x) => x.includes("롤백"))).toBe(true)
+  })
+
+  test.each(["TestTransaction.flagForCommit();", "TestTransaction.end();"])("%s 는 결함", (call) => {
+    const src = healthy.replace("@BeforeEach", `@BeforeEach void commitIt() { ${call} }\n    @BeforeEach`)
+    expect(checkTestSource(src, { mocks }).some((x) => x.includes("TestTransaction"))).toBe(true)
+  })
+
+  test("static import 뒤의 맨 REQUIRES_NEW·NOT_SUPPORTED도 결함", () => {
+    const src = withClassBody("@Transactional(propagation = REQUIRES_NEW)").replace(
+      "import ",
+      "import static org.springframework.transaction.annotation.Propagation.*;\nimport ",
+    )
+    const d = checkTestSource(src, { mocks })
+    expect(d.some((x) => x.includes("Propagation.REQUIRES_NEW"))).toBe(true)
+    // static import가 없으면 같은 이름의 다른 상수는 건드리지 않는다
+    expect(checkTestSource(withClassBody("static final String NEVER = \"x\";"), { mocks })).toEqual([])
+  })
+
+  test("Mapper 테스트가 대상 Mapper 자신을 mock하면 결함", () => {
+    for (const field of ["@MockitoBean AccountMapper mapper;", "@MockBean\n    private AccountMapper mapper;", "@MockitoSpyBean AccountMapper mapper;"]) {
+      const src = mapperTpl.replace(/@Autowired\s+private AccountMapper mapper;/, field)
+      expect(checkTestSource(src, { mocks: [], requireTransactional: true, mapperUnderTest: "AccountMapper" }).some((x) => x.includes("실제"))).toBe(true)
+    }
+    expect(checkTestSource(mapperTpl, { mocks: [], requireTransactional: true, mapperUnderTest: "AccountMapper" })).toEqual([])
+  })
+
+  test("Mapper 테스트는 기존 파일 보완 중에도 @Transactional·@ActiveProfiles가 필수", () => {
+    const opts = { mocks: [], previousMethods: ["selectByAccountNo_normal1"], requireTransactional: true, mapperUnderTest: "AccountMapper" }
+    const noProfile = mapperTpl.replace(/@ActiveProfiles\([^)]*\)[^\n]*\n/, "")
+    const noTx = mapperTpl.replace(/@Transactional[^\n]*\n/, "")
+    expect(checkTestSource(noProfile, opts).some((x) => x.includes("@ActiveProfiles"))).toBe(true)
+    expect(checkTestSource(noTx, opts).some((x) => x.includes("@Transactional"))).toBe(true)
+    // 보완 중인 일반 파일은 클래스 애노테이션을 여전히 점검하지 않는다
+    expect(checkTestSource(noTx, { mocks: [], previousMethods: ["selectByAccountNo_normal1"] }).some((x) => x.includes("@Transactional"))).toBe(false)
+    // 새 Mapper 테스트 파일에서 @Transactional 누락은 한 번만 보고
+    expect(checkTestSource(noTx, { mocks: [], requireTransactional: true }).filter((x) => x.includes("@Transactional 애노테이션"))).toHaveLength(1)
+  })
+})

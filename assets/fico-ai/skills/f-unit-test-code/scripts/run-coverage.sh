@@ -22,23 +22,37 @@ cd "$PROJECT" || { echo "no such project dir: $PROJECT" >&2; exit 2; }
 GMOD=$(printf '%s' "$MODULE" | sed 's#/#:#g; s/^://')
 MDIR=$(printf '%s' "$GMOD" | sed 's#:#/#g')
 
+# Patterns shared with the plugin's env-failure.ts (a test checks they are identical; keep them in sync).
+# Dependency/network failures:
+RESOLUTION='No cached version|offline mode|Could not resolve|Could not GET|Could not HEAD|Could not download|Could not find [A-Za-z0-9_.:-]+:[A-Za-z0-9_.-]+:|Unable to load Maven meta-data|status code (401|403|407|429|5[0-9][0-9])|Server returned HTTP response code: (401|403|407|429|5[0-9][0-9])|Connection (refused|reset|timed out)|UnknownHost|Read timed out'
+# javac errors (case-sensitive): javac echoes source lines, so a log with one is never a resolution failure.
+JAVAC='\.java:[0-9]+: error:'
+# javac errors in production sources: offline, a stale cached SNAPSHOT looks like this.
+MAIN_JAVAC='src[/\\]main[/\\]java[/\\].*\.java:[0-9]+: error:'
+
 write_status() { # compile coverage logfile
+  # The first environment line leads the tail: the plugin judges from status.json, which keeps only 40 lines.
+  ENVLINE=
+  LC_ALL=C grep -qE "$JAVAC" "$3" 2>/dev/null || ENVLINE=$(LC_ALL=C grep -iE -m 1 "$RESOLUTION" "$3" 2>/dev/null)
   # LC_ALL=C: byte-safe for non-UTF-8 output (e.g. CP949); tr/sed would otherwise abort and truncate
-  tail -n 40 "$3" 2>/dev/null | LC_ALL=C tr -d '\000-\010\013\014\016-\037' \
+  { [ -n "$ENVLINE" ] && printf '[run-coverage] first environment line: %s\n' "$ENVLINE"; tail -n 40 "$3" 2>/dev/null; } \
+    | LC_ALL=C tr -d '\000-\010\013\014\016-\037' \
     | LC_ALL=C sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e "s/$(printf '\t')/\\\\t/g" -e "s/$(printf '\r')/\\\\r/g" \
     | LC_ALL=C awk 'BEGIN{printf "{\"compile\":\"%s\",\"log\":\"", "'"$1"'"} NR>1{printf "\\n"} {printf "%s",$0} END{printf "\",\"coverage\":\"%s\"}\n", "'"$2"'"}' > "$OUT/status.json"
 }
 
-# Dependency/network failures (the plugin's env-failure.ts carries the same pattern). Only these go online.
-RESOLUTION='No cached version|offline mode|Could not resolve|Could not GET|Could not HEAD|Unable to load Maven meta-data|status code (401|403|407|429|5[0-9][0-9])|Connection (refused|reset|timed out)|UnknownHost|Read timed out'
 # run_gradle <args>: offline first (no repository round-trip for cached SNAPSHOTs); once online only when the
-# offline run failed on dependency resolution. Output to $LOG, closed by a line naming the mode used.
+# offline run failed on dependency resolution or on main-source javac errors. Test-source javac errors never
+# go online. Output to $LOG, closed by a line naming the mode used.
 run_gradle() {
   MODE=offline
   $GR "$@" --offline > "$LOG" 2>&1; RC=$?
-  if [ $RC -ne 0 ] && LC_ALL=C grep -qiE "$RESOLUTION" "$LOG"; then
-    MODE='offline failed on dependency resolution -> retried online'
-    $GR "$@" > "$LOG" 2>&1; RC=$?
+  if [ $RC -ne 0 ]; then
+    if LC_ALL=C grep -qE "$MAIN_JAVAC" "$LOG"; then MODE='offline failed with main-source errors -> retried online'
+    elif ! LC_ALL=C grep -qE "$JAVAC" "$LOG" && LC_ALL=C grep -qiE "$RESOLUTION" "$LOG"; then
+      MODE='offline failed on dependency resolution -> retried online'
+    fi
+    [ "$MODE" = offline ] || { $GR "$@" > "$LOG" 2>&1; RC=$?; }
   fi
   echo "[run-coverage] gradle mode: $MODE" >> "$LOG"
   return $RC

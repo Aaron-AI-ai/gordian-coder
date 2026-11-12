@@ -10,6 +10,13 @@ export interface TestCheckOptions {
    * 클래스 애노테이션·파일 전체 @Disabled 점검을 건너뛰고, 단언·@Disabled 점검은 새 메서드에만 한다.
    */
   previousMethods?: string[]
+  /**
+   * Mapper 테스트 파일(실제 DB). 기존 파일 보완 중이어도 @Transactional(어떤 형태든)과 @ActiveProfiles를 항상 요구한다:
+   * 없으면 쓰기가 실제로 커밋되거나 엉뚱한 DB에 붙는다.
+   */
+  requireTransactional?: boolean
+  /** 테스트 대상 Mapper의 단순명. 이 타입을 @MockitoBean/@MockBean/@SpyBean으로 바꾸면 결함이다. */
+  mapperUnderTest?: string
 }
 
 // 주석은 제거, 문자열·문자 리터럴은 내용만 비운다 (그 안의 @Test, {Name}, assert 오탐 방지)
@@ -66,10 +73,11 @@ export function checkTestSource(source: string, opts: TestCheckOptions): string[
   const previous = new Set(opts.previousMethods ?? [])
   // 기존 파일의 형식 누락은 계획 단계에서 보고만 하고 고치지 않는다 (기존 테스트는 바꾸지 않는다).
   const extending = previous.size > 0
-  if (!extending) {
-    for (const a of ["@SpringBootTest", "@Transactional", "@BeforeEach", "@AfterEach"]) {
-      if (!new RegExp(`${a}\\b`).test(code)) defects.push(`${a} 애노테이션이 없습니다. 템플릿대로 추가하세요.`)
-    }
+  // @Transactional("tm"), @Transactional(transactionManager = "tm")도 @Transactional\b로 잡힌다 (문자열은 strip이 비운다).
+  const required = new Set(extending ? [] : ["@SpringBootTest", "@Transactional", "@BeforeEach", "@AfterEach"])
+  if (opts.requireTransactional) for (const a of ["@Transactional", "@ActiveProfiles"]) required.add(a)
+  for (const a of required) {
+    if (!new RegExp(`${a}\\b`).test(code)) defects.push(`${a} 애노테이션이 없습니다. 템플릿대로 추가하세요.`)
   }
 
   const methods = testMethods(code)
@@ -97,9 +105,22 @@ export function checkTestSource(source: string, opts: TestCheckOptions): string[
   }
 
   // 트랜잭션 안전: 테스트 데이터가 DB에 남는 구성은 모든 테스트에서 금지 (Mapper 테스트는 실제 DB라 특히 중요)
-  if (/@Commit\b/.test(code)) defects.push("@Commit이 있습니다. 테스트 트랜잭션은 롤백되어야 하므로 제거하세요.")
-  if (/@Rollback\s*\(\s*(?:value\s*=\s*)?false\s*\)/.test(code)) defects.push("@Rollback(false)가 있습니다. 테스트 트랜잭션은 롤백되어야 하므로 제거하세요.")
-  const propagation = [...new Set([...code.matchAll(/\bPropagation\.(NOT_SUPPORTED|REQUIRES_NEW|NEVER|SUPPORTS)\b/g)].map((m) => m[1]!))]
+  if (opts.mapperUnderTest) {
+    const own = new RegExp(`@(?:[\\w.]+\\.)?(?:MockitoBean|MockBean|MockitoSpyBean|SpyBean)\\b(?:\\s*\\([^)]*\\))?\\s+(?:(?:private|protected|public|final)\\s+)*${escapeRegExp(opts.mapperUnderTest)}\\b`)
+    if (own.test(code)) defects.push(`테스트 대상 Mapper ${opts.mapperUnderTest}을(를) mock하고 있습니다. Mapper 테스트의 대상 Mapper는 @Autowired로 받은 실제 빈이어야 합니다.`)
+  }
+
+  if (/@(?:[\w.]+\.)?Commit\b/.test(code)) defects.push("@Commit이 있습니다. 테스트 트랜잭션은 롤백되어야 하므로 제거하세요.")
+  if (/@(?:[\w.]+\.)?Rollback\s*\(\s*(?:value\s*=\s*)?(?:false|Boolean\.FALSE)\s*\)/.test(code)) defects.push("@Rollback(false)가 있습니다. 테스트 트랜잭션은 롤백되어야 하므로 제거하세요.")
+  if (/\bTestTransaction\s*\.\s*(?:flagForCommit|end)\s*\(/.test(code)) {
+    defects.push("TestTransaction.flagForCommit()/end()가 있습니다. 테스트 트랜잭션을 커밋하거나 일찍 끝내지 말고 롤백되게 두세요.")
+  }
+  const BAD_PROPAGATION = "NOT_SUPPORTED|REQUIRES_NEW|NEVER|SUPPORTS"
+  // import static ...Propagation.*(또는 개별 상수) 뒤에는 접두어 없는 상수도 같은 뜻이다. import 줄은 빼고 본다.
+  const staticImport = /\bimport\s+static\s+[\w.]*\bPropagation\.(?:\*|NOT_SUPPORTED|REQUIRES_NEW|NEVER|SUPPORTS)\s*;/.test(code)
+  const body = code.replace(/^\s*import\b[^;]*;/gm, " ")
+  const propRe = new RegExp(staticImport ? `\\b(?:Propagation\\.)?(${BAD_PROPAGATION})\\b` : `\\bPropagation\\.(${BAD_PROPAGATION})\\b`, "g")
+  const propagation = [...new Set([...body.matchAll(propRe)].map((m) => m[1]!))]
   if (propagation.length > 0) {
     defects.push(`Propagation.${propagation.join(", Propagation.")}이(가) 있습니다. 테스트 트랜잭션 밖에서 실행되거나 따로 커밋되므로 쓰지 말고 하나의 @Transactional 안에서 처리하세요.`)
   }

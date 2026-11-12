@@ -21,13 +21,24 @@ export interface MapperCheck {
   methods: MapperMethod[];
 }
 
+/**
+ * MyBatis, not MapStruct or a util `ObjectMapper`: `@Mapper` from org.apache.ibatis (import, wildcard or FQCN),
+ * or a `*Mapper.java` interface in a `mapper`/`repo`/`repository` package that does not use MapStruct.
+ */
+function isMyBatisMapper(code: string, head: string, fileName: string): boolean {
+  if (/@org\.apache\.ibatis\.annotations\.Mapper\b/.test(head)) return true;
+  if (/@Mapper\b/.test(head) && /\bimport\s+org\.apache\.ibatis\.annotations\.(?:Mapper|\*)\s*;/.test(code)) return true;
+  const pkg = /\bpackage\s+([\w.]+)\s*;/.exec(code)?.[1] ?? "";
+  return fileName.endsWith("Mapper.java") && !/\borg\.mapstruct\b/.test(code) && pkg.split(".").some((seg) => ["mapper", "repo", "repository"].includes(seg));
+}
+
 // ponytail: regex scan, not a Java parser; an annotation argument that itself holds `(` inside a char literal is not handled.
 /** Declared abstract method names when `source` is a Mapper interface, else null. */
 export function mapperMethods(source: string, fileName: string): string[] | null {
   let code = stripComments(source);
   const decl = /(?<!@)\binterface\s+\w+[^{]*\{/.exec(code);
   if (!decl) return null;
-  if (!/@Mapper\b/.test(code.slice(0, decl.index)) && !fileName.endsWith("Mapper.java")) return null;
+  if (!isMyBatisMapper(code, code.slice(0, decl.index), fileName)) return null;
   // Annotations, innermost parentheses first, so `@Results({@Result(..)})` and `@Param("x")` vanish.
   let body = code.slice(decl.index + decl[0].length);
   for (let prev = ""; prev !== body; ) {

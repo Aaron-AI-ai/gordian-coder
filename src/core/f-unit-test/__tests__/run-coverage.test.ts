@@ -152,6 +152,47 @@ describe("run-coverage.sh", () => {
       expect(s.log).not.toContain("retried online");
     });
 
+    test("a javac error that mentions a network word is not retried online", () => {
+      const { proj, out } = project();
+      const rec = fake(proj, ["/p/app/src/test/java/x/AT.java:3: error: cannot find symbol import java.net.UnknownHostException", 1], ["online ok", 0]);
+      run(["--module", "app", "--tests", "a.B", "--out", out, "--project", proj]);
+      expect(calls(rec)).toHaveLength(1);
+      const s = JSON.parse(fs.readFileSync(path.join(out, "status.json"), "utf8"));
+      expect(s.compile).toBe("fail");
+      expect(s.log).not.toContain("first environment line");
+    });
+
+    test("main-source javac errors offline (stale SNAPSHOT) are retried once online", () => {
+      const { proj, out } = project();
+      const rec = fake(proj, ["/p/app/src/main/java/x/A.java:3: error: cannot find symbol", 1], ["online ok", 0]);
+      run(["--module", "app", "--tests", "a.B", "--out", out, "--project", proj]);
+      // the test run compiles too, so its offline call meets the same stale main source
+      expect(calls(rec).map((c) => c.includes("--offline"))).toEqual([true, false, true, false]);
+      const s = JSON.parse(fs.readFileSync(path.join(out, "status.json"), "utf8"));
+      expect(s.compile).toBe("ok");
+      expect(s.log).toContain("main-source errors -> retried online");
+    });
+
+    test("main-source errors: the testClasses retry names its mode", () => {
+      const { proj, out } = project();
+      const rec = fake(proj, ["/p/app/src/main/java/x/A.java:3: error: cannot find symbol", 1], ["/p/app/src/main/java/x/A.java:3: error: still", 1]);
+      run(["--module", "app", "--tests", "a.B", "--out", out, "--project", proj]);
+      expect(calls(rec)).toHaveLength(2);
+      const s = JSON.parse(fs.readFileSync(path.join(out, "status.json"), "utf8"));
+      expect(s.compile).toBe("fail");
+      expect(s.log).toContain("[run-coverage] gradle mode: offline failed with main-source errors -> retried online");
+    });
+
+    test("the first environment line leads the log tail even when it is older than the last 40 lines", () => {
+      const { proj, out } = project();
+      const many = Array.from({ length: 60 }, (_, i) => `noise${i}`).join("\\n");
+      fs.writeFileSync(path.join(proj, "gradlew"), `case "$*" in\n  *--offline*) echo 'No cached version of a:b:1 available for offline mode.'; exit 1;;\n  *) printf '${RESOLUTION.replace(/'/g, "")}\\n${many}\\n'; exit 1;;\nesac\n`);
+      run(["--module", "app", "--tests", "a.B", "--out", out, "--project", proj]);
+      const s = JSON.parse(fs.readFileSync(path.join(out, "status.json"), "utf8"));
+      expect(s.log.split("\n")[0]).toStartWith("[run-coverage] first environment line: ");
+      expect(s.log.split("\n")[0]).toContain("status code 429");
+    });
+
     test("a resolution failure online too is a compile failure with the online output", () => {
       const { proj, out } = project();
       const rec = fake(proj, ["> No cached version of a:b:1 available for offline mode.", 1], [RESOLUTION, 1]);

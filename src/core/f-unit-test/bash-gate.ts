@@ -99,6 +99,11 @@ export function guideScriptPath(cwd: string, home: string = os.homedir(), name: 
   return fs.existsSync(path.join(cwd, ".opencode", script)) ? `.opencode/${script}` : `${slashes(home)}/.config/opencode/${script}`;
 }
 
+/** The coverage script the guide names on this platform: PowerShell on win32, sh elsewhere. */
+export function coverageScriptName(platform: NodeJS.Platform = process.platform): ScriptName {
+  return platform === "win32" ? PS_SCRIPT : SH_SCRIPT;
+}
+
 /**
  * The exact verify command; the guide prints it and `bashAllowed` accepts it (tests in any order).
  * win32 gets the PowerShell script, every other platform the sh one; the gate accepts both everywhere.
@@ -106,8 +111,9 @@ export function guideScriptPath(cwd: string, home: string = os.homedir(), name: 
  */
 export function coverageCommandLine(ctx: BashContext, platform: NodeJS.Platform = process.platform): string | null {
   const { module, tests, out } = ctx.coverage;
-  const win = platform === "win32";
-  const script = guideScriptPath(ctx.cwd, ctx.home, win ? PS_SCRIPT : SH_SCRIPT);
+  const name = coverageScriptName(platform);
+  const win = name === PS_SCRIPT;
+  const script = guideScriptPath(ctx.cwd, ctx.home, name);
   if (/\s/.test(script)) return null;
   const list = tests.join(",") || "<FQCN,...>";
   return win

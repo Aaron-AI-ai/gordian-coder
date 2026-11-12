@@ -58,6 +58,25 @@ describe("f-unit-test-code skill assets", () => {
   });
 });
 
+describe("f-unit-test-code Mapper and datasource wording", () => {
+  test("the description triggers for Mapper tests and limits real-DB tests to them", () => {
+    const fm = /^---\n([\s\S]*?)\n---/.exec(read("SKILL.md"))?.[1] ?? "";
+    expect(fm).toMatch(/Mapper \(MyBatis\)/);
+    expect(fm).not.toContain("integration tests against a real DB");
+    expect(fm).toMatch(/real DB only for (?:MyBatis )?Mapper tests/);
+    expect(read("SKILL.md")).not.toContain("no real resource is touched");
+  });
+
+  test("a Mapper of a non-primary datasource names its transaction manager; bulk deletes may be skipped", () => {
+    for (const doc of ["docs/f-unit-test-format-rule.md", "templates/MapperTestTemplate.java"]) {
+      expect(read(doc)).toContain('@Transactional("');
+      expect(read(doc)).toMatch(/transactionManager|트랜잭션 매니저/);
+    }
+    expect(read("docs/f-unit-test-case-rule.md")).toContain("deleteAll");
+    expect(read("docs/f-unit-test-case-rule.md")).toContain("truncate");
+  });
+});
+
 describe("f-unit-test-code coverage scripts", () => {
   test("run-coverage.ps1 exists, declares its parameters and finds tools/ from its own folder", () => {
     const ps = read("scripts/run-coverage.ps1");
@@ -79,6 +98,7 @@ describe("f-unit-test-code coverage scripts", () => {
     expect(read("SKILL.md")).toContain("not verified in the development environment");
     for (const doc of ["SKILL.md", "docs/f-unit-test-verification-rule.md"]) {
       expect(read(doc)).toContain("--offline");
+      expect(read(doc)).toContain("src/main/java");
       expect(read(doc)).toContain("status code 429");
     }
   });

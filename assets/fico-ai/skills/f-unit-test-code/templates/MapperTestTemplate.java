@@ -29,6 +29,8 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @SpringBootTest // 컨텍스트를 띄워 실제 Mapper 빈을 주입한다
 @ActiveProfiles("test") // 계획의 note에 적은 프로필로 바꾼다 (예: test-oracle). 프로필 자리표시자를 남기지 않는다
+// 기본 트랜잭션 매니저만 롤백한다. 대상 Mapper가 기본이 아닌 데이터소스(secondary, ext 등)에 붙어 있으면
+// @Transactional("<그 데이터소스의 transactionManager 빈 이름>")으로 바꾼다 (이름은 계획 note에 적는다).
 @Transactional // 모든 쓰기가 테스트 끝에 롤백된다. @Commit·@Rollback(false)·Propagation 변경 금지
 class {ClassName} {
 
