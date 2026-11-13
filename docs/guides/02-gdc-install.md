@@ -1,4 +1,4 @@
-# gdc (gordian-coder) 설치 가이드 (Windows / 폐쇄망)
+# gdc (fico-ai) 설치 가이드 (Windows / 폐쇄망)
 
 ## 1. 설치
 

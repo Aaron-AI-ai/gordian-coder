@@ -1,6 +1,6 @@
 # f-review 사용 가이드 (OpenCode)
 
-gordian-coder를 OpenCode 플러그인으로 붙이면 `/f-review` 명령이 생깁니다.
+fico-ai를 OpenCode 플러그인으로 붙이면 `/f-review` 명령이 생깁니다.
 커밋이나 파일 묶음을 **파일 단위로 병렬 리뷰**하고, 마크다운·HTML 리포트를 남깁니다.
 
 > 이 문서의 명령과 경로는 모두 **Windows Git Bash** 기준입니다 (`C:\workspace` → `/c/workspace`).
