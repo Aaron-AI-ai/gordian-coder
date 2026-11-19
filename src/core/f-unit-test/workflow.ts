@@ -20,10 +20,13 @@ import { writeReport } from "./report";
 import { checkMapperTargets, isPlainInterface, mapperDefects, type MapperCheck } from "./mapper";
 import { BASH_RULE, bashAllowed, coverageCommandLine, coverageScriptName, type BashContext } from "./bash-gate";
 import { environmentFailureLine } from "./env-failure";
+import { foreignScriptProblem, reportScriptWarning } from "../report-language";
 
 export { MAX_WAIT_CALLS, UNIT_TEST_SKILL_NAME };
 
 export const COMMAND_NAME = "f-unit-test-code";
+/** The language of the plan note, the summary and the report (the developers read Korean). */
+export const REPORT_LANGUAGE = "ko";
 export const STAGE_TOOL = "f_unit_test_stage";
 export const REPORT_DIR = ".fico/report/f-unit-test";
 /** Verify→execute rounds for coverage gaps before the run is reported with the gaps left. */
@@ -428,6 +431,8 @@ function planProblems(p: PlanInputs, cwd: string, raw: Partial<PlanInputs> = {})
 
 function submitPlan(session: FutSession, input: StageInput, keepBaseline = false): string {
   if (!input.note?.trim()) return `Rejected: the plan needs a \`note\` describing it for the user.\n${ASK_USER_NOTE}`;
+  const planLang = foreignScriptProblem(input.note, REPORT_LANGUAGE, "the plan note");
+  if (planLang) return `Rejected: ${planLang}`;
   const inputs = normalizeInputs(input.inputs ?? {}, session.cwd);
   const problems = planProblems(inputs, session.cwd, input.inputs ?? {});
   if (problems.length > 0) {
@@ -706,9 +711,12 @@ export function completeStage(sessionId: string, input: StageInput): string {
       return completeVerify(session, input);
     case "report": {
       if (!input.note?.trim()) return "Rejected: report needs a `note` with the summary.";
+      const summaryLang = foreignScriptProblem(input.note, REPORT_LANGUAGE, "the summary");
+      if (summaryLang) return `Rejected: ${summaryLang}`;
       const file = writeReport(session, input.note);
+      const scriptWarn = reportScriptWarning(fs.readFileSync(file, "utf-8"), REPORT_LANGUAGE);
       sessions.delete(sessionId);
-      return `Report written: ${file} (HTML: ${file.replace(/\.md$/, ".html")})\nWorkflow closed. Tell the user the test files, the test run result (passed/failed counts), the coverage result, the failing tests and both report paths.`;
+      return `Report written: ${file} (HTML: ${file.replace(/\.md$/, ".html")})${scriptWarn ? `\n${scriptWarn}` : ""}\nWorkflow closed. Tell the user the test files, the test run result (passed/failed counts), the coverage result, the failing tests and both report paths.`;
     }
   }
 }

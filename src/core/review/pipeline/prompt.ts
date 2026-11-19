@@ -7,7 +7,7 @@
  * round, so a stale prompt would carry a token that no longer validates.
  */
 
-import { languageName } from "../contract";
+import { languageName, scriptLine } from "../../report-language";
 import { buildReviewPrompt, targetVars } from "../evidence/template";
 import { fileRead } from "../tools/read";
 import { reviewEvidence } from "../evidence/dossier";
@@ -17,15 +17,7 @@ import { dbgOnce } from "../debug";
 import { currentFile, otherFiles, type ReviewState } from "./state";
 import { renderExtraRules } from "../evidence/rubric";
 
-export { languageName };
-
-/** Small models drift into Chinese — or Russian, Arabic, Japanese — mid-sentence;
- * say it outright. Empty for Japanese/Chinese, where Han is the language itself. */
-export function scriptLine(code: string): string {
-  return code.startsWith("zh") || code.startsWith("ja")
-    ? ""
-    : ` Write only in ${languageName(code)} — no Hanzi, kana, Cyrillic, Arabic or other scripts.`;
-}
+export { languageName, scriptLine };
 
 /** The per-file review prompt for the target currently under review. */
 export function reviewPromptFor(st: ReviewState): string | null {

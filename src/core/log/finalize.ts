@@ -6,7 +6,7 @@
  */
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join } from "node:path";
-import { reportScriptWarning } from "../review/contract";
+import { reportScriptWarning } from "../report-language";
 import { esc, fill } from "../review/report/html";
 import { htmlReportPath, reportDirName } from "../review/report/output";
 import { readFileAt, renderFileContent } from "../review/tools/read";

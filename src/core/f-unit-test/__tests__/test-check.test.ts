@@ -265,6 +265,18 @@ describe("기존 테스트 본문 변경 (update_existing)", () => {
     expect(d[0]).toContain("fee_normal1")
     expect(d[0]).toContain("update_existing")
   })
+  test("문자열 기대값(오류 코드)만 바꿔도 결함으로 잡고, 문자열 안 중괄호가 있어도 본문 경계가 깨지지 않는다", () => {
+    const base = `class T {
+      @Test void ex() { assertEquals("4701", code(0)); }
+      @Test void braces() { assertEquals("{x}", fmt(1)); }
+    }`
+    const o = { mocks: [], previousMethods: ["ex", "braces"], previousBodies: testMethodBodies(base), allowedUpdates: [] as string[] }
+    expect(checkTestSource(base, o)).toEqual([])
+    const d = checkTestSource(base.replace("4701", "4705"), o)
+    expect(d).toHaveLength(1)
+    expect(d[0]).toContain("ex의 본문이 바뀌었습니다")
+    expect(checkTestSource(base.replace("{x}", "{y}"), o)[0]).toContain("braces")
+  })
   test("승인 목록에 있으면 기대값 변경은 허용", () => {
     expect(checkTestSource(changed, opts(["fee_normal1"]))).toEqual([])
   })

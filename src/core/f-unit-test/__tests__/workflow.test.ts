@@ -486,6 +486,7 @@ describe("verify", () => {
     done({ stage: "verify", note: "n" });
     const out = done({ stage: "report", note: "s" });
     const report = fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8");
+    expect(report).toContain(`파일: ${TEST_FILE}`); // the eval checker looks for the test file name
     expect(report).toMatch(/\| inquire_normal2 \| 정상 \| several accounts \|/);
     expect(report).toMatch(/\| inquire_boundary \| 경계값 \| account number of max length \|/);
     expect(report).toMatch(/작업 일시: \d{4}-\d\d-\d\d \d\d:\d\d:\d\d ~ \d\d:\d\d:\d\d \(/);
@@ -926,6 +927,23 @@ describe("update_existing (변경으로 깨지는 기존 테스트 수정)", () 
     const report = fs.readFileSync(path.join(cwd, runDir, "report.md"), "utf-8");
     expect(report).toContain("## 수정한 기존 테스트");
     expect(report).toContain(`${TEST_FILE}#old1: run() now returns 9`);
+  });
+});
+
+describe("보고 언어 (한국어 외 문자 점검)", () => {
+  test("계획 note에 한자·키릴 문자가 섞이면 거절하고 백틱 안은 허용", () => {
+    expect(done({ stage: "plan", note: "메서드入口处 검증 계획", inputs: okPlan() })).toContain("Rejected: Non-Korean script in the plan note");
+    expect(done({ stage: "plan", note: "이유가 материализ 입니다", inputs: okPlan() })).toContain("Rejected: Non-Korean script");
+    expect(done({ stage: "plan", note: "로그 `error=조회 失败` 를 그대로 인용하는 계획", inputs: okPlan() })).toContain("Plan recorded");
+  });
+  test("요약에 다른 문자가 섞이면 report 단계에서 거절하고, 고치면 통과", () => {
+    reachVerify();
+    runCoverage();
+    done({ stage: "verify", note: "n" });
+    expect(session().stage).toBe("report");
+    expect(done({ stage: "report", note: "요약 返回值 확인" })).toContain("Rejected: Non-Korean script in the summary");
+    expect(getSession(SID)).toBeDefined();
+    expect(done({ stage: "report", note: "요약: 반환값 확인" })).toContain("Report written");
   });
 });
 

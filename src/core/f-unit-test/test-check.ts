@@ -55,6 +55,18 @@ function disabledMethods(code: string, methods: TestMethod[]): Set<string> {
   return names
 }
 
+/**
+ * Like strip, but string and char literals keep their text (only the braces inside them are masked so brace counting
+ * still works). Used to compare method bodies: with strip's emptied literals, changing an expected value such as an
+ * error code "4701" → "4705" would look like no change at all.
+ */
+function stripKeepLiterals(source: string): string {
+  return source.replace(
+    /\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])'/g,
+    (m) => (m.startsWith("/") ? " " : m.replace(/\{/g, "\u0001").replace(/\}/g, "\u0002")),
+  )
+}
+
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 /** 식별자 경계로 둘러싼 리터럴 일치 (`$`도 식별자 문자로 본다). */
 const mentions = (code: string, name: string): boolean => new RegExp(`(?<![\\w$])${escapeRegExp(name)}(?![\\w$])`).test(code)
@@ -65,7 +77,7 @@ export function testMethodNames(source: string): string[] {
 
 /** @Test 메서드 이름 → 본문(애노테이션부터, 주석 제외, 공백 정규화). 기존 테스트가 바뀌었는지 비교하는 데 쓴다. */
 export function testMethodBodies(source: string): Record<string, string> {
-  return bodiesOf(strip(source))
+  return bodiesOf(stripKeepLiterals(source))
 }
 
 /** strip한 코드의 메서드 이름 → 본문. @Disabled가 붙은 메서드는 앞에 "@Disabled "를 붙여 비교에 드러나게 한다. */
@@ -129,7 +141,7 @@ export function checkTestSource(source: string, opts: TestCheckOptions): string[
 
   if (opts.previousBodies) {
     const allowed = new Set(opts.allowedUpdates ?? [])
-    const now = bodiesOf(code)
+    const now = bodiesOf(stripKeepLiterals(source))
     for (const m of methods) {
       const was = opts.previousBodies[m.name]
       if (was === undefined || allowed.has(m.name)) continue

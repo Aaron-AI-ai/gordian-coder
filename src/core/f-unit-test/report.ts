@@ -117,6 +117,10 @@ function madeTests(session: FutSession): Map<string, MadeTest[]> {
   return out;
 }
 
+/** 테스트 클래스 이름 → 계획·작성된 테스트 파일 경로 (없으면 클래스 이름 그대로). */
+const fileOf = (session: FutSession, cls: string): string =>
+  [...session.touched, ...(session.inputs?.files ?? [])].find((f) => path.posix.basename(f, ".java") === cls) ?? `${cls}.java`;
+
 /** 확인이 필요한 항목(실패·공백·건너뜀·마지막 오류). 비어 있으면 섹션을 쓰지 않는다. */
 function attentionLines(session: FutSession, withGaps = true): string[] {
   const out: string[] = [];
@@ -159,7 +163,7 @@ function renderHtml(session: FutSession, summary: string, finishedAt: Date): str
   const testsHtml =
     made.size === 0
       ? `<div class="card">${[...session.touched].sort().map((f) => `<code>${esc(f)}</code>`).join(" ") || "테스트 결과 없음"}</div>`
-      : [...made].map(([cls, ts]) => `<div class="card"><h3>${esc(cls)} · ${ts.length}개</h3><table class="t"><tr><th>테스트</th><th>종류</th><th>설명</th><th>구분</th><th>결과</th></tr>${ts
+      : [...made].map(([cls, ts]) => `<div class="card"><h3>${esc(cls)} · ${ts.length}개 <span class="dim">${esc(fileOf(session, cls))}</span></h3><table class="t"><tr><th>테스트</th><th>종류</th><th>설명</th><th>구분</th><th>결과</th></tr>${ts
           .map((t) => `<tr><td><code>${esc(t.method)}</code></td><td>${t.kind}</td><td>${esc(t.what)}</td><td>${t.origin}</td><td class="st-${t.status === "통과" ? "passed" : t.status === "건너뜀" ? "skipped" : "failed"}">${t.status}</td></tr>`)
           .join("")}</table></div>`).join("\n");
   const cmd = verifyCommand(session);
@@ -227,7 +231,7 @@ export function writeReport(session: FutSession, summary: string): string {
     "",
     "## 만든 테스트",
     ...(made.size > 0
-      ? [...made].flatMap(([cls, ts]) => [`### ${cls} (${ts.length}개)`, "| 테스트 | 종류 | 설명 | 구분 | 결과 |", "|---|---|---|---|---|", ...ts.map((t) => `| ${t.method} | ${t.kind} | ${cell(t.what)} | ${t.origin} | ${t.status} |`), ""])
+      ? [...made].flatMap(([cls, ts]) => [`### ${cls} (${ts.length}개)`, `파일: ${fileOf(session, cls)}`, "", "| 테스트 | 종류 | 설명 | 구분 | 결과 |", "|---|---|---|---|---|", ...ts.map((t) => `| ${t.method} | ${t.kind} | ${cell(t.what)} | ${t.origin} | ${t.status} |`), ""])
       : [...[...session.touched].sort().map((f) => `- ${f}`), ""]),
     "## 실행 명령",
     ...(cmd ? ["```", cmd, "```"] : ["(명령을 만들지 못했다)"]),
