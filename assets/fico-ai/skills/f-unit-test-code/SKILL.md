@@ -36,24 +36,15 @@ This skill does NOT modify production code or the project's build files.
 
 2. Replace the placeholders `{PackagePath}`, `{ClassName}`, `{TargetClass}` with real values, and replace the example imports, fields and methods with the target's own. No placeholder may remain.
 3. Before creating a test file, check whether one already exists at the target path. If it does, add cases only.
-4. **CRITICAL - Existing tests:** never delete, rename or `@Disabled` an existing test. Add cases and imports. An existing test that this code change breaks (its expected value no longer matches the changed code) may be updated, but only when the plan lists it in `update_existing` with the reason and new expected value and the user approves the plan; change only its expected values (and the input if the change requires it). Leave every other existing test exactly as it was, including old-format ones. If the change might be a regression rather than intended, say so in the plan and let the user decide.
+4. **CRITICAL - Existing tests:** never delete, rename or `@Disabled` an existing test. Add cases and imports. An existing test that this change breaks may be updated only when the plan lists it in `update_existing` and the user approves (details: `docs/f-unit-test-verification-rule.md`). Leave every other existing test exactly as it was, including old-format ones.
 5. Do not touch production code or `build.gradle`.
 6. Read only inside the project. Never search or read outside it (for example `~/.gradle/caches`, `~/.m2`, or jar contents): such calls are auto-rejected and stop the run. To find out which logging backend or library a project uses, read `build.gradle` and the project sources (imports, `logback*.xml`, `log4j2*.xml`, `application*.yml`); if that does not settle it, do not assert on log output and test the observable behavior instead (return value, exception, mock interaction), and say so in the plan note.
 
 ### 3. Verify
 1. Read `docs/f-unit-test-verification-rule.md` and run its self-check list.
-2. Run the coverage script; it writes `status.json`, `jacoco.xml`, `test-results/` and `gradle.log` into the output directory. Both scripts take the same arguments and write the same files.
+2. Run the coverage script as `docs/f-unit-test-verification-rule.md` ("검증 실행") describes. It writes `status.json`, `jacoco.xml`, `test-results/` and `gradle.log` into the output directory.
    - macOS/Linux: `sh scripts/run-coverage.sh --module <gradle module> --tests <comma separated FQCNs> --out <dir>`
    - Windows: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-coverage.ps1 -Module <gradle module> -Tests <comma separated FQCNs> -Out <dir>` (forward slashes in paths). Its execution is not verified in the development environment.
-
-| `run-coverage.sh` | `run-coverage.ps1` | Meaning |
-|---|---|---|
-| `--module` | `-Module` | Gradle module (`a`, `a/b`, `:a:b` or `a:b`) |
-| `--tests` | `-Tests` | Test class FQCNs, comma separated |
-| `--out` | `-Out` | Output directory (stale results are removed first) |
-| `--project` (optional) | `-Project` (optional) | Project root, default the current directory |
-
-   - The script runs Gradle offline first (`--offline`, from the Gradle cache) and retries online only when the offline run failed on dependency resolution or on javac errors in `src/main/java`, never for javac errors in `src/test/java`. Gradle trusts a cached changing module (SNAPSHOT) for 24 hours, so the online retry only picks up a newer SNAPSHOT once the cache entry is older than that; never add `--refresh-dependencies` (it re-resolves everything and triggers repository rate limits); the last line of `gradle.log` names the mode used.
-   - A dependency/network failure (e.g. `Could not resolve`, `status code 429` from Nexus) is an environment problem: report it to the user and stop. Never "fix" it in test code.
+   - A dependency/network failure (e.g. `Could not resolve`, `status code 429`) is an environment problem: report it to the user and stop. Never "fix" it in test code, and never add `--refresh-dependencies`.
 
 3. Fix compile errors. Fill coverage gaps by adding cases (at most 3 rounds). Mapper targets are not JaCoCo-measured; every method the Mapper declares must be called in its test (`<MapperName>Test.java`). Report unreachable branches with a reason; do not fix failing tests.

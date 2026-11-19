@@ -3,13 +3,11 @@
 ## 자기 점검 (테스트를 쓴 뒤, 검증 스크립트를 돌리기 전에)
 
 1. 모든 테스트 메서드에 의미 있는 단언이 있는가 (반환값/상태 단언 + 필요한 `verify`). `assertNotNull`만 있으면 실패다.
-2. 정상 2건이 서로 다른 입력/경로를 타는가.
-3. 경계값이 실제 코드의 비교 연산자(`<`, `<=`, 길이·크기 제한)에서 도출되었는가.
-4. 예외 테스트가 코드에 실제로 있는 예외 타입(코드값 포함)을 기대하는가.
-5. mock 스텁이 호출 인자와 맞는가 (쓰이지 않는 스텁, 스텁 없는 mock이 돌려준 `null`로 인한 NPE).
-6. `@BeforeEach`/`@AfterEach`/`@Transactional`이 모두 있고 테스트 간 상태 공유가 없는가.
-7. (Mapper) 인터페이스에 선언된 **모든 메서드**를 계획된 `<MapperName>Test`에서 `.<메서드>(`로 호출하는가, `@Commit`·`@Rollback(false)`·`Propagation` 변경이 없는가.
-8. 컴파일에 필요한 import와 VO 필수 필드를 놓치지 않았는가.
+2. 케이스가 `docs/f-unit-test-case-rule.md`대로인가 (정상 2건은 서로 다른 경로, 경계값은 코드의 비교·한도에서, 예외는 코드에 실제로 있는 예외 타입과 코드값).
+3. mock 스텁이 호출 인자와 맞는가 (쓰이지 않는 스텁, 스텁 없는 mock이 돌려준 `null`로 인한 NPE).
+4. `@BeforeEach`/`@AfterEach`/`@Transactional`이 모두 있고 테스트 간 상태 공유가 없는가.
+5. (Mapper) 인터페이스에 선언된 **모든 메서드**를 계획된 `<MapperName>Test`에서 `.<메서드>(`로 호출하는가, `@Commit`·`@Rollback(false)`·`Propagation` 변경이 없는가.
+6. 컴파일에 필요한 import와 VO 필수 필드를 놓치지 않았는가.
 
 ## 검증 실행
 
@@ -32,12 +30,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-coverage.ps1 -Mo
 | `--out` | `-Out` | 결과 디렉터리 (이전 결과는 먼저 지운다) |
 | `--project` (선택) | `-Project` (선택) | 프로젝트 루트, 기본값은 현재 디렉터리 |
 
-두 스크립트는 같은 파일을 만든다. Windows는 PowerShell 스크립트를 쓴다. 단 이 개발 환경에서는 PowerShell 실행을 검증하지 못했다(not verified in the development environment).
+두 스크립트는 같은 파일을 만든다. Windows는 PowerShell 스크립트를 쓴다.
 
 결과 디렉터리에 `status.json`, `jacoco.xml`, `test-results/`, `gradle.log`가 생긴다.
 
-- 스크립트는 Gradle을 먼저 오프라인(`--offline`, Gradle 캐시)으로 돌리고, 오프라인 실행이 의존성 해석 실패이거나 운영 소스(`src/main/java`)의 javac 오류일 때만 온라인으로 한 번 더 돌린다. 테스트 소스(`src/test/java`)의 javac 오류는 온라인으로 다시 돌리지 않는다. Gradle은 캐시된 변경 모듈(SNAPSHOT)을 24시간 믿으므로, 온라인 재시도는 캐시 항목이 그보다 오래됐을 때만 새 SNAPSHOT을 받는다. `--refresh-dependencies`는 쓰지 않는다(모든 의존성을 다시 해석해 저장소 요청 제한에 걸린다).
-- javac 오류 판정은 `X.java:N: error:`와 한국어 로케일의 `X.java:N: 오류:` 형식으로 한다(이 형식이 확실하다). 요약 줄 `N errors`/`오류 N개` 패턴도 함께 보지만, `오류 N개`는 실제 JDK 출력으로 검증하지 않았다. `gradle.log` 마지막 줄에 사용한 모드가 남는다.
+- 스크립트는 Gradle을 먼저 오프라인(`--offline`, Gradle 캐시)으로 돌리고, 오프라인 실행이 의존성 해석 실패이거나 운영 소스(`src/main/java`)의 javac 오류일 때만 온라인으로 한 번 더 돌린다. 테스트 소스(`src/test/java`)의 javac 오류는 온라인으로 다시 돌리지 않는다. `--refresh-dependencies`는 쓰지 않는다(모든 의존성을 다시 해석해 저장소 요청 제한에 걸린다).
 - 의존성·네트워크 실패(`Could not resolve`, Nexus의 `status code 429` 등)는 환경 문제다. 사용자에게 알리고 멈춘다. 테스트 코드로 "고치지" 않는다. 확인 항목은 두 가지다.
 
 1. **빌드(컴파일) 성공.** 실패하면 오류 메시지의 파일·줄을 보고 테스트 코드를 고친 뒤 다시 돌린다(컴파일 재시도는 보강 횟수에 포함하지 않는다).
