@@ -95,6 +95,8 @@ export interface FutSession extends PlanGateState {
   previousBodies: Record<string, Record<string, string>>;
   /** Test files named by the first plan: an amended plan may not add others (they would have no trustworthy baseline). */
   baselineFiles: string[];
+  /** Set once the plan was approved and execute began: from then on no plan submission may re-record the baseline. */
+  baselineLocked: boolean;
   /** Project-relative files written through the gate. */
   touched: Set<string>;
   /** Files written since the run last entered execute; leaving execute needs one. */
@@ -198,6 +200,7 @@ export function startSession(sessionId: string, request: string, cwd: string): F
     previousMethods: {},
     previousBodies: {},
     baselineFiles: [],
+    baselineLocked: false,
     touched: new Set(),
     roundWrites: new Set(),
     verifyBaseline: {},
@@ -465,6 +468,7 @@ function submitPlan(session: FutSession, input: StageInput, keepBaseline = false
 function advance(session: FutSession, to: StageId, lead: string): string {
   session.stage = to;
   if (to === "execute") {
+    session.baselineLocked = true;
     session.runDir ??= `${REPORT_DIR}/report-${localFileStamp()}`;
     session.roundWrites.clear();
   }
@@ -686,7 +690,7 @@ export function completeStage(sessionId: string, input: StageInput): string {
       const inputsChanged = input.inputs !== undefined && !sameInputs(input.inputs, session);
       const reworded = input.note !== session.plan && !input.user_approved;
       if (input.note !== undefined && (!session.plan || inputsChanged || reworded)) {
-        const out = submitPlan(session, input);
+        const out = submitPlan(session, input, session.baselineLocked);
         // An approval call that also carried a changed plan re-records it; say so, or the model repeats the same call.
         return input.user_approved && out.startsWith("Plan recorded")
           ? `${out}\nYou sent user_approved=true together with a ${inputsChanged ? "changed `inputs`" : "changed `note`"}, so this is a NEW plan and the user has to approve it again. When the user approves, call ${STAGE_TOOL} with ONLY stage "plan" and user_approved=true: no note, no inputs.`

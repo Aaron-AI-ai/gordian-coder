@@ -961,6 +961,15 @@ describe("execute 중 계획 보정 (update_existing 추가)", () => {
     expect(session().stage).toBe("execute");
     expect(session().previousBodies[TEST_FILE]!.old2).toContain("2, service.run()");
   });
+  test("보정 뒤 plan 단계에서 계획을 다시 내도 기준 본문은 다시 기록되지 않는다", () => {
+    put(TEST_FILE, OLD);
+    approve(okPlan());
+    writeTest(OLD.replace("2, service.run()", "8, service.run()"));
+    done({ stage: "plan", note: "amended", inputs: { ...okPlan(), update_existing: [{ file: TEST_FILE, test: "old2", reason: "run() changed" }] } });
+    expect(session().stage).toBe("plan");
+    done({ stage: "plan", note: "amended again", inputs: { ...okPlan(), update_existing: [{ file: TEST_FILE, test: "old2", reason: "run() changed" }] } });
+    expect(session().previousBodies[TEST_FILE]!.old2).toContain("2, service.run()");
+  });
   test("보정 계획에 첫 계획에 없던 테스트 파일을 넣으면 거절 (기준 본문이 없다)", () => {
     put(TEST_FILE, OLD);
     approve(okPlan());
