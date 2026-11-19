@@ -89,6 +89,8 @@ export interface FutSession extends PlanGateState {
   previousMethods: Record<string, string[]>;
   /** Normalized bodies of those methods (file → name → body), to find edits the plan did not approve. */
   previousBodies: Record<string, Record<string, string>>;
+  /** Test files named by the first plan: an amended plan may not add others (they would have no trustworthy baseline). */
+  baselineFiles: string[];
   /** Project-relative files written through the gate. */
   touched: Set<string>;
   /** Files written since the run last entered execute; leaving execute needs one. */
@@ -188,6 +190,7 @@ export function startSession(sessionId: string, request: string, cwd: string): F
     cwd,
     previousMethods: {},
     previousBodies: {},
+    baselineFiles: [],
     touched: new Set(),
     roundWrites: new Set(),
     verifyBaseline: {},
@@ -423,9 +426,13 @@ function submitPlan(session: FutSession, input: StageInput, keepBaseline = false
     return `Rejected: the plan is not valid. Fix these fields and submit again:\n${problems.map((p) => `- ${p}`).join("\n")}\n${ASK_USER_NOTE}`;
   }
   // An amended plan keeps the bodies recorded at the first plan: files written since then must not become the baseline.
-  if (!keepBaseline) {
+  if (keepBaseline) {
+    const added = inputs.files.filter((f) => !session.baselineFiles.includes(f));
+    if (added.length > 0) return `Rejected: an amended plan cannot add test files (${added.join(", ")}); they have no baseline from the first plan. Keep the first plan's files.\n${ASK_USER_NOTE}`;
+  } else {
     session.previousMethods = {};
     session.previousBodies = {};
+    session.baselineFiles = [...inputs.files];
   }
   for (const f of keepBaseline ? [] : inputs.files) {
     const abs = path.resolve(session.cwd, f);

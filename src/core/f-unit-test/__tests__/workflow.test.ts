@@ -924,6 +924,14 @@ describe("execute 중 계획 보정 (update_existing 추가)", () => {
     expect(session().stage).toBe("execute");
     expect(session().previousBodies[TEST_FILE]!.old2).toContain("2, service.run()");
   });
+  test("보정 계획에 첫 계획에 없던 테스트 파일을 넣으면 거절 (기준 본문이 없다)", () => {
+    put(TEST_FILE, OLD);
+    approve(okPlan());
+    const extra = { ...okPlan(), files: [...okPlan().files, "src/test/java/x/OtherTest.java"] };
+    const out = done({ stage: "plan", note: "amended", inputs: extra });
+    expect(out).toContain("cannot add test files");
+    expect(session().stage).toBe("execute");
+  });
 });
 
 describe("approval call that changes the plan", () => {
