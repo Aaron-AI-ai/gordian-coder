@@ -273,7 +273,7 @@ export function gateTool(sessionId: string, tool: string, args: Record<string, u
 }
 
 /** fico-mcp reports API failures as a JSON body with an `error` key, not as a tool error. */
-function isFailedResource(output: string): boolean {
+export function isFailedResource(output: string): boolean {
   if (output.startsWith("Failed to read MCP resource")) return true;
   const start = output.indexOf("{");
   if (start < 0) return false;
@@ -313,7 +313,7 @@ export function noteToolResult(
   session.fetched.add(normalizeUri(metadata.uri));
 }
 
-function normalizeUri(uri: string): string {
+export function normalizeUri(uri: string): string {
   try {
     return decodeURIComponent(uri);
   } catch {

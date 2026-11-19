@@ -29,7 +29,7 @@ export interface BashContext {
   home?: string;
 }
 
-const SHELL_META = /[;&|<>`$\n\r'"\\]/;
+export const SHELL_META = /[;&|<>`$\n\r'"\\]/;
 // No * ? [ ] { } ! # ( ) anywhere; a leading ~ (home) or = (zsh command path) is refused separately.
 const PLAIN_TOKEN = /^[\w./:@^~=,-]+$/;
 const plain = (t: string): boolean => PLAIN_TOKEN.test(t) && !/^[~=]/.test(t);
@@ -57,11 +57,11 @@ function forbiddenGitArg(a: string): boolean {
   return GIT_FORBIDDEN.some((f) => a.startsWith(f) || (name.startsWith("--") && name.length > 2 && f.startsWith(name)));
 }
 
-function gitRead([exe, sub, ...rest]: string[]): boolean {
+export function gitRead([exe, sub, ...rest]: string[]): boolean {
   return exe === "git" && GIT_SUBCOMMANDS.has(sub ?? "") && rest.every((a) => plain(a) && !forbiddenGitArg(a));
 }
 
-function gradle([exe, ...rest]: string[]): boolean {
+export function gradle([exe, ...rest]: string[]): boolean {
   if (!GRADLE_EXE.has(exe ?? "")) return false;
   let tasks = 0;
   for (let i = 0; i < rest.length; i++) {
@@ -73,10 +73,10 @@ function gradle([exe, ...rest]: string[]): boolean {
   return tasks > 0;
 }
 
-const slashes = (p: string): string => p.replace(/\\/g, "/").replace(/\/+$/, "");
+export const slashes = (p: string): string => p.replace(/\\/g, "/").replace(/\/+$/, "");
 
 /** `C:/x` also as `c:/x`, `C:/x` and the MSYS/Git Bash form `/c/x`. */
-function driveForms(p: string): string[] {
+export function driveForms(p: string): string[] {
   const m = /^([A-Za-z]):(\/.*)$/.exec(p);
   if (!m) return [p];
   return [`${m[1]!.toUpperCase()}:${m[2]}`, `${m[1]!.toLowerCase()}:${m[2]}`, `/${m[1]!.toLowerCase()}${m[2]}`];

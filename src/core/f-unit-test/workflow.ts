@@ -36,7 +36,7 @@ export const MAX_FIX_RETRIES = 5;
 // ponytail: in-memory like pb-online, so a server restart drops the gate.
 const MAX_SESSIONS = 50;
 // ponytail: file mtimes can trail Date.now() by a clock tick; a stale file from an earlier round is seconds older.
-const MTIME_SLACK_MS = 1000;
+export const MTIME_SLACK_MS = 1000;
 
 export type StageId = "plan" | "execute" | "verify" | "report";
 
@@ -130,7 +130,7 @@ interface Stage {
   finish: string;
 }
 
-const WRITES = ["edit", "write", "apply_patch", "multiedit", "patch"];
+export const WRITES = ["edit", "write", "apply_patch", "multiedit", "patch"];
 /** What the plan cannot do without; shared by the plan guide and the plan rejection text. */
 const ASK_USER_WHEN =
   "(1) the target: no --files and no --program was given and git shows no changed Java file, or the --program ID matches no Controller/Service class, or a --files path does not exist; (2) the Gradle module, when the targets sit in none or in several modules; (3) the case details you cannot derive from the code, such as which exception a branch is meant to raise; (4) for a Mapper target, the test profile: the project has several (e.g. test, test-oracle, test-postgres) and the request does not say which, or has none (never invent an H2 profile); (5) for a Mapper on a non-primary datasource (e.g. secondary, ext), the transaction manager bean name, when the project's datasource config classes do not show it";
@@ -239,28 +239,28 @@ export function takeAbortRequest(sessionId: string): boolean {
   return session ? takeAbort(session) : false;
 }
 
-const slash = (p: string): string => p.trim().replace(/\\/g, "/");
+export const slash = (p: string): string => p.trim().replace(/\\/g, "/");
 
 /** Project-relative, `/`-separated and normalized (`a/../b` → `b`, `./x` → `x`). */
-function toRelative(cwd: string, file: string): string {
+export function toRelative(cwd: string, file: string): string {
   const f = slash(file);
   const rel = path.isAbsolute(f) ? path.relative(cwd, f).split(path.sep).join("/") : f;
   return rel ? path.posix.normalize(rel) : "";
 }
 
 /** A normalized path that leaves the project: `..`, `../x`, or still absolute (other drive, `C:/`). */
-const escapes = (rel: string): boolean => rel === ".." || rel.startsWith("../") || path.isAbsolute(rel) || /^[A-Za-z]:\//.test(rel);
+export const escapes = (rel: string): boolean => rel === ".." || rel.startsWith("../") || path.isAbsolute(rel) || /^[A-Za-z]:\//.test(rel);
 
 /**
  * Both sides are normalized project-relative paths, so only an exact match counts. A suffix
  * match would let `x/<planned>` through and then be checked as the planned file.
  */
-function matchesPath(planned: string, file: string): boolean {
+export function matchesPath(planned: string, file: string): boolean {
   return !escapes(file) && file === planned;
 }
 
 /** `a/src/test/java/x/y/ZTest.java` → `x.y.ZTest`. */
-function fqcn(file: string): string | null {
+export function fqcn(file: string): string | null {
   const m = /(?:^|\/)src\/test\/java\/(.+)\.java$/.exec(file);
   return m ? m[1]!.replace(/\//g, ".") : null;
 }
@@ -302,7 +302,7 @@ export function renderStageGuide(stageId: StageId, session?: FutSession, platfor
 }
 
 /** The files a write-capable call is about to touch. */
-function targetsOf(args: Record<string, unknown>): string[] {
+export function targetsOf(args: Record<string, unknown>): string[] {
   if (typeof args.filePath === "string") return [args.filePath];
   if (typeof args.patchText === "string") {
     return [...args.patchText.matchAll(/^\*\*\* (?:Add|Update) File: (.+)$/gm)].map((m) => m[1]!.trim());
@@ -351,9 +351,9 @@ export function noteToolResult(sessionId: string, tool: string, args: Record<str
   }
 }
 
-const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : []);
-const paths = (v: unknown): string[] => strings(v).map(slash).filter(Boolean);
-const filled = (v: unknown): number => strings(v).filter((s) => s.trim()).length;
+export const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : []);
+export const paths = (v: unknown): string[] => strings(v).map(slash).filter(Boolean);
+export const filled = (v: unknown): number => strings(v).filter((s) => s.trim()).length;
 
 function normalizeInputs(raw: Partial<PlanInputs>, cwd: string): PlanInputs {
   const rel = (p: string): string => toRelative(cwd, p);
@@ -379,8 +379,8 @@ function normalizeInputs(raw: Partial<PlanInputs>, cwd: string): PlanInputs {
   };
 }
 
-const isFile = (abs: string): boolean => fs.existsSync(abs) && fs.statSync(abs).isFile();
-const isDir = (abs: string): boolean => fs.existsSync(abs) && fs.statSync(abs).isDirectory();
+export const isFile = (abs: string): boolean => fs.existsSync(abs) && fs.statSync(abs).isFile();
+export const isDir = (abs: string): boolean => fs.existsSync(abs) && fs.statSync(abs).isDirectory();
 
 /** Problems per field, empty when the plan can be recorded. */
 function planProblems(p: PlanInputs, cwd: string, raw: Partial<PlanInputs> = {}): string[] {

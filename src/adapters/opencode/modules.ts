@@ -12,6 +12,7 @@ import { createReviewModule } from "./review";
 import { createLogModule } from "./log";
 import { createPbOnlineModule } from "./pb-online";
 import { createFUnitTestModule } from "./f-unit-test";
+import { createFUnitTestReqModule } from "./f-unit-test-req";
 
 /** OpenCode's `command.execute.before` (raw slash-command arguments; `parts`
  * is what the model receives). Declared here because the pinned plugin SDK
@@ -50,6 +51,7 @@ const factories: Array<(input: PluginInput) => OpenCodeModule> = [
   createLogModule,
   createPbOnlineModule,
   createFUnitTestModule,
+  createFUnitTestReqModule,
 ];
 
 export function createModules(input: PluginInput): OpenCodeModule[] {
