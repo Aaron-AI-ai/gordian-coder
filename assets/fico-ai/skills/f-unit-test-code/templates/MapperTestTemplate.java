@@ -16,6 +16,7 @@ import kr.co.koscom.pb.on.stk.ord.bsm.model.dto.AccountResult;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataAccessException;
@@ -39,6 +40,12 @@ class {ClassName} {
 
     @Autowired
     private {TargetClass} mapper; // 실제 Mapper 빈 (mock 어노테이션 금지)
+
+    // 같은 SELECT를 반복 호출하거나 MyBatis 밖(JdbcTemplate 등)에서 데이터를 바꾼 뒤 다시 확인할 때 1차 캐시를 비운다.
+    // 예: long a = mapper.selectNextSeq(); sqlSession.clearCache(); long b = mapper.selectNextSeq();
+    // Mapper의 insert/update/delete는 캐시를 자동으로 비우므로 이 예제의 tearDown(mapper.delete)에는 필요 없다.
+    @Autowired
+    private SqlSessionTemplate sqlSession;
 
     private AccountParameter param(String accountNo, String name) {
         AccountParameter p = new AccountParameter();

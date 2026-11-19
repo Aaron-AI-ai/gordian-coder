@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import { checkTestSource, testMethodNames } from "../test-check"
+import { checkTestSource, testMethodBodies, testMethodNames } from "../test-check"
 
 const TPL_DIR = join(import.meta.dir, "../../../../assets/fico-ai/skills/f-unit-test-code/templates")
 const fill = (s: string): string =>
@@ -243,5 +243,37 @@ describe("트랜잭션 매니저 지정·추가 결함 형태", () => {
     expect(checkTestSource(noTx, { mocks: [], previousMethods: ["selectByAccountNo_normal1"] }).some((x) => x.includes("@Transactional"))).toBe(false)
     // 새 Mapper 테스트 파일에서 @Transactional 누락은 한 번만 보고
     expect(checkTestSource(noTx, { mocks: [], requireTransactional: true }).filter((x) => x.includes("@Transactional 애노테이션"))).toHaveLength(1)
+  })
+})
+
+describe("기존 테스트 본문 변경 (update_existing)", () => {
+  const before = `class FeeTest {
+    @Test void fee_normal1() { assertEquals(3000, service.fee(10)); }
+    @Disabled
+    @Test void fee_old() { assertEquals(1, service.fee(0)); }
+  }`
+  const opts = (allowed: string[] = []) => ({ mocks: [], previousMethods: ["fee_normal1", "fee_old"], previousBodies: testMethodBodies(before), allowedUpdates: allowed })
+  const changed = before.replace("3000", "2500")
+
+  test("그대로 두고 새 메서드·필드만 추가하면 결함 없음", () => {
+    const added = before.replace(/\n  }$/, "\n    @MockitoBean FeeBSM bsm;\n    @Test void fee_normal2() { assertEquals(2, service.fee(2)); }\n  }")
+    expect(checkTestSource(added, opts())).toEqual([])
+  })
+  test("승인 목록에 없는 기존 테스트의 기대값을 바꾸면 결함", () => {
+    const d = checkTestSource(changed, opts())
+    expect(d).toHaveLength(1)
+    expect(d[0]).toContain("fee_normal1")
+    expect(d[0]).toContain("update_existing")
+  })
+  test("승인 목록에 있으면 기대값 변경은 허용", () => {
+    expect(checkTestSource(changed, opts(["fee_normal1"]))).toEqual([])
+  })
+  test("승인받았어도 기존 테스트에 @Disabled를 붙이면 결함", () => {
+    const d = checkTestSource(changed.replace("@Test void fee_normal1", "@Disabled @Test void fee_normal1"), opts(["fee_normal1"]))
+    expect(d.some((x) => x.includes("fee_normal1") && x.includes("@Disabled"))).toBe(true)
+  })
+  test("원래 @Disabled였던 기존 테스트는 결함 아님", () => {
+    expect(testMethodBodies(before).fee_old!.startsWith("@Disabled ")).toBe(true)
+    expect(checkTestSource(before, opts())).toEqual([])
   })
 })

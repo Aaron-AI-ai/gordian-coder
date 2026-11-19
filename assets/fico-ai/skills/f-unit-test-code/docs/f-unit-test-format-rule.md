@@ -46,6 +46,8 @@
 
 사용자 프로젝트의 `build.gradle` 등 빌드 파일은 수정하지 않는다. 의존성이 모자라 컴파일이 안 되면 수정하지 말고 보고한다.
 
+**프로젝트 밖은 읽지 않는다.** `~/.gradle/caches`, `~/.m2`, jar 내부 등 프로젝트 밖을 검색·읽으면 권한이 자동 거부되어 실행이 멈춘다. 로깅 구현체(logback/log4j2)나 사용 라이브러리는 `build.gradle`과 프로젝트 소스(import, `logback*.xml`, `log4j2*.xml`, `application*.yml`)에서만 확인한다. 그래도 확정할 수 없으면 로그 출력을 단언하지 말고 반환값·예외·mock 호출 등 관찰 가능한 동작으로 테스트하며, 그 사실을 계획의 `note`에 적는다.
+
 ## Mapper 테스트 (실제 DB)
 
 예제는 `templates/MapperTestTemplate.java`. 위치/이름은 소스와 같은 패키지의 `<MapperName>Test`(Mapper가 다른 모듈이면 그 모듈의 `src/test`).
@@ -56,6 +58,9 @@
 - **기본이 아닌 데이터소스(트랜잭션 매니저):** 클래스의 `@Transactional`은 기본 트랜잭션 매니저만 롤백한다. 대상 Mapper가 두 번째 데이터소스(예: `secondary`, `ext`)에 붙어 있으면 그 쓰기는 따로 커밋되고, `@AfterEach` 정리가 실제 데이터를 지울 수 있다. 그런 Mapper의 테스트는 `@Transactional("<트랜잭션 매니저 빈 이름>")`(또는 `@Transactional(transactionManager = "...")`)을 쓰고, 그 이름을 계획의 `note`에 적는다. 이름은 프로젝트의 데이터소스 설정 클래스(`@MapperScan(sqlSessionFactoryRef = ...)`, `@Bean ...TransactionManager`)에서 읽고, 읽을 수 없으면 계획 단계에서 사용자에게 묻는다.
 - **시드·정리:** `@BeforeEach`는 테스트 데이터를 Mapper(또는 테스트 트랜잭션 안의 `@Sql`)로 넣고, 키는 충돌을 피하도록 `UT_` 접두어 + 유일 값을 쓴다. `@AfterEach`는 트랜잭션 안에서 만든 행을 지우고 사라졌는지 단언한다(어차피 롤백되지만 필수).
 - 쓰기 케이스(insert/update/delete)는 같은 테스트 안에서 Mapper로 다시 조회해 결과를 단언한다.
+- **MyBatis 1차 캐시:** `@Transactional` 테스트는 한 SqlSession을 끝까지 쓰므로, 같은 SELECT(같은 파라미터)를 다시 부르면 DB가 아니라 캐시 값이 돌아온다. `@Autowired SqlSessionTemplate sqlSession`을 받아 다음 두 곳에서 `sqlSession.clearCache()`를 호출한다. 운영 코드(XML의 `flushCache`)나 설정 yml은 바꾸지 않는다. Mapper의 insert/update/delete는 캐시를 자동으로 비우므로 그 뒤에는 필요 없다.
+  - 같은 SELECT를 한 테스트 안에서 반복 호출할 때 호출 사이. 특히 파라미터 없는 시퀀스·현재시각 조회는 비우지 않으면 두 번째도 첫 값이 나온다.
+  - `JdbcTemplate`·`@Sql` 등 MyBatis 밖에서 데이터를 바꾼 직후, Mapper로 다시 확인하기 전. 예: `@AfterEach`에서 JdbcTemplate으로 지운 뒤 `assertNull(mapper.select...)` 앞.
 
 ## 금지
 

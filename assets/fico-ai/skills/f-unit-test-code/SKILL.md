@@ -11,7 +11,7 @@ This skill does NOT modify production code or the project's build files.
 ### Input (one of)
 - `--files <path...>`: test the given Java classes
 - `--program <ID>`: find the Controller/Service (and In/Out VO) whose class name starts with the program ID (e.g. `SONAQ001`) and test them
-- no argument: test the git changes (working tree + staged vs HEAD; last commit if clean). When a test already exists, add cases for the changed methods only, never overwrite.
+- no argument: test the git changes (working tree + staged vs HEAD; last commit if clean). When a test already exists, add cases for the changed methods; an existing test that the change breaks is updated only with the user's approval (see rule 4).
   - Find the changed methods by mapping the `git diff` hunk line ranges to each method's line range (do this yourself, no script).
   - If an existing test lacks the format rules (`@BeforeEach`, `@AfterEach`, `@Transactional`, ...), report it in the plan; do not fix it.
 
@@ -36,8 +36,9 @@ This skill does NOT modify production code or the project's build files.
 
 2. Replace the placeholders `{PackagePath}`, `{ClassName}`, `{TargetClass}` with real values, and replace the example imports, fields and methods with the target's own. No placeholder may remain.
 3. Before creating a test file, check whether one already exists at the target path. If it does, add cases only.
-4. **CRITICAL - Preserve existing tests:** never delete or overwrite existing test code; add cases and imports only.
+4. **CRITICAL - Existing tests:** never delete, rename or `@Disabled` an existing test. Add cases and imports. An existing test that this code change breaks (its expected value no longer matches the changed code) may be updated, but only when the plan lists it in `update_existing` with the reason and new expected value and the user approves the plan; change only its expected values (and the input if the change requires it). Leave every other existing test exactly as it was, including old-format ones. If the change might be a regression rather than intended, say so in the plan and let the user decide.
 5. Do not touch production code or `build.gradle`.
+6. Read only inside the project. Never search or read outside it (for example `~/.gradle/caches`, `~/.m2`, or jar contents): such calls are auto-rejected and stop the run. To find out which logging backend or library a project uses, read `build.gradle` and the project sources (imports, `logback*.xml`, `log4j2*.xml`, `application*.yml`); if that does not settle it, do not assert on log output and test the observable behavior instead (return value, exception, mock interaction), and say so in the plan note.
 
 ### 3. Verify
 1. Read `docs/f-unit-test-verification-rule.md` and run its self-check list.

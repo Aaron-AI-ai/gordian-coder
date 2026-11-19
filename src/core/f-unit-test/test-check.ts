@@ -17,6 +17,10 @@ export interface TestCheckOptions {
   requireTransactional?: boolean
   /** 테스트 대상 Mapper의 단순명. 이 타입을 @MockitoBean/@MockBean/@SpyBean으로 바꾸면 결함이다. */
   mapperUnderTest?: string
+  /** 계획 시점 기존 @Test 메서드의 본문(공백 정규화, testMethodBodies). 있으면 본문이 바뀐 기존 테스트를 찾는다. */
+  previousBodies?: Record<string, string>
+  /** 계획의 update_existing으로 승인받아 고쳐도 되는 기존 테스트 이름. */
+  allowedUpdates?: string[]
 }
 
 // 주석은 제거, 문자열·문자 리터럴은 내용만 비운다 (그 안의 @Test, {Name}, assert 오탐 방지)
@@ -59,6 +63,30 @@ export function testMethodNames(source: string): string[] {
   return testMethods(strip(source)).map((m) => m.name)
 }
 
+/** @Test 메서드 이름 → 본문(애노테이션부터, 주석 제외, 공백 정규화). 기존 테스트가 바뀌었는지 비교하는 데 쓴다. */
+export function testMethodBodies(source: string): Record<string, string> {
+  return bodiesOf(strip(source))
+}
+
+/** strip한 코드의 메서드 이름 → 본문. @Disabled가 붙은 메서드는 앞에 "@Disabled "를 붙여 비교에 드러나게 한다. */
+function bodiesOf(code: string): Record<string, string> {
+  const methods = testMethods(code)
+  const disabled = disabledMethods(code, methods)
+  return Object.fromEntries(methods.map((m) => [m.name, (disabled.has(m.name) ? "@Disabled " : "") + methodText(code, m)]))
+}
+
+/** 애노테이션부터 메서드의 닫는 중괄호까지 (뒤따르는 필드·헬퍼는 빼고), 공백 정규화. strip한 코드라 문자열 안 중괄호는 없다. */
+function methodText(code: string, m: TestMethod): string {
+  let i = code.indexOf("{", m.headerEnd)
+  if (i < 0) return m.body.replace(/\s+/g, " ").trim()
+  let depth = 0
+  for (; i < code.length; i++) {
+    if (code[i] === "{") depth++
+    else if (code[i] === "}" && --depth === 0) break
+  }
+  return code.slice(m.start, i + 1).replace(/\s+/g, " ").trim()
+}
+
 function assertionState(body: string): "none" | "weak" | "ok" {
   const calls = [...body.matchAll(/\b(assert\w*|fail|verify\w*)\s*\(\s*([^)]*)/g)]
   if (calls.length === 0) return "none"
@@ -93,6 +121,21 @@ export function checkTestSource(source: string, opts: TestCheckOptions): string[
   } else {
     for (const name of disabledMethods(code, methods)) {
       if (!previous.has(name)) defects.push(`새 테스트 메서드 ${name}에 @Disabled가 붙어 있습니다. 비활성화하지 말고 통과하도록 고치거나 삭제하세요.`)
+      else if (opts.previousBodies && !(opts.previousBodies[name] ?? "").startsWith("@Disabled ")) {
+        defects.push(`기존 테스트 메서드 ${name}에 @Disabled를 붙였습니다. 끄지 말고, 이번 변경으로 기대값이 바뀐 것이면 update_existing으로 승인받아 기대값을 고치세요.`)
+      }
+    }
+  }
+
+  if (opts.previousBodies) {
+    const allowed = new Set(opts.allowedUpdates ?? [])
+    const now = bodiesOf(code)
+    for (const m of methods) {
+      const was = opts.previousBodies[m.name]
+      if (was === undefined || allowed.has(m.name)) continue
+      if (now[m.name] !== was) {
+        defects.push(`기존 테스트 메서드 ${m.name}의 본문이 바뀌었습니다. 계획의 update_existing에 없는 기존 테스트는 원래대로 되돌리세요. 고쳐야 하는 것이 맞다면 우회(어댑터·래퍼로 감싸기 등)하지 말고, f_unit_test_stage를 stage "plan"으로 호출해 update_existing을 넣은 계획을 다시 내 사용자 승인을 받으세요.`)
+      }
     }
   }
 

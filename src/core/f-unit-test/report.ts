@@ -48,8 +48,8 @@ function failureSection(session: FutSession): string[] {
   return [
     ...(old.length > 0
       ? [
-          "### 기존 테스트 (이번 실행 전부터 있던 것, 수정하거나 끄지 않았다)",
-          "코드 변경으로 동작이 바뀌어 낡았을 수도, 변경이 회귀일 수도 있다. 생성기는 어느 쪽인지 판단하지 않는다. 확인이 필요하다.",
+          "### 기존 테스트 (이번 실행 전부터 있던 것, 계획에 없어 고치지 않았다)",
+          "코드 변경으로 동작이 바뀌어 낡았을 수도, 변경이 회귀일 수도 있다. 승인 목록(update_existing)에 없던 테스트라 그대로 두었다. 확인이 필요하다.",
           "",
           ...table(old),
           "",
@@ -105,6 +105,9 @@ export function writeReport(session: FutSession, summary: string): string {
     ...(interfaces.length > 0 ? ["## 인터페이스", ...interfaces.map((t) => `- ${t}: 커버리지 측정 안 함 (인터페이스)`), ""] : []),
     ...(gaps.length > 0 ? ["## 남은 공백", ...gaps, ""] : []),
     ...(skipped.length > 0 ? ["## 테스트하지 않은 메서드", ...skipped, ""] : []),
+    ...((session.inputs?.update_existing ?? []).length > 0
+      ? ["## 수정한 기존 테스트 (계획에서 승인)", ...session.inputs!.update_existing!.map((u) => `- ${u.file}#${u.test}: ${u.reason}`), ""]
+      : []),
     ...(session.verification === "incomplete" ? ["## 마지막 오류", ...session.lastProblems, ""] : []),
     "## 실패한 테스트",
     ...failureSection(session),

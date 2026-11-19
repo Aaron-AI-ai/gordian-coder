@@ -15,7 +15,7 @@ import { localFileStamp } from "../time";
 import { UNIT_TEST_SKILL_NAME } from "../pb-online/names";
 import { MAX_WAIT_CALLS, awaitingReply, noteReply, takeAbort, type PlanGateState } from "../plan-gate";
 import { isFullyCovered, readCoverage, readFailedDetails, type FailedTest, type FileCoverage } from "./coverage";
-import { checkTestSource, testMethodNames } from "./test-check";
+import { checkTestSource, testMethodBodies, testMethodNames } from "./test-check";
 import { writeReport } from "./report";
 import { checkMapperTargets, isPlainInterface, mapperDefects, type MapperCheck } from "./mapper";
 import { BASH_RULE, bashAllowed, coverageCommandLine, coverageScriptName, type BashContext } from "./bash-gate";
@@ -47,12 +47,21 @@ export interface CaseDef {
   skip_reason?: string;
 }
 
+/** An existing @Test method the user approved to change because this code change breaks it. */
+export interface ExistingUpdate {
+  file: string;
+  test: string;
+  /** Why it breaks and the new expectation, e.g. "age 45: 12000 → 11000 (band 40 → 50)". */
+  reason: string;
+}
+
 export interface PlanInputs {
   mode: "files" | "program" | "git";
   module: string;
   targets: string[];
   files: string[];
   cases: CaseDef[];
+  update_existing?: ExistingUpdate[];
 }
 
 export interface StageInput {
@@ -78,6 +87,8 @@ export interface FutSession extends PlanGateState {
   plan?: string;
   /** @Test method names of planned test files that already existed at plan time. */
   previousMethods: Record<string, string[]>;
+  /** Normalized bodies of those methods (file → name → body), to find edits the plan did not approve. */
+  previousBodies: Record<string, Record<string, string>>;
   /** Project-relative files written through the gate. */
   touched: Set<string>;
   /** Files written since the run last entered execute; leaving execute needs one. */
@@ -127,8 +138,9 @@ export const STAGES: Record<StageId, Stage> = {
       "For every public method of each target define cases: at least two normal, one boundary and one exception, plus the external classes to mock (other modules, Mappers, Redis, external API clients). A method that really needs no test gets `skip_reason` instead.",
       "A MyBatis Mapper interface (`@Mapper` from org.apache.ibatis, or a `*Mapper.java` interface in a mapper/mappers/repo/repository/dao/persistence package that does not use MapStruct) is tested against the real DB of the test profile, not mocked: give it its own case(s) covering every method, put the chosen test profile in the plan `note`, and list no mocks for it. If the project has several test profiles or none, ask the user which to use and END YOUR TURN. In --program mode include the Mappers the target Service uses in the same Gradle module; a Mapper of another module must be named with --files and its test goes in that module. Controller and Service tests still mock their Mappers. A class-level @Transactional rolls back only the default transaction manager: for a Mapper on a non-primary datasource the test must use `@Transactional(\"<transactionManager bean>\")`; read the bean name from the datasource config classes, put it in the plan `note`, and ask the user when it cannot be read. A bulk-delete method (`deleteAll`, `truncate*`) may get `skip_reason`.",
       "Test files go under the module's src/test/java in the target's package as `<ClassName>Test.java`; a test profile may go under src/test/resources. An existing test file is extended, never replaced: keep every existing @Test method.",
-      `Write the plan for the user in your reply, then call ${STAGE_TOOL} with stage "plan", the plan as \`note\` and \`inputs\` = { mode, module, targets, files, cases: [{ target, method, normal, boundary, exception, mocks, skip_reason? }] } with project-relative paths. Once it is accepted, END YOUR TURN. Any further tool call while the plan waits is refused, and repeated calls stop the turn.`,
-      `After the user approves, call ${STAGE_TOOL} with stage "plan" and user_approved=true. If they ask for changes, submit a new \`note\` and \`inputs\` and ask again.`,
+      "When the change under test alters behavior that an existing @Test asserts (typical in git mode: a threshold, a fee, an error code changed), that test will fail. Read the existing tests of each planned file against the new code, list every one this change breaks in `update_existing` = [{ file, test, reason }] (reason = what changed and the new expected value, e.g. \"age 45: 12000 → 11000, band 40 → 50\") and show the same list in the plan `note`. Only tests broken by this change go there; leave passing tests and old-format tests as they are. If you are not sure the change is intended (it could be a regression), say so in the note and let the user decide.",
+      `Write the plan for the user in your reply, in Korean (or the language the user wrote to you in); never switch to another language such as Chinese or Russian. Then call ${STAGE_TOOL} with stage "plan", the plan as \`note\` and \`inputs\` = { mode, module, targets, files, cases: [{ target, method, normal, boundary, exception, mocks, skip_reason? }], update_existing?: [{ file, test, reason }] } with project-relative paths. Once it is accepted, END YOUR TURN. Any further tool call while the plan waits is refused, and repeated calls stop the turn.`,
+      `After the user approves, call ${STAGE_TOOL} with ONLY stage "plan" and user_approved=true (no note, no inputs: any change to them is a new plan that needs a new approval). If they ask for changes, submit a new \`note\` and \`inputs\` and ask again.`,
     ],
     tools: ["skill", "read", "glob", "grep", "bash (read-only git only)"],
     blocked: [...WRITES, "task", "bash (except read-only git)"],
@@ -139,7 +151,7 @@ export const STAGES: Record<StageId, Stage> = {
     steps: [
       "Write only the planned `files`; any other path is refused. If another file is really needed, say so in the report.",
       "Follow the skill's format rule: @SpringBootTest, @Transactional, @BeforeEach, @AfterEach; mock every external module or resource (a Mapper test is the exception: the Mapper under test is real and runs on the planned profile), keep same-module pure collaborators real.",
-      "Keep every existing @Test method of a file you extend. Replace every template placeholder.",
+      "Keep every existing @Test method of a file you extend. Change an existing @Test only when the approved plan lists it in `update_existing`, and then only its expected values (and the input, if the change requires it) so it matches the new behavior; never delete it, rename it or add @Disabled. Any other existing @Test must stay byte-for-byte as it was. If you find that another existing @Test must change, do not work around it (adapters, wrappers): call ${STAGE_TOOL} with stage \"plan\", a new `note` and `inputs` that add it to `update_existing`, and wait for the user's approval. Replace every template placeholder.",
       "You may compile with gradle in bash, without quotes (e.g. `./gradlew :<module>:compileTestJava`; `--tests` takes a full test class name, no wildcards). Failing tests are not your job to fix here; they are reported.",
     ],
     tools: ["read", "edit", "write", "grep", "bash (gradle only)"],
@@ -175,6 +187,7 @@ export function startSession(sessionId: string, request: string, cwd: string): F
     request,
     cwd,
     previousMethods: {},
+    previousBodies: {},
     touched: new Set(),
     roundWrites: new Set(),
     verifyBaseline: {},
@@ -341,6 +354,11 @@ function normalizeInputs(raw: Partial<PlanInputs>, cwd: string): PlanInputs {
       exception: strings(c?.exception),
       mocks: strings(c?.mocks),
     })),
+    update_existing: (Array.isArray(raw.update_existing) ? raw.update_existing : []).map((u: Partial<ExistingUpdate>) => ({
+      file: typeof u?.file === "string" ? rel(slash(u.file)) : "",
+      test: typeof u?.test === "string" ? u.test.trim() : "",
+      reason: typeof u?.reason === "string" ? u.reason.trim() : "",
+    })),
   };
 }
 
@@ -348,8 +366,9 @@ const isFile = (abs: string): boolean => fs.existsSync(abs) && fs.statSync(abs).
 const isDir = (abs: string): boolean => fs.existsSync(abs) && fs.statSync(abs).isDirectory();
 
 /** Problems per field, empty when the plan can be recorded. */
-function planProblems(p: PlanInputs, cwd: string): string[] {
+function planProblems(p: PlanInputs, cwd: string, raw: Partial<PlanInputs> = {}): string[] {
   const problems: string[] = [];
+  if (raw.update_existing !== undefined && !Array.isArray(raw.update_existing)) problems.push("update_existing: must be an array of {file, test, reason}");
   const abs = (f: string): string => path.resolve(cwd, f);
   if (!["files", "program", "git"].includes(p.mode)) problems.push('mode: must be "files", "program" or "git"');
   // A Gradle path (:a:b) maps to the directory a/b, as run-coverage.sh does.
@@ -375,6 +394,7 @@ function planProblems(p: PlanInputs, cwd: string): string[] {
   for (const c of p.cases) {
     const where = `cases: ${c.target || "(no target)"}#${c.method || "(no method)"}`;
     if (!p.targets.includes(c.target)) problems.push(`${where}: target is not in targets`);
+    if ("update_existing" in c) problems.push(`${where}: \`update_existing\` belongs at the top level of \`inputs\` (a sibling of \`cases\`), not inside a case`);
     for (const m of c.mocks) {
       if (!/^[\w.$]+$/.test(m)) problems.push(`${where}: mock "${m}" must be a class name only (simple or fully qualified, e.g. AccountBSM), without module names, methods or spaces`);
     }
@@ -384,20 +404,35 @@ function planProblems(p: PlanInputs, cwd: string): string[] {
     if (filled(c.exception) < 1) problems.push(`${where}: needs at least 1 exception case`);
   }
   for (const t of p.targets) if (!p.cases.some((c) => c.target === t)) problems.push(`cases: ${t} has no case (or skip_reason)`);
+  for (const u of p.update_existing ?? []) {
+    const where = `update_existing: ${u.file || "(no file)"}#${u.test || "(no test)"}`;
+    if (!p.files.includes(u.file)) problems.push(`${where}: file must be one of files`);
+    else if (!isFile(abs(u.file)) || !testMethodNames(fs.readFileSync(abs(u.file), "utf-8")).includes(u.test)) {
+      problems.push(`${where}: must be an existing @Test method of that file`);
+    }
+    if (!u.reason) problems.push(`${where}: needs a reason (why this change breaks it and the new expectation)`);
+  }
   return problems;
 }
 
-function submitPlan(session: FutSession, input: StageInput): string {
+function submitPlan(session: FutSession, input: StageInput, keepBaseline = false): string {
   if (!input.note?.trim()) return `Rejected: the plan needs a \`note\` describing it for the user.\n${ASK_USER_NOTE}`;
   const inputs = normalizeInputs(input.inputs ?? {}, session.cwd);
-  const problems = planProblems(inputs, session.cwd);
+  const problems = planProblems(inputs, session.cwd, input.inputs ?? {});
   if (problems.length > 0) {
     return `Rejected: the plan is not valid. Fix these fields and submit again:\n${problems.map((p) => `- ${p}`).join("\n")}\n${ASK_USER_NOTE}`;
   }
-  session.previousMethods = {};
-  for (const f of inputs.files) {
+  // An amended plan keeps the bodies recorded at the first plan: files written since then must not become the baseline.
+  if (!keepBaseline) {
+    session.previousMethods = {};
+    session.previousBodies = {};
+  }
+  for (const f of keepBaseline ? [] : inputs.files) {
     const abs = path.resolve(session.cwd, f);
-    if (f.endsWith(".java") && isFile(abs)) session.previousMethods[f] = testMethodNames(fs.readFileSync(abs, "utf-8"));
+    if (!f.endsWith(".java") || !isFile(abs)) continue;
+    const src = fs.readFileSync(abs, "utf-8");
+    session.previousMethods[f] = testMethodNames(src);
+    session.previousBodies[f] = testMethodBodies(src);
   }
   session.inputs = inputs;
   session.plan = input.note;
@@ -460,6 +495,8 @@ function testDefects(session: FutSession, checks: MapperCheck[]): string[] {
     const found = checkTestSource(fs.readFileSync(abs, "utf-8"), {
       mocks,
       previousMethods: session.previousMethods[file],
+      previousBodies: session.previousBodies[file],
+      allowedUpdates: (session.inputs?.update_existing ?? []).filter((u) => u.file === file).map((u) => u.test),
       requireTransactional: mapper !== undefined,
       mapperUnderTest: mapper,
     });
@@ -611,6 +648,13 @@ function sameInputs(a: Partial<PlanInputs>, session: FutSession): boolean {
 export function completeStage(sessionId: string, input: StageInput): string {
   const session = sessions.get(sessionId);
   if (!session) return `No /${COMMAND_NAME} workflow is active in this session.`;
+  // Amend: execute/verify found another existing test that must change. Back to plan for a new approval; the baseline stays.
+  if (input.stage === "plan" && input.note !== undefined && (session.stage === "execute" || session.stage === "verify")) {
+    const out = submitPlan(session, input, true);
+    if (!out.startsWith("Plan recorded")) return out;
+    session.stage = "plan";
+    return `${out}\nThis amends the approved plan (the files already written stay). When the user approves, call ${STAGE_TOOL} with ONLY stage "plan" and user_approved=true to continue to execute.`;
+  }
   if (input.stage !== session.stage) {
     return `Rejected: the current stage is ${session.stage}, not ${input.stage}.\n\n${renderStageGuide(session.stage, session)}`;
   }
@@ -620,7 +664,13 @@ export function completeStage(sessionId: string, input: StageInput): string {
       // Same rule as pb-online: changed inputs always re-plan; a reworded note only when it is not an approval.
       const inputsChanged = input.inputs !== undefined && !sameInputs(input.inputs, session);
       const reworded = input.note !== session.plan && !input.user_approved;
-      if (input.note !== undefined && (!session.plan || inputsChanged || reworded)) return submitPlan(session, input);
+      if (input.note !== undefined && (!session.plan || inputsChanged || reworded)) {
+        const out = submitPlan(session, input);
+        // An approval call that also carried a changed plan re-records it; say so, or the model repeats the same call.
+        return input.user_approved && out.startsWith("Plan recorded")
+          ? `${out}\nYou sent user_approved=true together with a ${inputsChanged ? "changed `inputs`" : "changed `note`"}, so this is a NEW plan and the user has to approve it again. When the user approves, call ${STAGE_TOOL} with ONLY stage "plan" and user_approved=true: no note, no inputs.`
+          : out;
+      }
       if (!session.plan || session.planAt === undefined) return "Rejected: submit the plan as `note` with `inputs` first.";
       if (awaitingReply(session)) {
         session.awaitingCalls += 1;

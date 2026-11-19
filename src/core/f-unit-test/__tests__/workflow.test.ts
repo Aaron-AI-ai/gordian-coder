@@ -869,3 +869,75 @@ ${calls.slice(1).map((c, i) => `  @Test void b${i}_normal2() { assertEquals(1, m
     expect(guide).toContain("real DB");
   });
 });
+
+describe("update_existing (변경으로 깨지는 기존 테스트 수정)", () => {
+  const OLD = `class SONAQ001ServiceTest {\n  @Test void old1() { assertEquals(1, service.run()); }\n  @Test void old2() { assertEquals(2, service.run()); }\n}\n`;
+  const withUpdate = (test: string, reason = "run() now returns 9"): PlanInputs => ({ ...okPlan(), update_existing: [{ file: TEST_FILE, test, reason }] });
+
+  test("없는 테스트 이름이나 빈 사유는 계획에서 거절", () => {
+    put(TEST_FILE, OLD);
+    expect(done({ stage: "plan", note: "p", inputs: withUpdate("nope") })).toContain("must be an existing @Test method");
+    expect(done({ stage: "plan", note: "p", inputs: withUpdate("old1", " ") })).toContain("needs a reason");
+  });
+
+  test("update_existing이 case 안이나 배열이 아닌 값이면 계획에서 거절", () => {
+    put(TEST_FILE, OLD);
+    const nested = okPlan();
+    (nested.cases[0] as unknown as Record<string, unknown>).update_existing = [{ file: TEST_FILE, test: "old1", reason: "r" }];
+    expect(done({ stage: "plan", note: "p", inputs: nested })).toContain("top level of `inputs`");
+    expect(done({ stage: "plan", note: "p", inputs: { ...okPlan(), update_existing: "old1" as never } })).toContain("must be an array");
+  });
+
+  test("승인 안 된 기존 테스트를 고치면 되돌리라는 결함, 승인된 것은 통과하고 리포트에 남는다", () => {
+    put(TEST_FILE, OLD);
+    approve(withUpdate("old1"));
+    const extra = "  @MockitoBean AccountBSM accountBSM;\n  @Test void inquire_normal1() { assertEquals(1, service.inquire(1)); }\n}\n";
+    writeTest(OLD.replace("1, service.run()", "9, service.run()").replace("2, service.run()", "8, service.run()").replace(/}\n$/, extra));
+    done({ stage: "execute" });
+    runCoverage();
+    expect(done({ stage: "verify", note: "n" })).toContain("old2의 본문이 바뀌었습니다");
+    expect(session().stage).toBe("execute");
+    writeTest(OLD.replace("1, service.run()", "9, service.run()").replace(/}\n$/, extra));
+    done({ stage: "execute" });
+    runCoverage();
+    done({ stage: "verify", note: "n" });
+    expect(session().stage).toBe("report");
+    const runDir = session().runDir!;
+    done({ stage: "report", note: "done" });
+    const report = fs.readFileSync(path.join(cwd, runDir, "report.md"), "utf-8");
+    expect(report).toContain("## 수정한 기존 테스트");
+    expect(report).toContain(`${TEST_FILE}#old1: run() now returns 9`);
+  });
+});
+
+describe("execute 중 계획 보정 (update_existing 추가)", () => {
+  const OLD = `class SONAQ001ServiceTest {\n  @Test void old1() { assertEquals(1, service.run()); }\n  @Test void old2() { assertEquals(2, service.run()); }\n}\n`;
+  test("execute에서 plan으로 되돌아가 승인받으면 이미 쓴 파일의 기준 본문은 그대로이고 old2를 고칠 수 있다", () => {
+    put(TEST_FILE, OLD);
+    approve(okPlan());
+    writeTest(OLD.replace("2, service.run()", "8, service.run()"));
+    const out = done({ stage: "plan", note: "amended", inputs: { ...okPlan(), update_existing: [{ file: TEST_FILE, test: "old2", reason: "run() changed" }] } });
+    expect(out).toContain("amends the approved plan");
+    expect(session().stage).toBe("plan");
+    noteUserMessage(SID, Date.now() + 1);
+    done({ stage: "plan", user_approved: true });
+    expect(session().stage).toBe("execute");
+    expect(session().previousBodies[TEST_FILE]!.old2).toContain("2, service.run()");
+  });
+});
+
+describe("approval call that changes the plan", () => {
+  test("user_approved with changed inputs re-records the plan and says how to approve", () => {
+    expect(done({ stage: "plan", note: "the plan", inputs: okPlan() })).toContain("Plan recorded");
+    noteUserMessage(SID, Date.now() + 1);
+    const changed = okPlan();
+    changed.cases[0]!.boundary = ["a different wording"];
+    const out = done({ stage: "plan", note: "the plan", inputs: changed, user_approved: true });
+    expect(out).toContain("NEW plan");
+    expect(out).toContain("ONLY stage");
+    expect(session().stage).toBe("plan");
+    noteUserMessage(SID, Date.now() + 2);
+    done({ stage: "plan", user_approved: true });
+    expect(session().stage).toBe("execute");
+  });
+});
