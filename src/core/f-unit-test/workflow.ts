@@ -14,7 +14,7 @@ import * as path from "node:path";
 import { localFileStamp } from "../time";
 import { UNIT_TEST_SKILL_NAME } from "../pb-online/names";
 import { MAX_WAIT_CALLS, awaitingReply, noteReply, takeAbort, type PlanGateState } from "../plan-gate";
-import { isFullyCovered, readCoverage, readFailedDetails, type FailedTest, type FileCoverage } from "./coverage";
+import { isFullyCovered, readCoverage, readFailedDetails, readTestRun, type FailedTest, type TestRun, type FileCoverage } from "./coverage";
 import { checkTestSource, testMethodBodies, testMethodNames } from "./test-check";
 import { writeReport } from "./report";
 import { checkMapperTargets, isPlainInterface, mapperDefects, type MapperCheck } from "./mapper";
@@ -82,6 +82,7 @@ export interface TargetCoverage {
 export interface FutSession extends PlanGateState {
   stage: StageId;
   request: string;
+  startedAt: number;
   cwd: string;
   inputs?: PlanInputs;
   plan?: string;
@@ -107,6 +108,8 @@ export interface FutSession extends PlanGateState {
   failedTests: string[];
   /** The same failures with message, exception type and stack frame, for the report. */
   failedDetails: FailedTest[];
+  /** Every test the verify run executed (JUnit XML), not only the failing ones. */
+  testRun: TestRun;
   /** Mapper targets (judged by the static call check, not JaCoCo) with which methods the planned test calls. */
   mapperChecks: MapperCheck[];
   /** The last defects or compile log that sent the run back, kept for an incomplete report. */
@@ -175,7 +178,7 @@ export const STAGES: Record<StageId, Stage> = {
     steps: ["Summarise the tests written, what is left uncovered and why, and the failing tests for the developer."],
     tools: [STAGE_TOOL],
     blocked: [...WRITES, "task", "bash"],
-    finish: "`note` = the summary; the plugin writes report.md and closes the workflow",
+    finish: "`note` = the summary; the plugin writes report.md and report.html (test run results, coverage, failing tests) and closes the workflow",
   },
 };
 
@@ -187,6 +190,7 @@ export function startSession(sessionId: string, request: string, cwd: string): F
   const session: FutSession = {
     stage: "plan",
     request,
+    startedAt: Date.now(),
     cwd,
     previousMethods: {},
     previousBodies: {},
@@ -201,6 +205,7 @@ export function startSession(sessionId: string, request: string, cwd: string): F
     coverage: [],
     failedTests: [],
     failedDetails: [],
+    testRun: { total: 0, passed: 0, failed: 0, errored: 0, skipped: 0, seconds: 0, tests: [] },
     mapperChecks: [],
     lastProblems: [],
   };
@@ -259,6 +264,9 @@ function coverageParts(session: FutSession): { module: string; tests: string[]; 
   const tests = (session.inputs?.files ?? []).map(fqcn).filter((f): f is string => f !== null);
   return { module: session.inputs?.module ?? "<module>", tests, out: session.runDir ?? "<runDir>" };
 }
+
+/** The exact verify command of this session (what the report shows as the run command); null when it cannot be built. */
+export const verifyCommand = (session: FutSession): string | null => coverageCommandLine(bashContext(session));
 
 const bashContext = (session: FutSession): BashContext => ({ cwd: session.cwd, coverage: coverageParts(session) });
 
@@ -613,6 +621,7 @@ function completeVerify(session: FutSession, input: StageInput): string {
   }
   session.verifyNote = input.note;
   session.failedDetails = readFailedDetails(path.join(session.cwd, session.runDir!, "test-results"));
+  session.testRun = readTestRun(path.join(session.cwd, session.runDir!, "test-results"));
   session.failedTests = session.failedDetails.map((d) => d.id);
 
   // Compile failure, or a test step that left no coverage: either can be the environment's (resolution, network).
@@ -699,7 +708,7 @@ export function completeStage(sessionId: string, input: StageInput): string {
       if (!input.note?.trim()) return "Rejected: report needs a `note` with the summary.";
       const file = writeReport(session, input.note);
       sessions.delete(sessionId);
-      return `Report written: ${file}\nWorkflow closed. Tell the user the test files, the coverage result, the failing tests and the report path.`;
+      return `Report written: ${file} (HTML: ${file.replace(/\.md$/, ".html")})\nWorkflow closed. Tell the user the test files, the test run result (passed/failed counts), the coverage result, the failing tests and both report paths.`;
     }
   }
 }

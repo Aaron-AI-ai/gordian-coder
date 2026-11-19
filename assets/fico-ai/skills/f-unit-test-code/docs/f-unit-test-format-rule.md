@@ -10,7 +10,7 @@
   (`org.springframework.boot.test.mock.mockito.MockBean`)을 쓴다. 한 프로젝트 안에서 섞지 않는다.
 - 대상 클래스는 `@Autowired`로 주입한 실제 빈이다. 직접 `new`하지 않는다.
 - 위치: 소스와 같은 패키지 구조로 `<모듈>/src/test/java`. 이름: `<클래스명>Test`(예: `SONAQ001ServiceTest`). 이미 있으면 덮어쓰지 않고 변경분만 추가한다.
-- 메서드 이름: `<대상메서드>_normal1`, `_normal2`, `_boundary`, `_exception`. 한 케이스가 여러 개면 `_boundary2`처럼 번호를 붙인다.
+- 메서드 이름: `<대상메서드>_normal1`, `_normal2`, `_boundary`, `_exception`. 한 케이스가 여러 개면 첫 번째는 번호 없이 `_boundary`, 두 번째부터 `_boundary2`, `_boundary3`처럼 번호를 붙인다(`_boundary1`은 쓰지 않는다. `_exception`도 같다). `_normal`만 `_normal1`, `_normal2`로 시작한다.
 
 ## mock 대상 (외부 모듈이나 외부 자원에 닿는 것은 전부 mock)
 

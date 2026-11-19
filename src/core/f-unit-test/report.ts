@@ -2,9 +2,13 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { localFileStamp } from "../time";
+import { localFileStamp, localTimestamp } from "../time";
+import { esc, fill } from "../review/report/html";
+import TEMPLATE_HTML from "./report.template.html" with { type: "text" };
 import { isFullyCovered, type FailedTest } from "./coverage";
-import { MAX_COVERAGE_ROUNDS, MAX_FIX_RETRIES, REPORT_DIR, interfaceTargets, measuredTargets, type FutSession, type Verification } from "./workflow";
+import { MAX_COVERAGE_ROUNDS, MAX_FIX_RETRIES, REPORT_DIR, interfaceTargets, measuredTargets, verifyCommand, type FutSession, type Verification } from "./workflow";
+
+const TEMPLATE = TEMPLATE_HTML as unknown as string;
 
 const pct = (c: { missed: number; covered: number }): string => {
   const total = c.missed + c.covered;
@@ -59,58 +63,187 @@ function failureSection(session: FutSession): string[] {
   ];
 }
 
-/** Writes `<runDir>/report.md` (Korean headings for the developer) and returns its path. */
+function runSummary(session: FutSession): string {
+  const r = session.testRun;
+  if (r.total === 0) return "실행된 테스트 결과가 없다";
+  return `전체 ${r.total}개: 통과 ${r.passed}, 단언 실패 ${r.failed}, 예외 ${r.errored}, 건너뜀 ${r.skipped} (${r.seconds.toFixed(2)}초)`;
+}
+
+const STATUS_LABEL = { passed: "통과", failed: "단언 실패", error: "예외", skipped: "건너뜀" } as const;
+
+const fmtMinutes = (ms: number): string => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return s >= 60 ? `${Math.floor(s / 60)}분 ${s % 60}초` : `${s}초`;
+};
+
+/** 시작~종료 시각과 걸린 시간. */
+function whenText(session: FutSession, finishedAt: Date): string {
+  const p2 = (n: number): string => String(n).padStart(2, "0");
+  const at = (d: Date, date: boolean): string => `${date ? `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ` : ""}${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+  const start = new Date(session.startedAt);
+  const sameDay = start.toDateString() === finishedAt.toDateString();
+  return `${at(start, true)} ~ ${at(finishedAt, !sameDay)} (${fmtMinutes(finishedAt.getTime() - session.startedAt)})`;
+}
+
+interface MadeTest { cls: string; method: string; kind: string; what: string; origin: "신규" | "기존" | "기존(수정 승인)"; status: string }
+
+const KIND_LABEL: Record<string, string> = { normal: "정상", boundary: "경계값", exception: "예외" };
+
+/** 테스트 이름 `<메서드>_<normal|boundary|exception><번호>` → 계획의 같은 종류·번호 항목 설명 ("normal1: " 같은 머리표는 뗀다). */
+function describeTest(session: FutSession, cls: string, method: string): { kind: string; what: string } {
+  const m = /^(.*)_(normal|boundary|exception)(\d*)$/.exec(method);
+  if (!m) return { kind: "-", what: "-" };
+  const [, name, kind, num] = m as unknown as [string, string, "normal" | "boundary" | "exception", string];
+  const cases = (session.inputs?.cases ?? []).filter((c) => c.method === name);
+  const plan = cases.find((c) => `${path.posix.basename(c.target, ".java")}Test` === cls) ?? cases[0];
+  const items = plan?.[kind] ?? [];
+  const label = `${kind}${num || (kind === "normal" ? "1" : "")}`;
+  const hit = items.find((i) => i.startsWith(`${label}:`)) ?? items[(num ? Number(num) : 1) - 1];
+  // 모델이 항목 앞에 "normal1:" 또는 테스트 이름을 붙이면 뗀다: "bonus_boundary (기존 유지: ...)" → "기존 유지: ..."
+  const plain = (hit ?? "").replace(/^\w+:\s*/, "").replace(new RegExp(`^${method}\\s*`), "").replace(/^\((.*)\)$/s, "$1").trim();
+  return { kind: KIND_LABEL[kind]!, what: plain || "-" };
+}
+
+/** 테스트 클래스별 테스트 목록: 신규인지 기존인지, 이번 실행 결과. */
+function madeTests(session: FutSession): Map<string, MadeTest[]> {
+  const updated = new Set((session.inputs?.update_existing ?? []).map((u) => `${path.posix.basename(u.file, ".java")}.${u.test}`));
+  const out = new Map<string, MadeTest[]>();
+  for (const t of session.testRun.tests) {
+    const cls = t.cls.split(".").pop()!;
+    const was = Object.entries(session.previousMethods).some(([file, ms]) => path.posix.basename(file, ".java") === cls && ms.includes(t.method));
+    const origin = !was ? "신규" : updated.has(`${cls}.${t.method}`) ? "기존(수정 승인)" : "기존";
+    (out.get(cls) ?? out.set(cls, []).get(cls)!).push({ cls, method: t.method, ...describeTest(session, cls, t.method), origin, status: STATUS_LABEL[t.status] });
+  }
+  return out;
+}
+
+/** 확인이 필요한 항목(실패·공백·건너뜀·마지막 오류). 비어 있으면 섹션을 쓰지 않는다. */
+function attentionLines(session: FutSession, withGaps = true): string[] {
+  const out: string[] = [];
+  for (const d of session.failedDetails) {
+    out.push(`실패: ${d.cls.split(".").pop()}.${d.method} — ${describeFailure(d)}${d.frame ? ` [${d.frame}]` : ""}${existedBefore(session, d) ? " (기존 테스트, 고치지 않음)" : " (이번에 생성)"}`);
+  }
+  for (const c of withGaps ? session.coverage.filter((x) => !isFullyCovered(x.coverage)) : []) {
+    out.push(`공백: ${c.target} — ${c.coverage ? `미실행 줄 ${c.coverage.uncoveredLines.join(", ") || "없음"}, 분기 일부 ${c.coverage.partialLines.join(", ") || "없음"}` : "어떤 테스트도 실행하지 않음"}`);
+  }
+  const measured = new Set([...measuredTargets(session), ...session.mapperChecks.map((m) => m.target), ...interfaceTargets(session)]);
+  for (const c of (session.inputs?.cases ?? []).filter((x) => x.skip_reason?.trim())) {
+    out.push(`제외: ${c.target}#${c.method} — ${c.skip_reason!.trim()}${measured.has(c.target) ? "" : " (대상 전체 제외, 커버리지 측정 안 함)"}`);
+  }
+  if (session.verification === "incomplete") out.push(...session.lastProblems.map((p) => `오류: ${p}`));
+  return out;
+}
+
+function renderHtml(session: FutSession, summary: string, finishedAt: Date): string {
+  const r = session.testRun;
+  const bad = r.failed + r.errored;
+  const level = session.verification === "incomplete" ? "fail" : session.verification === "covered" && bad === 0 ? "pass" : "warn";
+  const label = { pass: "PASS", warn: "CHECK", fail: "FAIL" }[level];
+  const line = session.coverage.reduce((a, c) => ({ m: a.m + (c.coverage?.line.missed ?? 0), c: a.c + (c.coverage?.line.covered ?? 0) }), { m: 0, c: 0 });
+  const stats = [
+    ["", String(r.total), "실행한 테스트"],
+    ["good", String(r.passed), "통과"],
+    [bad > 0 ? "bad" : "", String(bad), "실패"],
+    ["", line.m + line.c === 0 ? "-" : `${Math.round((line.c / (line.m + line.c)) * 100)}%`, "라인 커버리지"],
+  ]
+    .map(([c, n, l]) => `<div class="stat ${c}"><div class="n">${n}</div><div class="l">${l}</div></div>`)
+    .join("");
+  const info = [
+    ["작업 일시", whenText(session, finishedAt)],
+    ["모드·모듈", `${session.inputs?.mode ?? "-"} · ${session.inputs?.module ?? "-"}`],
+    ...(session.request.trim() ? [["요청", session.request.trim()]] : []),
+  ]
+    .map(([k, v]) => `<dt>${k}</dt><dd>${esc(String(v))}</dd>`)
+    .join("");
+  const made = madeTests(session);
+  const testsHtml =
+    made.size === 0
+      ? `<div class="card">${[...session.touched].sort().map((f) => `<code>${esc(f)}</code>`).join(" ") || "테스트 결과 없음"}</div>`
+      : [...made].map(([cls, ts]) => `<div class="card"><h3>${esc(cls)} · ${ts.length}개</h3><table class="t"><tr><th>테스트</th><th>종류</th><th>설명</th><th>구분</th><th>결과</th></tr>${ts
+          .map((t) => `<tr><td><code>${esc(t.method)}</code></td><td>${t.kind}</td><td>${esc(t.what)}</td><td>${t.origin}</td><td class="st-${t.status === "통과" ? "passed" : t.status === "건너뜀" ? "skipped" : "failed"}">${t.status}</td></tr>`)
+          .join("")}</table></div>`).join("\n");
+  const cmd = verifyCommand(session);
+  const runHtml = `<div class="card"><p>${esc(runSummary(session))}</p>${cmd ? `<div class="codebox"><pre>${esc(cmd)}</pre></div>` : ""}</div>`;
+  const covRows = session.coverage.map((c) =>
+    c.coverage
+      ? `<tr><td><code>${esc(c.target)}</code></td><td class="num">${pct(c.coverage.line)}</td><td class="num">${pct(c.coverage.branch)}</td></tr>`
+      : `<tr><td><code>${esc(c.target)}</code></td><td colspan="2">jacoco.xml에 없음</td></tr>`,
+  );
+  const mapperHtml = session.mapperChecks.map((m) => `<p><code>${esc(m.target)}</code> JaCoCo 측정 안 함, 메서드 호출: ${m.methods.map((x) => `${esc(x.name)} ${x.called ? "✓" : x.skipped ? "건너뜀" : "✗"}`).join(", ")}</p>`);
+  const coverage = [
+    covRows.length > 0 ? `<div class="card"><table class="t"><tr><th>대상</th><th class="num">라인</th><th class="num">분기</th></tr>${covRows.join("")}</table></div>` : "",
+    ...(mapperHtml.length > 0 ? [`<div class="card"><h3>Mapper (실제 DB 테스트)</h3>${mapperHtml.join("")}</div>`] : []),
+    ...(covRows.length === 0 && mapperHtml.length === 0 ? [`<div class="card">측정 결과 없음</div>`] : []),
+  ].join("\n");
+  const attention = attentionLines(session);
+  const attentionHtml = attention.length > 0 ? `<section class="step" id="check"><h2><span class="no">!</span>확인 필요</h2><div class="card"><ul>${attention.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></div></section>` : "";
+  const more = (title: string, text: string): string => `<details class="more"><summary>${title}</summary><div class="body"><pre class="plain">${esc(text)}</pre></div></details>`;
+  return fill(TEMPLATE, {
+    TITLE: "f-unit-test-code 리포트",
+    STAMP: esc(localTimestamp(finishedAt)),
+    HEADING: "단위 테스트 생성 리포트",
+    RUNINFO: `<dl class="runinfo">${info}</dl>`,
+    VERDICT: `<div class="verdict ${level}"><div class="head"><span class="badge ${level}">${label}</span></div><p class="cause">${esc(verdict(session.verification))} · ${esc(runSummary(session))}</p></div>`,
+    STATS: stats,
+    TOC: `<a href="#tests">만든 테스트</a><a href="#run">실행 명령</a><a href="#coverage">커버리지</a>${attention.length > 0 ? '<a href="#check">확인 필요</a>' : ""}`,
+    TESTS: testsHtml,
+    RUN: runHtml,
+    COVERAGE: coverage,
+    ATTENTION: attentionHtml,
+    APPENDIX: [more("요약", summary), more("검증 메모", session.verifyNote ?? ""), more("계획", session.plan ?? "")].join("\n"),
+    FOOTER: "f-unit-test-code · report.md와 같은 내용",
+  });
+}
+
+/** Writes `<runDir>/report.md` and `report.html` (Korean, for the developer) and returns the .md path. */
 export function writeReport(session: FutSession, summary: string): string {
   session.runDir ??= `${REPORT_DIR}/report-${localFileStamp()}`;
   const dir = path.join(session.cwd, session.runDir);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, "report.md");
+  const finishedAt = new Date();
+  const made = madeTests(session);
+  const cmd = verifyCommand(session);
   const rows = session.coverage.map((c) =>
     c.coverage ? `| ${c.target} | ${pct(c.coverage.line)} | ${pct(c.coverage.branch)} |` : `| ${c.target} | jacoco.xml에 없음 | - |`,
   );
-  const gaps = session.coverage
-    .filter((c) => !isFullyCovered(c.coverage))
-    .map((c) =>
-      c.coverage
-        ? `- ${c.target}: 미실행 줄 ${c.coverage.uncoveredLines.join(", ") || "없음"}, 분기 일부 미실행 줄 ${c.coverage.partialLines.join(", ") || "없음"}`
-        : `- ${c.target}: 어떤 테스트도 실행하지 않음`,
-    );
   const interfaces = interfaceTargets(session);
-  const measured = new Set([...measuredTargets(session), ...session.mapperChecks.map((m) => m.target), ...interfaces]);
   const mapperLines = session.mapperChecks.flatMap((m) => [
     `- ${m.target}: 커버리지 측정 안 함 (XML SQL은 JaCoCo가 보지 않음) — 테스트 ${m.testFile ?? "없음"}`,
     ...m.methods.map((x) => `  - ${x.name}: ${x.called ? "호출함" : x.skipped ? "건너뜀 (skip_reason)" : "호출 안 함"}`),
   ]);
-  const skipped = (session.inputs?.cases ?? [])
-    .filter((c) => c.skip_reason?.trim())
-    .map((c) => `- ${c.target}#${c.method}: ${c.skip_reason!.trim()}${measured.has(c.target) ? "" : " (대상 전체 제외, 커버리지 측정 안 함)"}`);
+  const attention = attentionLines(session, false);
+  const gaps = session.coverage
+    .filter((c) => !isFullyCovered(c.coverage))
+    .map((c) => `- ${c.target}: ${c.coverage ? `미실행 줄 ${c.coverage.uncoveredLines.join(", ") || "없음"}, 분기 일부 미실행 줄 ${c.coverage.partialLines.join(", ") || "없음"}` : "어떤 테스트도 실행하지 않음"}`);
   const body = [
     "# f-unit-test-code 리포트",
     "",
-    `- 요청: ${session.request}`,
-    `- 모드: ${session.inputs?.mode ?? "-"}, 모듈: ${session.inputs?.module ?? "-"}`,
-    `- 검증 결과: ${verdict(session.verification)}`,
+    `- 작업 일시: ${whenText(session, finishedAt)}`,
+    `- 모드·모듈: ${session.inputs?.mode ?? "-"} · ${session.inputs?.module ?? "-"}`,
+    ...(session.request.trim() ? [`- 요청: ${session.request.trim()}`] : []),
+    `- 결과: ${verdict(session.verification)} · ${runSummary(session)}`,
     `- 재시도: 수정 ${session.fixRetries}회, 커버리지 보강 ${session.gapRounds}회`,
     "",
-    "## 대상",
-    ...(session.inputs?.targets ?? []).map((t) => `- ${t}`),
-    "",
-    "## 테스트 파일",
-    ...[...session.touched].sort().map((f) => `- ${f}`),
+    "## 만든 테스트",
+    ...(made.size > 0
+      ? [...made].flatMap(([cls, ts]) => [`### ${cls} (${ts.length}개)`, "| 테스트 | 종류 | 설명 | 구분 | 결과 |", "|---|---|---|---|---|", ...ts.map((t) => `| ${t.method} | ${t.kind} | ${cell(t.what)} | ${t.origin} | ${t.status} |`), ""])
+      : [...[...session.touched].sort().map((f) => `- ${f}`), ""]),
+    "## 실행 명령",
+    ...(cmd ? ["```", cmd, "```"] : ["(명령을 만들지 못했다)"]),
     "",
     "## 커버리지",
     ...(rows.length > 0 ? ["| 대상 | 라인 | 분기 |", "|---|---|---|", ...rows] : ["측정 결과 없음"]),
+    ...(mapperLines.length > 0 ? ["", "### Mapper (실제 DB 테스트)", ...mapperLines] : []),
+    ...(interfaces.length > 0 ? ["", ...interfaces.map((t) => `- ${t}: 커버리지 측정 안 함 (인터페이스)`)] : []),
     "",
-    ...(mapperLines.length > 0 ? ["## Mapper (실제 DB 테스트)", ...mapperLines, ""] : []),
-    ...(interfaces.length > 0 ? ["## 인터페이스", ...interfaces.map((t) => `- ${t}: 커버리지 측정 안 함 (인터페이스)`), ""] : []),
     ...(gaps.length > 0 ? ["## 남은 공백", ...gaps, ""] : []),
-    ...(skipped.length > 0 ? ["## 테스트하지 않은 메서드", ...skipped, ""] : []),
+    ...(attention.length > 0 ? ["## 확인 필요", ...attention.map((a) => `- ${a}`), ""] : []),
     ...((session.inputs?.update_existing ?? []).length > 0
       ? ["## 수정한 기존 테스트 (계획에서 승인)", ...session.inputs!.update_existing!.map((u) => `- ${u.file}#${u.test}: ${u.reason}`), ""]
       : []),
-    ...(session.verification === "incomplete" ? ["## 마지막 오류", ...session.lastProblems, ""] : []),
-    "## 실패한 테스트",
-    ...failureSection(session),
+    "## 요약",
+    summary,
     "",
     "## 검증 메모",
     session.verifyNote ?? "",
@@ -118,10 +251,8 @@ export function writeReport(session: FutSession, summary: string): string {
     "## 계획",
     session.plan ?? "",
     "",
-    "## 요약",
-    summary,
-    "",
   ].join("\n");
   fs.writeFileSync(file, body, "utf-8");
+  fs.writeFileSync(path.join(dir, "report.html"), renderHtml(session, summary, finishedAt), "utf-8");
   return file;
 }

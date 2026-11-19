@@ -70,6 +70,9 @@ export interface FailedTest {
   frame: string
 }
 
+/** Gradle writes `name="tax_boundary()"`; the method name is without the parameter list. */
+const methodName = (n: string | undefined): string => (n ?? "").replace(/\(.*\)$/, "")
+
 const entity = (t: string): string =>
   t
     .replace(/&#(\d+);/g, (_, n: string) => String.fromCharCode(Number(n)))
@@ -105,9 +108,9 @@ export function readFailedDetails(resultsDir: string): FailedTest[] {
         }
       }
       failed.push({
-        id: `${a.classname ?? ""}.${a.name ?? ""}`,
+        id: `${a.classname ?? ""}.${methodName(a.name)}`,
         cls: a.classname ?? "",
-        method: a.name ?? "",
+        method: methodName(a.name),
         kind: e[1] as "failure" | "error",
         type: ea.type ?? "",
         message,
@@ -125,4 +128,44 @@ export function readFailedTests(resultsDir: string): string[] {
 
 export function isFullyCovered(c: FileCoverage | null): boolean {
   return c !== null && c.line.missed === 0 && c.branch.missed === 0
+}
+
+export interface TestRunCase {
+  cls: string
+  method: string
+  status: "passed" | "failed" | "error" | "skipped"
+  seconds: number
+}
+export interface TestRun {
+  total: number
+  passed: number
+  failed: number
+  errored: number
+  skipped: number
+  seconds: number
+  tests: TestRunCase[]
+}
+
+/** 실행한 모든 testcase(JUnit XML)의 결과. 결과 디렉터리가 없으면 0건. */
+export function readTestRun(resultsDir: string): TestRun {
+  const run: TestRun = { total: 0, passed: 0, failed: 0, errored: 0, skipped: 0, seconds: 0, tests: [] }
+  if (!existsSync(resultsDir)) return run
+  for (const f of readdirSync(resultsDir).sort()) {
+    if (!/^TEST-.*\.xml$/.test(f)) continue
+    const xml = readFileSync(join(resultsDir, f), "utf8")
+    for (const m of xml.matchAll(/<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g)) {
+      const a = attrs(m[1]!)
+      const inner = m[2] ?? ""
+      const status: TestRunCase["status"] = /<failure\b/.test(inner) ? "failed" : /<error\b/.test(inner) ? "error" : /<skipped\b/.test(inner) ? "skipped" : "passed"
+      const seconds = Number(a.time) || 0
+      run.tests.push({ cls: a.classname ?? "", method: methodName(a.name), status, seconds })
+      run.total++
+      run.seconds += seconds
+      if (status === "passed") run.passed++
+      else if (status === "failed") run.failed++
+      else if (status === "error") run.errored++
+      else run.skipped++
+    }
+  }
+  return run
 }

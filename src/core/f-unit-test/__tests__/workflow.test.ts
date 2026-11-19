@@ -469,15 +469,27 @@ describe("verify", () => {
     expect(session().verification).toBe("covered");
     const out = done({ stage: "report", note: "summary" });
     const report = fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8");
-    const section = report.slice(report.indexOf("## 실패한 테스트"), report.indexOf("## 검증 메모"));
-    const oldPart = section.slice(section.indexOf("### 기존 테스트"), section.indexOf("### 이번에 생성한 테스트"));
-    expect(oldPart).toContain("SONAQ001ServiceTest.inquire_normal1");
-    expect(oldPart).toContain("기대 3000, 실제 3500");
-    expect(oldPart).toContain("SONAQ001ServiceTest.java:34");
-    expect(oldPart).not.toContain("inquire_new");
-    const newPart = section.slice(section.indexOf("### 이번에 생성한 테스트"));
-    expect(newPart).toContain("SONAQ001ServiceTest.inquire_new");
-    expect(newPart).toContain("IllegalStateException: boom \\| pipe");
+    const section = report.slice(report.indexOf("## 확인 필요"), report.indexOf("## 요약"));
+    const lines = section.split("\n");
+    const oldLine = lines.find((l) => l.includes("inquire_normal1"))!;
+    expect(oldLine).toContain("기대 3000, 실제 3500");
+    expect(oldLine).toContain("SONAQ001ServiceTest.java:34");
+    expect(oldLine).toContain("기존 테스트");
+    const newLine = lines.find((l) => l.includes("inquire_new"))!;
+    expect(newLine).toContain("IllegalStateException: boom | pipe");
+    expect(newLine).toContain("이번에 생성");
+  });
+
+  test("the report describes each test from the plan by its kind and number", () => {
+    reachVerify();
+    runCoverage({ failed: ["inquire_normal2", "inquire_boundary", "inquire_exception"] });
+    done({ stage: "verify", note: "n" });
+    const out = done({ stage: "report", note: "s" });
+    const report = fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8");
+    expect(report).toMatch(/\| inquire_normal2 \| 정상 \| several accounts \|/);
+    expect(report).toMatch(/\| inquire_boundary \| 경계값 \| account number of max length \|/);
+    expect(report).toMatch(/작업 일시: \d{4}-\d\d-\d\d \d\d:\d\d:\d\d ~ \d\d:\d\d:\d\d \(/);
+    expect(report).toMatch(/\| inquire_exception \| 예외 \| AccountBSM throws PBOnlineException \|/);
   });
 
   test("failed tests are listed in the report but do not block", () => {
@@ -516,6 +528,14 @@ describe("report", () => {
     expect(report).toContain("12");
     expect(report).toContain("line 12 is unreachable");
     expect(report).toContain("all methods tested");
+    expect(report).toContain("## 실행 명령");
+    expect(report).toContain("## 만든 테스트");
+    expect(report).toMatch(/작업 일시: .* ~ /);
+    expect(out).toContain("report.html");
+    const html = fs.readFileSync(path.join(cwd, runDir, "report.html"), "utf-8");
+    expect(html).toContain("실행 명령");
+    expect(html).toContain("all methods tested");
+    expect(html).not.toContain("{{");
     expect(getSession(SID)).toBeUndefined();
   });
 });
@@ -698,9 +718,8 @@ describe("final review fixes", () => {
     expect(session().coverage.map((c) => c.target)).toEqual([TARGET]);
     const out = done({ stage: "report", note: "s" });
     const report = fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8");
-    expect(report).toContain("## 테스트하지 않은 메서드");
-    expect(report).toContain(`${other}#getX: plain VO getter (대상 전체 제외`);
-    expect(report).toContain(`${TARGET}#toString: Lombok`);
+    expect(report).toContain(`제외: ${other}#getX — plain VO getter (대상 전체 제외`);
+    expect(report).toContain(`제외: ${TARGET}#toString — Lombok`);
   });
 
   test("a write whose target cannot be determined is refused", () => {

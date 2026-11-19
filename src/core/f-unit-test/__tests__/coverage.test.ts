@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { isFullyCovered, readCoverage, readFailedDetails, readFailedTests } from "../coverage"
+import { isFullyCovered, readCoverage, readFailedDetails, readFailedTests, readTestRun } from "../coverage"
 
 const XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <!DOCTYPE report PUBLIC "-//JACOCO//DTD Report 1.1//EN" "report.dtd">
@@ -101,5 +101,28 @@ describe("readFailedDetails", () => {
   })
   test("readFailedTests stays the id list of the same testcases", () => {
     expect(readFailedTests(dir())).toEqual(["p.ShippingFeeServiceTest.fee_normal1", "p.ShippingFeeServiceTest.boom", "p.X.bare"])
+  })
+})
+
+describe("readTestRun", () => {
+  test("counts every testcase by outcome and sums the time", () => {
+    const d = mkdtempSync(join(tmpdir(), "run-"))
+    writeFileSync(
+      join(d, "TEST-a.xml"),
+      `<testsuite><testcase name="a" classname="p.T" time="0.5"/><testcase name="b" classname="p.T" time="0.25"><failure message="x"/></testcase><testcase name="c" classname="p.T"><error message="y"/></testcase><testcase name="d" classname="p.T"><skipped/></testcase></testsuite>`,
+    )
+    const r = readTestRun(d)
+    expect([r.total, r.passed, r.failed, r.errored, r.skipped]).toEqual([4, 1, 1, 1, 1])
+    expect(r.seconds).toBeCloseTo(0.75)
+    expect(r.tests.map((t) => t.status)).toEqual(["passed", "failed", "error", "skipped"])
+  })
+  test("Gradle's name=\"m()\" is read as the method name m", () => {
+    const d = mkdtempSync(join(tmpdir(), "run-"))
+    writeFileSync(join(d, "TEST-a.xml"), `<testsuite><testcase name="m_boundary()" classname="p.T"><failure message="x"/></testcase></testsuite>`)
+    expect(readTestRun(d).tests[0]!.method).toBe("m_boundary")
+    expect(readFailedDetails(d)[0]!.method).toBe("m_boundary")
+  })
+  test("a missing directory is an empty run", () => {
+    expect(readTestRun(join(tmpdir(), "no-such-dir-xyz")).total).toBe(0)
   })
 })
