@@ -52,6 +52,8 @@ export interface PlanInputs {
   module: string;
   requirement_file?: string;
   program_id?: string;
+  /** The user confirmed that no FICO program belongs to these requirements. */
+  no_program?: boolean;
   group_name?: string;
   /** Skeleton classes under src/main/java that the tests target. */
   targets: string[];
@@ -97,8 +99,10 @@ interface Stage {
 }
 
 const ASK_USER_WHEN =
-  "(1) the requirement: none given (no --req-file, --req text or --program), a --req-file that does not exist, or a --program the MCP cannot find; (2) a target skeleton class that does not exist yet; (3) the Gradle module, when the targets sit in none or in several modules; (4) values the requirement does not give (an error code, a limit); (5) for a Mapper target, the test profile and, for a non-primary datasource, the transaction manager bean";
+  "(0) the Program ID, when neither --program nor the requirement gives one; (1) the requirement: none given (no --req-file, --req text or --program), a --req-file that does not exist, or a --program the MCP cannot find; (2) a target skeleton class that does not exist yet; (3) the Gradle module, when the targets sit in none or in several modules; (4) values the requirement does not give (an error code, a limit); (5) for a Mapper target, the test profile and, for a non-primary datasource, the transaction manager bean";
 const ASK_USER_NOTE = "If a value cannot be determined from the requirements or the project, ask the user for it and END YOUR TURN; do not guess or leave placeholders. Then submit the plan again.";
+/** `프로그램 ID: SONAQ001`, `Program ID = SONAQ001`, `PGM: SONAQ001`. */
+const PROGRAM_LABEL = /(?:프로그램\s*ID|프로그램\s*아이디|서비스\s*ID|Program\s*ID|PGM)\s*[:=]?\s*`?([A-Z][A-Z0-9]{5,9})\b/i;
 const SKELETON_NOTE =
   "The target class does not exist yet. Tests are written before the implementation, but they need a skeleton to compile: tell the user to create the skeleton code first (the class, its method signatures, VOs; empty or UnsupportedOperationException bodies) and END YOUR TURN. Never create production code yourself.";
 
@@ -107,7 +111,8 @@ export const STAGES: Record<StageId, Stage> = {
     goal: "Turn the requirements into test cases per target method and get the user's approval. Nothing is written here.",
     steps: [
       `Load the \`${UNIT_TEST_REQ_SKILL_NAME}\` skill with the skill tool and read its docs/ rules and templates/. If the skill is missing, STOP and tell the user to run \`gdc fico-check\`.`,
-      `Read the requirements: \`--req-file <path>\` → read that file ("file"); \`--req "<text>"\` → the typed text is the requirement ("text"); \`--program <ID>\` → read \`fico://program-detail/{group_name}/{program_id}\` from ${MCP_SERVER} with read_mcp_resource (find the group in \`fico://all-programs\` when it is not given) and use its description and input/output fields ("program"). They may be combined; then pick the main source.`,
+      `Read the requirements: \`--req-file <path>\` → read that file ("file"); \`--req "<text>"\` → the typed text is the requirement ("text"); \`--program <ID>\` → the program is given ("program"). They may be combined; then pick the main source.`,
+      `Find the FICO program: the \`--program\` ID, else the program ID written in the requirement text or file (labels such as 프로그램 ID, Program ID, 서비스 ID, PGM; an uppercase code like SONAQ001). Read \`fico://program-detail/{group_name}/{program_id}\` from ${MCP_SERVER} with read_mcp_resource (find the group in \`fico://all-programs\` when it is not given) and derive realistic cases from its description and input/output fields; set \`inputs.program_id\` and \`group_name\` (any source). If the requirement names no program and \`--program\` was not given, ASK THE USER for the Program ID (or whether none applies) and END YOUR TURN; set \`inputs.no_program\` = true only after they said none applies.`,
       "Find the skeleton classes the tests target (under src/main/java), their Gradle module and the Spring Boot version (root build.gradle; below 3.4: @MockBean instead of @MockitoBean). Read only their signatures and VO fields, never to take expected values from their bodies.",
       `If a required input is missing or cannot be settled from the requirements and the project, ASK THE USER and END YOUR TURN before doing anything else; never guess and never put a placeholder in \`inputs\`. Required inputs: ${ASK_USER_WHEN}.`,
       "Split the requirements into items. For every target method define cases per the skill's case rule: at least two normal, one boundary, one exception, each tied to the requirement item it verifies (`requirement`), plus the external classes to mock. A method with no requirement gets `skip_reason`. Requirement items that contradict each other are shown to the user, who decides.",
@@ -273,6 +278,7 @@ function normalizeInputs(raw: Partial<PlanInputs>, cwd: string): PlanInputs {
     module: typeof raw.module === "string" ? rel(raw.module).replace(/\/$/, "") : "",
     requirement_file: raw.requirement_file ? slash(String(raw.requirement_file)) : undefined,
     program_id: text(raw.program_id) || undefined,
+    no_program: raw.no_program === true ? true : undefined,
     group_name: text(raw.group_name) || undefined,
     targets: paths(raw.targets).map(rel),
     files: paths(raw.files).map(rel),
@@ -296,7 +302,12 @@ function planProblems(p: PlanInputs, cwd: string): { problems: string[]; missing
   const abs = (f: string): string => path.resolve(cwd, f);
   if (!["file", "text", "program"].includes(p.source)) problems.push('source: must be "file", "text" or "program"');
   if (p.source === "file" && (!p.requirement_file || !isFile(abs(p.requirement_file)))) problems.push("requirement_file: must be an existing requirement file when source is \"file\"");
-  if (p.source === "program" && (!p.program_id || !p.group_name)) problems.push("program_id and group_name: both are required when source is \"program\"");
+  if ((p.source === "program" || p.program_id) && (!p.program_id || !p.group_name)) problems.push("program_id and group_name: both are required when source is \"program\" or a program is given");
+  if (!p.program_id && !p.no_program) problems.push("program_id: no program given. Look for the Program ID in the requirement, else ask the user for it (or whether none applies) and END YOUR TURN; set no_program=true only after the user said none applies");
+  if (!p.program_id && p.source === "file" && p.requirement_file && isFile(abs(p.requirement_file))) {
+    const named = PROGRAM_LABEL.exec(fs.readFileSync(abs(p.requirement_file), "utf-8"));
+    if (named) problems.push(`program_id: the requirement file names program ${named[1]}; read its specification from the MCP and set program_id and group_name`);
+  }
   const moduleDir = p.module.replace(/^:/, "").replace(/:/g, "/");
   if (!/^[\w.\/:-]+$/.test(p.module)) problems.push(`module: "${p.module}" may contain only letters, digits, _ . / : -`);
   else if (!moduleDir || moduleDir === "." || escapes(moduleDir) || !isDir(abs(moduleDir))) problems.push(`module: "${p.module}" must be an existing module directory inside the project`);
@@ -334,7 +345,7 @@ function submitPlan(session: ReqSession, input: StageInput): string {
   const { problems, missingTargets } = planProblems(inputs, session.cwd);
   if (problems.length > 0) return `Rejected: the plan is not valid. Fix these fields and submit again:\n${problems.map((p) => `- ${p}`).join("\n")}\n${ASK_USER_NOTE}`;
   if (missingTargets.length > 0) return `Rejected: ${missingTargets.join(", ")} does not exist.\n${SKELETON_NOTE}`;
-  if (inputs.source === "program") {
+  if (inputs.program_id) {
     const uri = `fico://program-detail/${inputs.group_name}/${inputs.program_id}`;
     if (![...session.fetched].includes(uri)) {
       return `Rejected: the program specification was not fetched successfully. Read ${uri} from ${MCP_SERVER} with read_mcp_resource first. If it returns an error or cannot be found, tell the user, ask them to confirm the Program ID and group or run \`gdc fico-check\`, and END YOUR TURN. Never plan without the specification.`;

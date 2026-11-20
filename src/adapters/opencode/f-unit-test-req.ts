@@ -84,8 +84,9 @@ export function createFUnitTestReqModule(input: PluginInput): OpenCodeModule {
               source: z.enum(["file", "text", "program"]).optional(),
               module: z.string().optional(),
               requirement_file: z.string().optional().describe("source=file: the requirement file"),
-              program_id: z.string().optional().describe("source=program"),
-              group_name: z.string().optional().describe("source=program"),
+              program_id: z.string().optional().describe("FICO program ID from --program or the requirement"),
+              group_name: z.string().optional().describe("program group, with program_id"),
+              no_program: z.boolean().optional().describe("true only after the user confirmed no program applies"),
               targets: strs().optional().describe("Skeleton classes to test (project-relative, under src/main/java); they must exist"),
               files: strs().optional().describe("Every test file to create or extend (project-relative)"),
               cases: z

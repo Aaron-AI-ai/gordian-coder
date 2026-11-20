@@ -19,6 +19,7 @@ const put = (rel: string, text: string): void => {
 };
 const plan = (): Partial<PlanInputs> => ({
   source: "text",
+  no_program: true,
   module: "app",
   targets: [TARGET],
   files: [TEST_FILE],
@@ -71,6 +72,19 @@ describe("plan", () => {
     expect(done({ stage: "plan", note: "계획", inputs: p })).toContain("not fetched");
     noteToolResult(SID, "read_mcp_resource", { server: "fico-mcp", uri: "fico://program-detail/ON/SONAQ001" }, "{}");
     expect(done({ stage: "plan", note: "계획", inputs: p })).toContain("Plan recorded");
+  });
+  test("a text plan with a program ID needs the specification fetched too", () => {
+    const p = { ...plan(), no_program: undefined, program_id: "SONAQ001", group_name: "ON" };
+    expect(done({ stage: "plan", note: "계획", inputs: p })).toContain("not fetched");
+  });
+  test("no program given and none confirmed asks the user for the ID", () => {
+    const out = done({ stage: "plan", note: "계획", inputs: { ...plan(), no_program: undefined } });
+    expect(out).toContain("ask the user");
+  });
+  test("a requirement file that names a program must not be planned without it", () => {
+    put("loan-req.md", "# 요구사항\n프로그램 ID: SONAQ001\n한도 100원");
+    const out = done({ stage: "plan", note: "계획", inputs: { ...plan(), source: "file", requirement_file: "loan-req.md" } });
+    expect(out).toContain("names program SONAQ001");
   });
   test("a non-Korean script in the plan note is rejected", () => {
     expect(done({ stage: "plan", note: "计划 결제", inputs: plan() })).toContain("Rejected: Non-Korean script");

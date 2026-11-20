@@ -12,6 +12,7 @@ This skill does NOT modify production code or the project's build files, and doe
 - `--req-file <path>`: a file with the requirements (md/txt). Read it with the read tool.
 - `--req "<text>"`: the requirements typed after the command.
 - `--program <ID>`: a program ID. Read the program's I/O specification from the FICO MCP server (`fico://program-detail/{group_name}/{program_id}`; find the group in `fico://all-programs` when it is not given) and derive the cases from its input/output fields and description.
+- **Program ID lookup:** also look in `--req-file`/`--req` for a program ID (labels such as 프로그램 ID, Program ID, 서비스 ID, PGM, or a code like `SONAQ001`) and read its specification from the MCP the same way. If neither `--program` nor the requirement gives one, ask the user for the ID (or whether none applies) and stop.
 - The target classes must already exist as a **skeleton** (class and method signatures, empty or `UnsupportedOperationException` bodies, VOs) so the tests can compile. If a target does not exist, ask the user to create the skeleton first and stop; never create production code yourself.
 
 ## Steps
