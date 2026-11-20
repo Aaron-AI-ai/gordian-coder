@@ -36,7 +36,7 @@ describe("f-unit-test-req skill assets", () => {
 
   test("the case rule says expected values come from the requirements and where the comments go", () => {
     const rule = read("docs/f-unit-test-req-case-rule.md");
-    for (const w of ["요구사항에서만", "뼈대", "[요구사항]", "[시나리오]", "[기대]", "_boundary", "_exception"]) expect(rule).toContain(w);
+    for (const w of ["요구사항에서만", "뼈대", "[요구사항]", "[시나리오]", "[기대]", "_boundary", "_boundary2", "_exception"]) expect(rule).toContain(w);
   });
 
   test("compile-tests.sh writes status.json from the build only and never runs tests", () => {
