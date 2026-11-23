@@ -1,0 +1,17 @@
+// Applied only via `gradle -I init.gradle`; never modifies the user's build files.
+// Props: -Pfut.agent=<jacocoagent.jar> -Pfut.exec=<jacoco.exec> -Pfut.tests=<FQCN,FQCN>
+allprojects {
+    tasks.withType(Test).configureEach { t ->
+        t.ignoreFailures = true
+        def agent = rootProject.findProperty('fut.agent')
+        def exec = rootProject.findProperty('fut.exec')
+        def tests = rootProject.findProperty('fut.tests')
+        if (agent && exec) {
+            t.jvmArgs "-javaagent:${agent}=destfile=${exec},append=false"
+        }
+        if (tests) {
+            t.filter.failOnNoMatchingTests = false
+            tests.toString().split(',').collect { it.trim() }.findAll { it }.each { t.filter.includeTestsMatching(it) }
+        }
+    }
+}

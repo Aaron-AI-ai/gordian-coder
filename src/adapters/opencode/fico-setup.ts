@@ -12,9 +12,9 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { isGordianEntry, OpencodeInitError, readConfig } from "./init";
-import { MCP_SERVER, SKILL_NAME } from "../../core/pb-online/names";
+import { MCP_SERVER, SKILL_NAME, SKILL_NAMES } from "../../core/pb-online/names";
 
-// ponytail: only the pb skill for now; the other vendored skills go here when their workflows move.
+// ponytail: only the skills listed in SKILL_NAMES are shipped; other vendored skills join when their workflows move.
 // Each environment points elsewhere with FICO_API_BASE_URL or --fico-api-url.
 export const DEFAULT_FICO_API_URL = "http://localhost:8081";
 
@@ -62,40 +62,47 @@ const listFiles = (dir: string): string[] =>
     .filter((e) => e.isFile())
     .map((e) => path.relative(dir, path.join(e.parentPath, e.name)).split(path.sep).join("/"));
 
+const shippedSkillDir = (assets: string, skill: string): string => path.join(assets, "fico-ai", "skills", skill);
+
 /** Installed relative path → shipped source file. */
-function expectedSkillFiles(assets: string): Map<string, string> {
-  const root = path.join(assets, "fico-ai");
-  const skill = path.join(root, "skills", SKILL_NAME);
-  const rules = path.join(root, "rules");
+function expectedSkillFiles(assets: string, skill: string): Map<string, string> {
+  const dir = shippedSkillDir(assets, skill);
+  const rules = path.join(assets, "fico-ai", "rules");
   return new Map([
-    ...listFiles(skill).map((f): [string, string] => [f, path.join(skill, f)]),
+    ...listFiles(dir).map((f): [string, string] => [f, path.join(dir, f)]),
     ...listFiles(rules).map((f): [string, string] => [`rules/${f}`, path.join(rules, f)]),
   ]);
 }
 
-/** Shipped files that are missing or different in the installed skill. */
+/** Shipped files that are missing or different in the installed skills, as `<skill>/<path>`. */
 export function skillDrift(assets: string, skillsDir: string): string[] {
-  const target = path.join(skillsDir, SKILL_NAME);
-  return [...expectedSkillFiles(assets)]
-    .filter(([rel, source]) => {
-      const installed = path.join(target, rel);
-      return !fs.existsSync(installed) || !fs.readFileSync(installed).equals(fs.readFileSync(source));
-    })
-    .map(([rel]) => rel);
+  return SKILL_NAMES.flatMap((skill) => {
+    if (!fs.existsSync(shippedSkillDir(assets, skill))) return [`${skill}/(shipped skill missing)`];
+    const target = path.join(skillsDir, skill);
+    return [...expectedSkillFiles(assets, skill)]
+      .filter(([rel, source]) => {
+        const installed = path.join(target, rel);
+        return !fs.existsSync(installed) || !fs.readFileSync(installed).equals(fs.readFileSync(source));
+      })
+      .map(([rel]) => `${skill}/${rel}`);
+  });
 }
 
 /**
- * Rules go inside the skill rather than into `instructions`, which would load
+ * Rules go inside each skill rather than into `instructions`, which would load
  * them into every OpenCode session including f-review and f-log.
  */
 export function installSkill(assets: string, skillsDir: string): string {
-  const target = path.join(skillsDir, SKILL_NAME);
-  fs.rmSync(target, { recursive: true, force: true });
-  for (const [rel, source] of expectedSkillFiles(assets)) {
-    fs.mkdirSync(path.dirname(path.join(target, rel)), { recursive: true });
-    fs.copyFileSync(source, path.join(target, rel));
+  for (const skill of SKILL_NAMES) {
+    if (!fs.existsSync(shippedSkillDir(assets, skill))) continue;
+    const target = path.join(skillsDir, skill);
+    fs.rmSync(target, { recursive: true, force: true });
+    for (const [rel, source] of expectedSkillFiles(assets, skill)) {
+      fs.mkdirSync(path.dirname(path.join(target, rel)), { recursive: true });
+      fs.copyFileSync(source, path.join(target, rel));
+    }
   }
-  return target;
+  return skillsDir;
 }
 
 export function findMcp(config: Config): unknown {
@@ -186,21 +193,24 @@ export function checkFico(
   // eslint-disable-next-line no-control-regex
   const mcpLine = mcpOutput.stdout.replace(/\u001b\[[0-9;]*m/g, "").split("\n").find((l) => l.includes(MCP_SERVER));
   const connected = mcpOutput.ok && mcpLine !== undefined && /\bconnected\b/.test(mcpLine);
-  const loaded = skillsOutput.ok && new RegExp(`"name":\\s*"${SKILL_NAME}"`).test(skillsOutput.stdout);
+  const unlisted = SKILL_NAMES.filter(
+    (skill) => !(skillsOutput.ok && new RegExp(`"name":\\s*"${skill}"`).test(skillsOutput.stdout)),
+  );
+  const loaded = unlisted.length === 0;
 
   return [
     pluginCheck(config),
     {
       name: "skill",
       ok: drift.length === 0,
-      detail: drift.length === 0 ? path.join(skillsDir, SKILL_NAME) : `누락/변경 ${drift.length}개: ${drift.slice(0, 5).join(", ")}`,
+      detail: drift.length === 0 ? SKILL_NAMES.map((skill) => path.join(skillsDir, skill)).join(", ") : `누락/변경 ${drift.length}개: ${drift.slice(0, 5).join(", ")}`,
     },
     {
       name: "mcp-config",
       ok: findMcp(config) !== undefined,
       detail: findMcp(config) !== undefined ? MCP_SERVER : `${MCP_SERVER} 설정이 없습니다`,
     },
-    { name: "skill-loaded", ok: loaded, detail: loaded ? SKILL_NAME : "OpenCode가 스킬을 인식하지 못합니다" },
+    { name: "skill-loaded", ok: loaded, detail: loaded ? SKILL_NAMES.join(", ") : `OpenCode가 스킬을 인식하지 못합니다: ${unlisted.join(", ")}` },
     { name: "mcp-connected", ok: connected, detail: connected ? MCP_SERVER : (mcpLine?.trim() ?? `${MCP_SERVER} 연결을 확인하지 못했습니다`) },
   ];
 }

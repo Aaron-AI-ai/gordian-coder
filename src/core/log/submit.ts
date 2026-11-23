@@ -7,13 +7,13 @@
  * submission when the model simply stops (spec §13 #12).
  */
 import { z } from "zod";
-import { capped, describeScripts, strayScript } from "../review/contract";
+import { capped } from "../review/contract";
+import { describeScripts, languageName, strayScript } from "../report-language";
 import { kbConfigMisses, kbDocsForCode, kbExcerpt, type KbDoc } from "../kb/framework-kb";
 import { KB_DOC_MAX_CHARS, recordKbShown } from "./context";
 import { normalizeRepoPath } from "../review/imports";
 import { readFileAt } from "../review/tools/read";
 import { MAX_FAILED_SUBMITS, MAX_RESUMES } from "../review/pipeline/loop";
-import { languageName } from "../review/pipeline/prompt";
 import { MAX_OBSERVATIONS, type LogPlan } from "./plan";
 import { mergeCallLog, readRunJson, submissionCount, writeRunJson, type RunMeta } from "./run-store";
 import { clearLogState, getLogState, type LogSession } from "./state";
