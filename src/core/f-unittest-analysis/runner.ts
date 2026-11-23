@@ -7,7 +7,17 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { ENV_FAILURE_PATTERN, JAVAC_ERROR_PATTERN, MAIN_JAVAC_ERROR_PATTERN } from "../f-unit-test/env-failure";
+
+/** `assets/` sits three levels above this module's own directory, in both src/ and the bundled dist/. Coverage reuses
+ * f-unit-test-code's bundled JaCoCo agent/cli instead of shipping a second copy. */
+function assetsDir(): string {
+  const here = import.meta.dir ?? path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(here, "..", "..", "..", "assets");
+}
+const JACOCO_TOOLS = (): string => path.join(assetsDir(), "fico-ai/skills/f-unit-test-code/tools");
+const INIT_GRADLE = (): string => path.join(assetsDir(), "fico-ai/skills/f-unit-test-code/scripts/init.gradle");
 
 export interface RunRequest {
   cwd: string;
@@ -124,17 +134,58 @@ export async function runTests(req: RunRequest): Promise<void> {
     if (req.signal?.aborted) return status("fail", "missing", "cancelled");
 
     // 2) Run. One offline run, no online retry: a failing test that mentions a connection is not a dependency problem.
+    // The JaCoCo agent (reused from f-unit-test-code's bundled tools) is attached via -I init.gradle so the
+    // report can show overall coverage; a missing/failed coverage step never affects the test verdict.
     phase = "[2/2] 테스트 실행 중";
     fs.rmSync(resultsDir, { recursive: true, force: true });
-    const run = await gradle([`:${gmod}:cleanTest`, `:${gmod}:test`, "--continue", "--offline", ...req.tests.flatMap((t) => ["--tests", t])]);
+    const execFile = path.join(req.outDir, "jacoco.exec");
+    fs.rmSync(execFile, { force: true });
+    const run = await gradle([
+      `:${gmod}:cleanTest`,
+      `:${gmod}:test`,
+      "--continue",
+      "--offline",
+      "-I",
+      INIT_GRADLE(),
+      `-Pfut.agent=${path.join(JACOCO_TOOLS(), "jacocoagent.jar")}`,
+      `-Pfut.exec=${execFile}`,
+      ...req.tests.flatMap((t) => ["--tests", t]),
+    ]);
     fs.appendFileSync(logFile, `[run-tests] gradle test exit: ${run.code}\n`);
     let found = false;
     if (fs.existsSync(resultsDir)) {
       fs.cpSync(resultsDir, path.join(req.outDir, "test-results"), { recursive: true });
       found = fs.readdirSync(resultsDir).some((f) => /^TEST-.*\.xml$/.test(f));
     }
+    await writeCoverageXml(req, execFile, mdir, platform);
     status("ok", found ? "run" : "none", build.out + run.out);
   } finally {
     clearInterval(heartbeat);
   }
+}
+
+/** Converts jacoco.exec to jacoco.xml in outDir, best-effort: no java/classes/exec, or a failed cli run, just
+ * leaves the file absent (the report then shows no coverage; it never affects the test verdict). */
+async function writeCoverageXml(req: RunRequest, execFile: string, mdir: string, platform: NodeJS.Platform): Promise<void> {
+  const classesDir = path.join(req.cwd, mdir, "build/classes/java/main");
+  if (!fs.existsSync(execFile) || !fs.existsSync(classesDir)) return;
+  const javaHome = process.env.JAVA_HOME;
+  const javaBin = javaHome ? path.join(javaHome, "bin", platform === "win32" ? "java.exe" : "java") : "java";
+  const xmlOut = path.join(req.outDir, "jacoco.xml");
+  const code = await new Promise<number>((resolve) => {
+    const child = spawn(
+      javaBin,
+      ["-jar", path.join(JACOCO_TOOLS(), "jacococli.jar"), "report", execFile, "--classfiles", classesDir, "--sourcefiles", path.join(req.cwd, mdir, "src/main/java"), "--xml", xmlOut],
+      { stdio: ["ignore", "ignore", "ignore"], windowsHide: true },
+    );
+    child.on("error", () => resolve(-1));
+    child.on("close", (c) => resolve(c ?? -1));
+  });
+  if (code !== 0) fs.rmSync(xmlOut, { force: true });
+}
+
+/** Raw jacoco.xml text if `runTests` produced one in outDir, else null. */
+export function readCoverageXmlText(outDir: string): string | null {
+  const xmlFile = path.join(outDir, "jacoco.xml");
+  return fs.existsSync(xmlFile) ? fs.readFileSync(xmlFile, "utf-8") : null;
 }

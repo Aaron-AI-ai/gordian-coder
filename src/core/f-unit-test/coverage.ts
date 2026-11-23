@@ -27,6 +27,27 @@ function counter(body: string, type: string): Counter {
   return { missed: 0, covered: 0 }
 }
 
+export interface OverallCoverage { line: Counter; branch: Counter }
+
+/** Coverage of the production classes a set of test classes actually target (by the `XyzTest` -> `Xyz` naming
+ * convention, same package), summed. Not the whole module's coverage: a module-wide number would include every
+ * other class never touched by this run and read as misleadingly low. Null when no target class is found. */
+export function readTargetCoverage(xml: string, testClassNames: string[]): OverallCoverage | null {
+  const line = { missed: 0, covered: 0 }
+  const branch = { missed: 0, covered: 0 }
+  let any = false
+  for (const cls of new Set(testClassNames)) {
+    if (!cls.endsWith("Test")) continue
+    const target = cls.slice(0, -"Test".length)
+    const c = readCoverage(xml, `src/main/java/${target.replace(/\./g, "/")}.java`)
+    if (!c) continue
+    any = true
+    line.missed += c.line.missed; line.covered += c.line.covered
+    branch.missed += c.branch.missed; branch.covered += c.branch.covered
+  }
+  return any ? { line, branch } : null
+}
+
 /** target = 프로젝트 상대 경로 (…/src/main/java/a/b/C.java). 소스 파일이 XML에 없으면 null. */
 export function readCoverage(xml: string, target: string): FileCoverage | null {
   const norm = target.replace(/\\/g, "/")

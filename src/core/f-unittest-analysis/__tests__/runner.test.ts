@@ -32,7 +32,12 @@ describe.skipIf(!posix)("runTests (fake gradle wrapper)", () => {
     expect(status()).toMatchObject({ compile: "ok", tests: "run" });
     expect(fs.existsSync(path.join(out(), "test-results/TEST-x.PayTest.xml"))).toBe(true);
     expect(calls()[0]).toBe(":app:testClasses --offline");
-    expect(calls()[1]).toBe(":app:cleanTest :app:test --continue --offline --tests x.PayTest.a");
+    expect(calls()[1]).toContain(":app:cleanTest :app:test --continue --offline");
+    expect(calls()[1]).toContain("-I ");
+    expect(calls()[1]).toContain("init.gradle");
+    expect(calls()[1]).toContain("-Pfut.agent=");
+    expect(calls()[1]).toContain(`-Pfut.exec=${path.join(out(), "jacoco.exec")}`);
+    expect(calls()[1]).toContain("--tests x.PayTest.a");
     expect(seen[0]).toContain("[1/2] 컴파일 중");
     expect(seen.some((t) => t.includes("[2/2] 테스트 실행 중") && t.includes("클래스 1/1개 완료"))).toBe(true);
   });

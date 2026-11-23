@@ -13,13 +13,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { localFileStamp } from "../time";
 import { UNIT_TEST_ANALYSIS_SKILL_NAME } from "../pb-online/names";
-import { foreignScriptProblem } from "../report-language";
-import { readFailedDetails, readTestRun, type FailedTest, type TestRun } from "../f-unit-test/coverage";
+import { foreignScriptProblem, reportScriptWarning } from "../report-language";
+import { readFailedDetails, readTargetCoverage, readTestRun, type FailedTest, type TestRun } from "../f-unit-test/coverage";
 import { environmentFailureLine } from "../f-unit-test/env-failure";
 import { testMethodNames } from "../f-unit-test/test-check";
 import { MTIME_SLACK_MS, WRITES, escapes, fqcn, isDir, isFile, paths, toRelative } from "../f-unit-test/workflow";
 import { ANALYSIS_BASH_RULE, analysisBashAllowed } from "./bash-gate";
-import { gradleCommandText, runTests } from "./runner";
+import { gradleCommandText, readCoverageXmlText, runTests } from "./runner";
 import { writeReport } from "./report";
 
 export { UNIT_TEST_ANALYSIS_SKILL_NAME };
@@ -54,7 +54,7 @@ export interface StageInput {
 }
 
 export type Outcome =
-  | { kind: "pass"; reportFile: string; run: TestRun }
+  | { kind: "pass"; reportFile: string; run: TestRun; scriptWarn?: string }
   | { kind: "failed"; run: TestRun; failures: FailedTest[] }
   | { kind: "build"; log: string }
   | { kind: "none"; log: string };
@@ -143,7 +143,7 @@ function reportSteps(o: Outcome): string[] {
   const guide = `Read at most the failing tests and the code they call (read-only, a few reads), then your reply MUST be a Korean text message following the skill's docs/f-unittest-analysis-guide.md (per failure: 테스트, 원인, 판단, 수정 방법). Ending the turn after only tool calls, with no text, is a failure. Write NO report and NO file, edit no code, and run nothing.`;
   switch (o.kind) {
     case "pass":
-      return [`All ${o.run.total} tests passed (skipped ${o.run.skipped}). The plugin wrote the report: ${o.reportFile} (and report.html next to it).`, `Now reply to the user, and only this, in Korean: "리포트: ${o.reportFile} (같은 폴더에 report.html) — 전체 ${o.run.total}개 통과". Do not call any tool.`];
+      return [`All ${o.run.total} tests passed (skipped ${o.run.skipped}). The plugin wrote the report: ${o.reportFile} (and report.html next to it).${o.scriptWarn ? `\n${o.scriptWarn}` : ""}`, `Now reply to the user, and only this, in Korean: "리포트: ${o.reportFile} (같은 폴더에 report.html) — 전체 ${o.run.total}개 통과". Do not call any tool.`];
     case "failed":
       return [
         `${o.run.failed + o.run.errored} of ${o.run.total} tests failed (passed ${o.run.passed}, skipped ${o.run.skipped}). The report is only issued for a green run, so none was written.`,
@@ -270,6 +270,7 @@ function completeExecute(session: AnalysisSession): string {
   if (status.tests !== "run" || run.total === 0) return close(session, { kind: "none", log });
   if (run.failed + run.errored > 0) return close(session, { kind: "failed", run, failures: readFailedDetails(path.join(dir, "test-results")) });
   const inputs = session.inputs!;
+  const xml = readCoverageXmlText(dir);
   const reportFile = writeReport({
     cwd: session.cwd,
     request: session.request,
@@ -277,9 +278,11 @@ function completeExecute(session: AnalysisSession): string {
     selection: selectionNames(inputs),
     command: gradleCommandText(inputs.module, selectionNames(inputs)),
     run,
+    coverage: xml ? readTargetCoverage(xml, run.tests.map((t) => t.cls)) : null,
     startedAt: session.startedAt,
   });
-  return close(session, { kind: "pass", reportFile, run });
+  const scriptWarn = reportScriptWarning(fs.readFileSync(path.join(session.cwd, reportFile), "utf-8"), REPLY_LANGUAGE);
+  return close(session, { kind: "pass", reportFile, run, scriptWarn: scriptWarn || undefined });
 }
 
 /** execute: the plugin runs the tests itself, then judges. `onProgress` feeds the tool's title while it runs. */

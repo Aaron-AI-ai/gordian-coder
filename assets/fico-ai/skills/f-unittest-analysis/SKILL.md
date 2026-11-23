@@ -5,7 +5,7 @@ description: 'Runs the existing JUnit unit tests of a FICO Java module (all of t
 
 # f-unittest-analysis
 
-Runs the tests that already exist and reports. It does **not** write or change any test or production code, and does not measure coverage.
+Runs the tests that already exist and reports. It does **not** write or change any test or production code. The report also shows overall line/branch coverage for the run (informational only — a low number never blocks the report or the pass verdict).
 
 ### Input
 - `--test <spec>` (repeatable, or comma separated): run only these tests. A spec is a test class name (`PayServiceTest`), a test file path, or `Class#method` for one test method. **No input: every test of the module runs.**
@@ -21,5 +21,5 @@ Runs the tests that already exist and reports. It does **not** write or change a
 Call the stage tool with stage `execute` and wait; it can take a few minutes. The plugin itself builds the module and runs the selected tests with Gradle (offline first), the same on Windows and Linux/macOS. You run nothing in bash. A dependency/network failure is an environment problem: report it and stop.
 
 ### 3. Report
-- **All tests pass:** the plugin writes the report (`.fico/report/f-unittest-analysis/report-<time>/report.md` and `report.html`, with the run input, per class results and times). Tell the user the path and the totals in one or two lines.
+- **All tests pass:** the plugin writes the report (`.fico/report/f-unittest-analysis/report-<time>/report.md` and `report.html`, with the run input, overall coverage, the list of files run, and per-file/per-test results — the HTML lets you expand the file list and search the detail section by file name). Tell the user the path and the totals in one or two lines.
 - **A test fails, or the tests do not compile, or nothing ran:** write **no report and no file**. Read the failing test and the code it calls (read-only) and explain on the console, per failure: the cause, whether the test or the production code is wrong, and how to fix it (see `docs/f-unittest-analysis-guide.md`). Never fix it yourself.

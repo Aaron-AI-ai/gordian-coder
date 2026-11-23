@@ -115,6 +115,12 @@ table.t tr:last-child td { border-bottom:none; }
 .num { font-family:var(--mono); text-align:right; white-space:nowrap; }
 .st-passed { color:var(--pass); font-weight:700; } .st-failed, .st-error { color:var(--fail); font-weight:700; } .st-skipped { color:var(--warn); font-weight:700; }
 pre.plain { margin:0; white-space:pre-wrap; font-family:var(--sans); font-size:13px; line-height:1.7; }
+
+/* file search */
+.search { margin:0 0 14px; }
+.search input { width:100%; padding:9px 12px; border:1px solid var(--line); border-radius:8px; font-size:13px; font-family:var(--sans); background:var(--card); color:var(--ink); }
+.search input:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.nomatch { display:none; color:var(--graphite); font-size:13px; padding:8px 2px; }
 </style>
 </head>
 <body>
@@ -139,9 +145,16 @@ pre.plain { margin:0; white-space:pre-wrap; font-family:var(--sans); font-size:1
     {{INPUT}}
   </section>
 
+  <section class="step" id="files">
+    <h2><span class="no">2</span>실행한 파일</h2>
+    {{FILES}}
+  </section>
+
   <section class="step" id="tests">
-    <h2><span class="no">2</span>테스트 결과</h2>
-    {{TESTS}}
+    <h2><span class="no">3</span>상세 결과</h2>
+    <div class="search"><input type="search" id="filefilter" placeholder="파일/클래스 이름으로 찾기…" autocomplete="off"></div>
+    <div id="testlist">{{TESTS}}</div>
+    <p class="nomatch" id="nomatch">일치하는 파일이 없습니다.</p>
   </section>
 
   {{ATTENTION}}
@@ -152,5 +165,23 @@ pre.plain { margin:0; white-space:pre-wrap; font-family:var(--sans); font-size:1
 
   <div class="footer">{{FOOTER}}</div>
 </div>
+<script>
+(function(){
+  var input = document.getElementById('filefilter');
+  var cards = Array.prototype.slice.call(document.querySelectorAll('#testlist [data-name]'));
+  var nomatch = document.getElementById('nomatch');
+  if (!input || cards.length === 0) return;
+  input.addEventListener('input', function () {
+    var q = input.value.trim().toLowerCase();
+    var shown = 0;
+    cards.forEach(function (c) {
+      var hit = q === '' || c.getAttribute('data-name').indexOf(q) !== -1;
+      c.hidden = !hit;
+      if (hit) shown++;
+    });
+    nomatch.style.display = shown === 0 ? 'block' : 'none';
+  });
+})();
+</script>
 </body>
 </html>
