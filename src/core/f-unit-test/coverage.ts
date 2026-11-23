@@ -36,7 +36,8 @@ export function readTargetCoverage(xml: string, testClassNames: string[]): Overa
   const line = { missed: 0, covered: 0 }
   const branch = { missed: 0, covered: 0 }
   let any = false
-  for (const cls of new Set(testClassNames)) {
+  // A @Nested class (`FooTest$Bar`) targets the same production class as FooTest.
+  for (const cls of new Set(testClassNames.map((c) => c.split("$")[0]!))) {
     if (!cls.endsWith("Test")) continue
     const target = cls.slice(0, -"Test".length)
     const c = readCoverage(xml, `src/main/java/${target.replace(/\./g, "/")}.java`)
@@ -60,9 +61,10 @@ export function readCoverage(xml: string, target: string): FileCoverage | null {
 
   for (const p of xml.matchAll(/<package\b([^>]*)>([\s\S]*?)<\/package>/g)) {
     if (attrs(p[1]!).name !== pkg) continue
-    for (const s of p[2]!.matchAll(/<sourcefile\b([^>]*)>([\s\S]*?)<\/sourcefile>/g)) {
+    // A file with no code (an interface) is a self-closing `<sourcefile .../>`; read as an open tag it would swallow the next file.
+    for (const s of p[2]!.matchAll(/<sourcefile\b([^>]*?)(?:\/>|>([\s\S]*?)<\/sourcefile>)/g)) {
       if (attrs(s[1]!).name !== file) continue
-      const body = s[2]!
+      const body = s[2] ?? ""
       const uncoveredLines: number[] = []
       const partialLines: number[] = []
       for (const l of body.matchAll(/<line\b[^>]*>/g)) {

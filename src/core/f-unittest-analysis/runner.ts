@@ -38,24 +38,30 @@ const hasLine = (log: string, re: RegExp): boolean => log.split(/\r?\n/).some((l
 /** English diagnostics: a different JAVA_TOOL_OPTIONS makes Gradle use its own daemon, so a ko daemon is not reused. */
 const ENGLISH = "-Duser.language=en -Duser.country=US";
 
-export const gradlePath = (module: string): { gmod: string; mdir: string } => {
-  const gmod = module.replace(/\//g, ":").replace(/^:/, "");
-  return { gmod, mdir: gmod.replace(/:/g, "/") };
+/** "." (or "") is the root project of a single-project build: its tasks are `:test`, its files under `./`. */
+export const gradlePath = (module: string): { gmod: string; mdir: string; taskPath: (name: string) => string } => {
+  const gmod = module.replace(/\//g, ":").replace(/^:/, "").replace(/^\.$/, "");
+  return { gmod, mdir: gmod ? gmod.replace(/:/g, "/") : ".", taskPath: (name) => (gmod ? `:${gmod}:${name}` : `:${name}`) };
 };
 
 /** The gradle test command as text, for the report. */
 export function gradleCommandText(module: string, tests: string[]): string {
-  const { gmod } = gradlePath(module);
-  return `gradlew :${gmod}:cleanTest :${gmod}:test --continue${tests.map((t) => ` --tests ${t}`).join("")}`;
+  const { taskPath } = gradlePath(module);
+  return `gradlew ${taskPath("cleanTest")} ${taskPath("test")} --continue${tests.map((t) => ` --tests ${t}`).join("")}`;
 }
 
-function gradleCommand(cwd: string, platform: NodeJS.Platform): { exe: string; prefix: string[] } {
-  if (platform === "win32") {
-    const bat = path.join(cwd, "gradlew.bat");
-    // .bat files cannot be spawned directly on current Node/Bun, they go through cmd.exe.
-    return { exe: "cmd.exe", prefix: ["/c", fs.existsSync(bat) ? bat : "gradle"] };
-  }
-  return fs.existsSync(path.join(cwd, "gradlew")) ? { exe: "sh", prefix: ["./gradlew"] } : { exe: "gradle", prefix: [] };
+/** cmd.exe line for `cmd /d /s /c "<line>"`: /s strips only the outer quotes, so args quoted here survive intact
+ * (Node's own quoting of several spaced args gets mangled by plain `cmd /c`). */
+export function windowsCmdLine(prog: string, args: string[]): string {
+  const q = (a: string): string => (a === "" || /[\s&|<>^()%!"]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a);
+  return `"${[prog, ...args].map(q).join(" ")}"`;
+}
+
+function gradleCommand(cwd: string, platform: NodeJS.Platform): { exe: string; prefix: string[]; win: boolean } {
+  // .bat files cannot be spawned directly on current Node/Bun, they go through cmd.exe. cwd is the project, so
+  // the wrapper is named relatively and the project path's spaces never reach the command line.
+  if (platform === "win32") return { exe: "cmd.exe", prefix: [fs.existsSync(path.join(cwd, "gradlew.bat")) ? "gradlew.bat" : "gradle"], win: true };
+  return fs.existsSync(path.join(cwd, "gradlew")) ? { exe: "sh", prefix: ["./gradlew"], win: false } : { exe: "gradle", prefix: [], win: false };
 }
 
 const fmt = (ms: number): string => {
@@ -73,7 +79,7 @@ function logTail(log: string): string {
 
 export async function runTests(req: RunRequest): Promise<void> {
   const platform = req.platform ?? process.platform;
-  const { gmod, mdir } = gradlePath(req.module);
+  const { mdir, taskPath } = gradlePath(req.module);
   const resultsDir = path.join(req.cwd, mdir, "build/test-results/test");
   const logFile = path.join(req.outDir, "gradle.log");
   fs.mkdirSync(req.outDir, { recursive: true });
@@ -97,12 +103,19 @@ export async function runTests(req: RunRequest): Promise<void> {
   const gradle = (args: string[]): Promise<{ code: number; out: string }> =>
     new Promise((resolve) => {
       let out = "";
-      const child = spawn(gr.exe, [...gr.prefix, ...args], { cwd: req.cwd, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+      const child = gr.win
+        ? spawn(gr.exe, ["/d", "/s", "/c", windowsCmdLine(gr.prefix[0]!, args)], { cwd: req.cwd, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, windowsVerbatimArguments: true })
+        : spawn(gr.exe, [...gr.prefix, ...args], { cwd: req.cwd, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+      // An exited child's PID may be reused by another process: never kill after exit (taskkill /T takes the whole tree).
       const kill = (): void => {
+        if (child.exitCode !== null || child.signalCode !== null) return;
         if (platform === "win32" && child.pid) spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true });
         else child.kill("SIGTERM");
       };
       req.signal?.addEventListener("abort", kill, { once: true });
+      const detach = (): void => req.signal?.removeEventListener("abort", kill);
+      child.on("close", detach);
+      child.on("error", detach);
       const feed = (d: Buffer): void => {
         const text = d.toString("utf-8");
         out += text;
@@ -122,41 +135,45 @@ export async function runTests(req: RunRequest): Promise<void> {
     // 1) Build. Offline first; online only for a dependency problem or main-source errors (never for test-source errors).
     phase = "[1/2] 컴파일 중";
     report();
-    let build = await gradle([`:${gmod}:testClasses`, "--offline"]);
+    let build = await gradle([taskPath("testClasses"), "--offline"]);
     if (build.code !== 0 && build.code !== -1) {
       const online = hasLine(build.out, MAIN_JAVAC) || (!hasLine(build.out, JAVAC) && hasLine(build.out, RESOLUTION));
       if (online) {
         fs.appendFileSync(logFile, "[run-tests] offline build failed -> retried online\n");
-        build = await gradle([`:${gmod}:testClasses`]);
+        build = await gradle([taskPath("testClasses")]);
       }
     }
     if (build.code !== 0) return status("fail", "missing", build.out || "gradle could not be started (no wrapper, no gradle on PATH)");
     if (req.signal?.aborted) return status("fail", "missing", "cancelled");
 
-    // 2) Run. One offline run, no online retry: a failing test that mentions a connection is not a dependency problem.
+    // 2) Run offline. Retried online only when no result was written and Gradle could not resolve a dependency
+    // (a testRuntimeOnly dep that testClasses never needed): a failing test that mentions a connection is not that.
     // The JaCoCo agent (reused from f-unit-test-code's bundled tools) is attached via -I init.gradle so the
     // report can show overall coverage; a missing/failed coverage step never affects the test verdict.
     phase = "[2/2] 테스트 실행 중";
     fs.rmSync(resultsDir, { recursive: true, force: true });
     const execFile = path.join(req.outDir, "jacoco.exec");
     fs.rmSync(execFile, { force: true });
-    const run = await gradle([
-      `:${gmod}:cleanTest`,
-      `:${gmod}:test`,
+    const testArgs = (offline: boolean): string[] => [
+      taskPath("cleanTest"),
+      taskPath("test"),
       "--continue",
-      "--offline",
+      ...(offline ? ["--offline"] : []),
       "-I",
       INIT_GRADLE(),
       `-Pfut.agent=${path.join(JACOCO_TOOLS(), "jacocoagent.jar")}`,
       `-Pfut.exec=${execFile}`,
       ...req.tests.flatMap((t) => ["--tests", t]),
-    ]);
-    fs.appendFileSync(logFile, `[run-tests] gradle test exit: ${run.code}\n`);
-    let found = false;
-    if (fs.existsSync(resultsDir)) {
-      fs.cpSync(resultsDir, path.join(req.outDir, "test-results"), { recursive: true });
-      found = fs.readdirSync(resultsDir).some((f) => /^TEST-.*\.xml$/.test(f));
+    ];
+    const hasResults = (): boolean => fs.existsSync(resultsDir) && fs.readdirSync(resultsDir).some((f) => /^TEST-.*\.xml$/.test(f));
+    let run = await gradle(testArgs(true));
+    if (!hasResults() && hasLine(run.out, RESOLUTION) && !req.signal?.aborted) {
+      fs.appendFileSync(logFile, "[run-tests] offline test run resolved no dependency -> retried online\n");
+      run = await gradle(testArgs(false));
     }
+    fs.appendFileSync(logFile, `[run-tests] gradle test exit: ${run.code}\n`);
+    const found = hasResults();
+    if (fs.existsSync(resultsDir)) fs.cpSync(resultsDir, path.join(req.outDir, "test-results"), { recursive: true });
     await writeCoverageXml(req, execFile, mdir, platform);
     status("ok", found ? "run" : "none", build.out + run.out);
   } finally {

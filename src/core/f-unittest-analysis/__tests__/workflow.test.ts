@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { COMMAND_NAME, completeStage, runExecute, endSession, gateTool, getSession, renderStageGuide, selectionNames, startSession } from "../workflow";
+import { COMMAND_NAME, completeStage, runExecute, endSession, gateTool, getSession, noteUserMessage, renderStageGuide, selectionNames, startSession } from "../workflow";
 import { analysisBashAllowed } from "../bash-gate";
 import { gradleCommandText } from "../runner";
 
@@ -50,6 +50,13 @@ describe("plan", () => {
     expect(gradleCommandText("app", selectionNames(session().inputs))).toContain(":app:test --continue --tests x.PayTest.b");
     startSession(SID, "", root);
     expect(planOk([{ file: TEST_FILE, methods: ["zzz"] }])).toContain("has no @Test method zzz");
+  });
+  test("a single-project build plans the root as module \".\" only when it has src/test/java", () => {
+    const rootPlan = () => completeStage(SID, { stage: "plan", note: "계획", inputs: { module: ".", tests: [] } });
+    expect(rootPlan()).toContain("has no src/test/java");
+    fs.mkdirSync(path.join(root, "src/test/java"), { recursive: true });
+    expect(rootPlan()).toContain("Plan recorded");
+    expect(gradleCommandText(".", [])).toBe("gradlew :cleanTest :test --continue");
   });
   test("a missing test file or module is rejected", () => {
     expect(planOk([{ file: "app/src/test/java/x/NoTest.java" }])).toContain("does not exist");
@@ -128,6 +135,43 @@ describe("execute", () => {
     ran({ compile: "fail", log: "Could not resolve org.x:y:1" });
     const out = completeStage(SID, { stage: "execute" });
     expect(out).toContain("dependency/network");
+    expect(session().stage).toBe("execute");
+  });
+  test("an all-skipped run is SKIP, not 통과", () => {
+    ran({ compile: "ok", log: "", tests: "run" }, `<testcase name="a()" classname="x.PayTest" time="0"><skipped/></testcase>`);
+    const out = completeStage(SID, { stage: "execute" });
+    expect(out).toContain("실행된 테스트 없음");
+    expect(out).not.toContain("통과");
+    const md = fs.readFileSync(path.join(root, (session().outcome as { reportFile: string }).reportFile), "utf-8");
+    expect(md).toContain("- 결과: SKIP · 전체 1개 모두 건너뜀");
+    const html = fs.readFileSync(path.join(root, (session().outcome as { reportFile: string }).reportFile.replace(/\.md$/, ".html")), "utf-8");
+    expect(html).toContain('<span class="badge warn">SKIP</span>');
+  });
+  test("@Nested classes are one file in the report, their methods prefixed by the nested class", () => {
+    ran({ compile: "ok", log: "", tests: "run" }, `<testcase name="a()" classname="x.PayTest$Join" time="0.1"/><testcase name="a()" classname="x.PayTest$Level" time="0.1"/>`);
+    completeStage(SID, { stage: "execute" });
+    const md = fs.readFileSync(path.join(root, (session().outcome as { reportFile: string }).reportFile), "utf-8");
+    expect(md).toContain("## 실행한 파일 (1개)");
+    expect(md).toContain("- PayTest.java — 2개 (통과 2)");
+    expect(md).toContain("| Join.a | 통과 |");
+    expect(md).toContain("| Level.a | 통과 |");
+    expect(md).not.toContain("$");
+  });
+  test("the user's next message after the report ends the session and lifts the gate", () => {
+    ran({ compile: "ok", log: "", tests: "run" }, ok + bad);
+    completeStage(SID, { stage: "execute" });
+    expect(gateTool(SID, "edit", {})).toContain("refused");
+    noteUserMessage(SID, session().reportedAt! - 1);
+    expect(getSession(SID)).toBeDefined();
+    noteUserMessage(SID, session().reportedAt! + 1);
+    expect(getSession(SID)).toBeUndefined();
+    expect(gateTool(SID, "edit", {})).toBeNull();
+  });
+  test("a test run that resolved no dependency is an environment problem, not an empty selection", () => {
+    ran({ compile: "ok", log: "Could not resolve com.h2database:h2:2.2.224", tests: "none" });
+    const out = completeStage(SID, { stage: "execute" });
+    expect(out).toContain("dependency/network");
+    expect(out).not.toContain("No test ran");
     expect(session().stage).toBe("execute");
   });
   test("execute without a fresh status.json is rejected", () => {

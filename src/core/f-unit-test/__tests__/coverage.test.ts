@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { isFullyCovered, readCoverage, readFailedDetails, readFailedTests, readTestRun } from "../coverage"
+import { isFullyCovered, readCoverage, readFailedDetails, readFailedTests, readTargetCoverage, readTestRun } from "../coverage"
 
 const XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <!DOCTYPE report PUBLIC "-//JACOCO//DTD Report 1.1//EN" "report.dtd">
@@ -24,6 +24,18 @@ const XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   </package>
 </report>`
 
+describe("readTargetCoverage", () => {
+  test("sums only the classes the tests target, @Nested classes included, once each", () => {
+    expect(readTargetCoverage(XML, ["kr.co.x.service.SvcATest$Join", "kr.co.x.service.SvcATest$Level"])).toEqual({
+      line: { missed: 1, covered: 2 },
+      branch: { missed: 1, covered: 1 },
+    })
+  })
+  test("no matching target class gives null", () => {
+    expect(readTargetCoverage(XML, ["kr.co.x.mapper.FooMapperIT", "kr.co.x.service.OtherTest"])).toBeNull()
+  })
+})
+
 describe("readCoverage", () => {
   const p = "mod/src/main/java/kr/co/x/service/SvcA.java"
   test("reads counters and line lists", () => {
@@ -39,6 +51,11 @@ describe("readCoverage", () => {
     const c = readCoverage(XML, "src/main/java/kr/co/x/service/NoBranch.java")
     expect(c?.branch).toEqual({ missed: 0, covered: 0 })
     expect(isFullyCovered(c)).toBe(true)
+  })
+  test("a self-closing sourcefile (interface, no code) does not hide the next file", () => {
+    const xml = XML.replace('<sourcefile name="NoBranch.java">', '<sourcefile name="Iface.java"/><sourcefile name="NoBranch.java">')
+    expect(readCoverage(xml, "src/main/java/kr/co/x/service/NoBranch.java")?.line).toEqual({ missed: 0, covered: 1 })
+    expect(readCoverage(xml, "src/main/java/kr/co/x/service/Iface.java")?.line).toEqual({ missed: 0, covered: 0 })
   })
   test("unknown sourcefile gives null", () => {
     const c = readCoverage(XML, "src/main/java/kr/co/x/service/Other.java")

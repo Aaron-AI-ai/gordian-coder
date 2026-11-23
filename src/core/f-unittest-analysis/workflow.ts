@@ -71,6 +71,7 @@ export interface AnalysisSession {
   envRetries: number;
   running?: boolean;
   outcome?: Outcome;
+  reportedAt?: number;
 }
 
 interface Stage {
@@ -87,7 +88,7 @@ export const STAGES: Record<StageId, Stage> = {
     steps: [
       `Load the \`${UNIT_TEST_ANALYSIS_SKILL_NAME}\` skill with the skill tool. If the skill is missing, STOP and tell the user to run \`gdc fico-check\`.`,
       "Read the user's input. `--test <spec>` (repeatable or comma separated; bare names count too) selects tests: a class name, a test file path, or `Class#method`. NO input means every test of the module runs: send `tests` as an empty list.",
-      "Find the Gradle module (settings.gradle, where the tests live). Turn every spec into the test file under src/test/java (glob) and, for `Class#method`, the method; the method must exist in the file.",
+      "Find the Gradle module (settings.gradle, where the tests live); a single-project build with its tests in the root src/test/java is module \".\". Turn every spec into the test file under src/test/java (glob) and, for `Class#method`, the method; the method must exist in the file.",
       "If the module is unclear, or a spec matches no test file or several, ASK THE USER and END YOUR TURN; never guess.",
       `Write a short plan for the user in Korean (or the language the user wrote in): the module, and the tests that will run or "전체". Then call ${STAGE_TOOL} with stage "plan", the plan as \`note\` and \`inputs\` = { module, tests: [{ file, methods? }] } with project-relative paths (tests: [] for all). The plan is accepted without waiting; continue straight to execute.`,
     ],
@@ -126,6 +127,12 @@ export function startSession(sessionId: string, request: string, cwd: string): A
 export const getSession = (sessionId: string): AnalysisSession | undefined => sessions.get(sessionId);
 export const endSession = (sessionId: string): void => void sessions.delete(sessionId);
 
+/** The report turn is the last one the workflow guides; the user's next message is free (e.g. "fix it"). */
+export function noteUserMessage(sessionId: string, createdAt: number): void {
+  const session = sessions.get(sessionId);
+  if (session?.stage === "report" && session.reportedAt !== undefined && createdAt > session.reportedAt) sessions.delete(sessionId);
+}
+
 /** Full test class names, with `.method` for a selected method. */
 export function selectionNames(inputs: PlanInputs | undefined): string[] {
   return (inputs?.tests ?? []).flatMap((t) => {
@@ -143,6 +150,11 @@ function reportSteps(o: Outcome): string[] {
   const guideCore = `Read at most the failing tests and the code they call (read-only, a few reads), then your reply MUST be a Korean text message following the skill's docs/f-unittest-analysis-guide.md (per failure: 테스트, 원인, 판단, 수정 방법). Ending the turn after only tool calls, with no text, is a failure. Edit no code, and run nothing.`;
   switch (o.kind) {
     case "pass":
+      if (o.run.passed === 0)
+        return [
+          `None of the ${o.run.total} tests ran: every one was skipped (@Disabled or a failed assumption), so nothing was verified. The plugin wrote the report: ${o.reportFile} (and report.html next to it), verdict SKIP.${o.scriptWarn ? `\n${o.scriptWarn}` : ""}`,
+          `Now reply to the user, and only this, in Korean: "리포트: ${o.reportFile} (같은 폴더에 report.html) — 실행된 테스트 없음 (${o.run.total}개 모두 건너뜀, @Disabled/assumption 확인 필요)". Do not call any tool.`,
+        ];
       return [`All ${o.run.total} tests passed (skipped ${o.run.skipped}). The plugin wrote the report: ${o.reportFile} (and report.html next to it).${o.scriptWarn ? `\n${o.scriptWarn}` : ""}`, `Now reply to the user, and only this, in Korean: "리포트: ${o.reportFile} (같은 폴더에 report.html) — 전체 ${o.run.total}개 통과". Do not call any tool.`];
     case "failed":
       return [
@@ -202,7 +214,9 @@ function planProblems(p: PlanInputs, cwd: string): string[] {
   const abs = (f: string): string => path.resolve(cwd, f);
   const moduleDir = p.module.replace(/^:/, "").replace(/:/g, "/");
   if (!/^[\w.\/:-]+$/.test(p.module)) problems.push(`module: "${p.module}" may contain only letters, digits, _ . / : -`);
-  else if (!moduleDir || moduleDir === "." || escapes(moduleDir) || !isDir(abs(moduleDir))) problems.push(`module: "${p.module}" must be an existing module directory inside the project`);
+  else if (!moduleDir || moduleDir === ".") {
+    if (!isDir(abs("src/test/java"))) problems.push(`module: "${p.module || "(empty)"}" is the root project, which has no src/test/java; give the module directory that holds the tests`);
+  } else if (escapes(moduleDir) || !isDir(abs(moduleDir))) problems.push(`module: "${p.module}" must be an existing module directory inside the project`);
   for (const t of p.tests) {
     if (escapes(t.file) || !t.file.endsWith(".java") || !/^[\w.]+$/.test(fqcn(t.file) ?? "")) {
       problems.push(`tests: ${t.file || "(empty)"} must be a .java file under src/test/java with a plain package path`);
@@ -241,6 +255,7 @@ function submitPlan(session: AnalysisSession, input: StageInput): string {
 function close(session: AnalysisSession, outcome: Outcome): string {
   session.outcome = outcome;
   session.stage = "report";
+  session.reportedAt = Date.now();
   return `Run finished.\n\n${renderStageGuide("report", session)}`;
 }
 
@@ -256,18 +271,20 @@ function completeExecute(session: AnalysisSession): string {
     return `Rejected: ${session.runDir}/status.json is not valid JSON. Call ${STAGE_TOOL} with stage "execute" again.`;
   }
   const log = status.log ?? "(no log)";
-  if (status.compile !== "ok") {
+  const run = readTestRun(path.join(dir, "test-results"));
+  const noResult = status.tests !== "run" || run.total === 0;
+  // A dependency/network failure leaves no result either way; it must not read as "the selection matched no test".
+  if (status.compile !== "ok" || noResult) {
     const env = environmentFailureLine(log);
+    const kind = status.compile !== "ok" ? "build" : "none";
     if (env) {
       session.envRetries += 1;
-      if (session.envRetries > MAX_ENV_RETRIES) return close(session, { kind: "build", log });
+      if (session.envRetries > MAX_ENV_RETRIES) return close(session, { kind, log });
       session.baselineMtime = fs.statSync(file).mtimeMs;
-      return `The build failed on a dependency/network problem in the environment: ${env}\nTell the user what failed and END YOUR TURN. After they have fixed it, call ${STAGE_TOOL} with stage "execute" again.`;
+      return `The ${kind === "build" ? "build" : "test run"} failed on a dependency/network problem in the environment: ${env}\nTell the user what failed and END YOUR TURN. After they have fixed it, call ${STAGE_TOOL} with stage "execute" again.`;
     }
-    return close(session, { kind: "build", log });
+    return close(session, { kind, log });
   }
-  const run = readTestRun(path.join(dir, "test-results"));
-  if (status.tests !== "run" || run.total === 0) return close(session, { kind: "none", log });
   const inputs = session.inputs!;
   const xml = readCoverageXmlText(dir);
   const failures = run.failed + run.errored > 0 ? readFailedDetails(path.join(dir, "test-results")) : [];

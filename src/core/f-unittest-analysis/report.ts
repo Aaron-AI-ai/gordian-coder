@@ -7,6 +7,10 @@ import { esc, fill } from "../review/report/html";
 import type { FailedTest, OverallCoverage, TestRun } from "../f-unit-test/coverage";
 import TEMPLATE_HTML from "./report.template.html" with { type: "text" };
 
+/** SKIP: tests ran but none passed or failed (all @Disabled / assumption-skipped), so nothing was verified. */
+export const verdictOf = (r: TestRun): "PASS" | "FAIL" | "SKIP" => (r.failed + r.errored > 0 ? "FAIL" : r.passed === 0 ? "SKIP" : "PASS");
+const ALL_SKIPPED = (r: TestRun): string => `전체 ${r.total}개 모두 건너뜀 — 실행된 테스트 없음`;
+
 const TEMPLATE = TEMPLATE_HTML as unknown as string;
 export const REPORT_DIR = ".fico/report/f-unittest-analysis";
 
@@ -51,10 +55,15 @@ function when(startedAt: number, end: Date): string {
   return `${at(new Date(startedAt))} ~ ${at(end)} (${fmtDuration(end.getTime() - startedAt)})`;
 }
 
-/** Class → its cases, in run order. */
+/** Source-file class → its cases, in run order. A @Nested class (`FooTest$Bar`) belongs to FooTest.java; its
+ * methods are shown as `Bar.method` so same-named methods of different nested classes stay apart. */
 function byClass(run: TestRun): Map<string, TestRun["tests"]> {
   const out = new Map<string, TestRun["tests"]>();
-  for (const t of run.tests) (out.get(t.cls) ?? out.set(t.cls, []).get(t.cls)!).push(t);
+  for (const t of run.tests) {
+    const [outer, ...nested] = t.cls.split("$");
+    const row = nested.length > 0 ? { ...t, method: `${nested.join(".")}.${t.method}` } : t;
+    (out.get(outer!) ?? out.set(outer!, []).get(outer!)!).push(row);
+  }
   return out;
 }
 
@@ -109,13 +118,14 @@ function renderHtml(d: ReportData, end: Date): string {
       : "";
   const skipped = r.tests.filter((t) => t.status === "skipped");
   const attention = skipped.length > 0 ? `<section class="step" id="check"><h2><span class="no">!</span>확인 필요</h2><div class="card"><ul>${skipped.map((t) => `<li>건너뜀: ${esc(t.cls.split(".").pop()!)}.${esc(t.method)}</li>`).join("")}</ul></div></section>` : "";
-  const verdict = bad > 0 ? "fail" : "pass";
+  const v = verdictOf(r);
+  const verdict = v === "FAIL" ? "fail" : v === "SKIP" ? "warn" : "pass";
   return fill(TEMPLATE, {
     TITLE: "f-unittest-analysis 리포트",
     STAMP: esc(localTimestamp(end)),
     HEADING: "단위 테스트 실행 리포트",
     RUNINFO: `<dl class="runinfo">${info}</dl>`,
-    VERDICT: `<div class="verdict ${verdict}"><div class="head"><span class="badge ${verdict}">${verdict.toUpperCase()}</span></div><p class="cause">전체 ${r.total}개 중 통과 ${r.passed}${bad > 0 ? `, 실패 ${bad}` : ""} (건너뜀 ${r.skipped})</p></div>`,
+    VERDICT: `<div class="verdict ${verdict}"><div class="head"><span class="badge ${verdict}">${v}</span></div><p class="cause">${v === "SKIP" ? ALL_SKIPPED(r) : `전체 ${r.total}개 중 통과 ${r.passed}${bad > 0 ? `, 실패 ${bad}` : ""} (건너뜀 ${r.skipped})`}</p></div>`,
     STATS: stats,
     TOC: `<a href="#input">실행 입력</a><a href="#files">실행한 파일</a><a href="#tests">상세 결과</a>${d.failures.length > 0 ? '<a href="#failures">실패 내역</a>' : ""}${attention ? '<a href="#check">확인 필요</a>' : ""}`,
     INPUT: inputHtml,
@@ -140,7 +150,9 @@ export function writeReport(d: ReportData): string {
     "# f-unittest-analysis 리포트",
     "",
     `- 작업 일시: ${when(d.startedAt, end)}`,
-    `- 결과: ${bad > 0 ? "FAIL" : "PASS"} · 전체 ${r.total}개 중 통과 ${r.passed}${bad > 0 ? `, 실패 ${bad}` : ""} (건너뜀 ${r.skipped}, ${secs(r.seconds)}초)`,
+    verdictOf(r) === "SKIP"
+      ? `- 결과: SKIP · ${ALL_SKIPPED(r)} (${secs(r.seconds)}초)`
+      : `- 결과: ${bad > 0 ? "FAIL" : "PASS"} · 전체 ${r.total}개 중 통과 ${r.passed}${bad > 0 ? `, 실패 ${bad}` : ""} (건너뜀 ${r.skipped}, ${secs(r.seconds)}초)`,
     `- 커버리지: 라인 ${d.coverage ? pct(d.coverage.line) : "-"}, 분기 ${d.coverage ? pct(d.coverage.branch) : "-"}`,
     "",
     "## 실행 입력",

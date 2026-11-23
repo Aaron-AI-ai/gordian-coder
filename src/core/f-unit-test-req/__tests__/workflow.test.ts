@@ -86,6 +86,11 @@ describe("plan", () => {
     const out = done({ stage: "plan", note: "계획", inputs: { ...plan(), source: "file", requirement_file: "loan-req.md" } });
     expect(out).toContain("names program SONAQ001");
   });
+  test("a label followed by a plain word is not a program ID", () => {
+    put("req.md", "# 요구사항\nProgram ID: PENDING\nPGM: Settings\n한도 100원");
+    const out = done({ stage: "plan", note: "계획", inputs: { ...plan(), source: "file", requirement_file: "req.md" } });
+    expect(out).toContain("Plan recorded");
+  });
   test("a non-Korean script in the plan note is rejected", () => {
     expect(done({ stage: "plan", note: "计划 결제", inputs: plan() })).toContain("Rejected: Non-Korean script");
   });
@@ -120,6 +125,13 @@ describe("execute and verify", () => {
     expect(session().stage).toBe("done");
     expect(fs.existsSync(path.join(root, ".fico/report"))).toBe(false);
   });
+  test("the user's next message after done ends the session and lifts the gate", () => {
+    verifyWith("ok");
+    expect(gateTool(SID, "write", { filePath: path.join(root, TARGET) })).not.toBeNull();
+    noteUserMessage(SID, session().doneAt! + 1);
+    expect(getSession(SID)).toBeUndefined();
+    expect(gateTool(SID, "write", { filePath: path.join(root, TARGET) })).toBeNull();
+  });
   test("a compile failure goes back to execute with the log", () => {
     const out = verifyWith("fail");
     expect(out).toContain("Back to execute");
@@ -152,6 +164,12 @@ describe("helpers", () => {
     expect(cmd).toContain("compile-tests.sh --module app --out .fico/work/r");
     expect(reqBashAllowed("verify", cmd, ctx)).toBe(true);
     expect(reqBashAllowed("verify", cmd + " --extra x", ctx)).toBe(false);
+    const ps = compileCommandLine(ctx, "win32")!;
+    expect(ps).toContain("-File ");
+    expect(ps).toContain("compile-tests.ps1 -Module app -Out .fico/work/r");
+    expect(reqBashAllowed("verify", ps, ctx)).toBe(true);
+    expect(reqBashAllowed("verify", ps.replace("-Module app", "-Module other"), ctx)).toBe(false);
+    expect(reqBashAllowed("verify", cmd.replace("compile-tests.sh", "run-coverage.sh"), ctx)).toBe(false);
     expect(reqBashAllowed("plan", "git diff", ctx)).toBe(true);
     expect(reqBashAllowed("done", "git diff", ctx)).toBe(false);
   });

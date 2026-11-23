@@ -15,6 +15,7 @@ import {
   endSession,
   gateTool,
   getSession,
+  noteUserMessage,
   renderStageGuide,
   runExecute,
   startSession,
@@ -47,6 +48,11 @@ export function createFUnittestAnalysisModule(input: PluginInput): OpenCodeModul
   const systemTransform: NonNullable<Hooks["experimental.chat.system.transform"]> = async (hookInput, output) => {
     const session = getSession(hookInput.sessionID);
     if (session) output.system.push(renderStageGuide(session.stage, session));
+  };
+
+  const event: NonNullable<Hooks["event"]> = async ({ event }) => {
+    if (event.type !== "message.updated" || event.properties.info.role !== "user") return;
+    noteUserMessage(event.properties.info.sessionID, event.properties.info.time.created);
   };
 
   return {
@@ -82,5 +88,6 @@ export function createFUnittestAnalysisModule(input: PluginInput): OpenCodeModul
     commandBefore,
     toolBefore,
     systemTransform,
+    event,
   };
 }

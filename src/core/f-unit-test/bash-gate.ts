@@ -44,8 +44,6 @@ const TEST_FILTER = /^[\w.]+$/;
 const SH_SCRIPT = "run-coverage.sh";
 const PS_SCRIPT = "run-coverage.ps1";
 type ScriptName = typeof SH_SCRIPT | typeof PS_SCRIPT;
-const skillScript = (name: ScriptName): string => `skills/${UNIT_TEST_SKILL_NAME}/scripts/${name}`;
-
 export const BASH_RULE =
   "bash runs one plain command, written without quotes or backslashes and without ; & | < > ` $ * ? [ ] { } ! # ( ) or newlines. " +
   "plan: git diff|status|log|show|rev-parse with plain arguments. execute: that, or gradle/./gradlew with only classes, testClasses, compileJava, compileTestJava, test, cleanTest tasks (optionally :module:-prefixed), --tests <full test class name> and --offline, --console=plain, -q, --quiet, --no-daemon, --parallel, --continue, --stacktrace. " +
@@ -83,8 +81,8 @@ export function driveForms(p: string): string[] {
 }
 
 /** Every spelling of the installed script the verify gate accepts: project install first, then global. */
-export function scriptPaths(cwd: string, home: string = os.homedir(), name: ScriptName = SH_SCRIPT): string[] {
-  const script = skillScript(name);
+export function skillScriptPaths(cwd: string, home: string, skill: string, name: string): string[] {
+  const script = `skills/${skill}/scripts/${name}`;
   return [
     `.opencode/${script}`,
     `./.opencode/${script}`,
@@ -94,10 +92,27 @@ export function scriptPaths(cwd: string, home: string = os.homedir(), name: Scri
 }
 
 /** The spelling the guide prints: project-relative when the project has the skill, else the global path. */
-export function guideScriptPath(cwd: string, home: string = os.homedir(), name: ScriptName = SH_SCRIPT): string {
-  const script = skillScript(name);
+export function guideSkillScriptPath(cwd: string, home: string, skill: string, name: string): string {
+  const script = `skills/${skill}/scripts/${name}`;
   return fs.existsSync(path.join(cwd, ".opencode", script)) ? `.opencode/${script}` : `${slashes(home)}/.config/opencode/${script}`;
 }
+
+/** The arguments after the script when `t` is `(sh|bash) <one of paths> ...`, else null. */
+export function shScriptArgs([shell, script, ...rest]: string[], paths: string[]): string[] | null {
+  return (shell === "sh" || shell === "bash") && script !== undefined && paths.includes(script) ? rest : null;
+}
+
+/** The arguments after the script when `t` is `(powershell|pwsh) [-NoProfile] [-ExecutionPolicy Bypass] -File <one of paths> ...`, in that order, else null. */
+export function psScriptArgs([shell, ...rest]: string[], paths: string[]): string[] | null {
+  if (shell !== "powershell" && shell !== "pwsh") return null;
+  let i = 0;
+  if (rest[i] === "-NoProfile") i += 1;
+  if (rest[i] === "-ExecutionPolicy" && rest[i + 1] === "Bypass") i += 2;
+  return rest[i] === "-File" && paths.includes(rest[i + 1] ?? "") ? rest.slice(i + 2) : null;
+}
+
+export const scriptPaths = (cwd: string, home: string = os.homedir(), name: ScriptName = SH_SCRIPT): string[] => skillScriptPaths(cwd, home, UNIT_TEST_SKILL_NAME, name);
+export const guideScriptPath = (cwd: string, home: string = os.homedir(), name: ScriptName = SH_SCRIPT): string => guideSkillScriptPath(cwd, home, UNIT_TEST_SKILL_NAME, name);
 
 /** The coverage script the guide names on this platform: PowerShell on win32, sh elsewhere. */
 export function coverageScriptName(platform: NodeJS.Platform = process.platform): ScriptName {
@@ -130,19 +145,15 @@ function sameArgs(rest: string[], [m, t, o]: [string, string, string], want: Cov
 }
 
 /** `(sh|bash) run-coverage.sh --module M --tests T --out R`. */
-function shCoverage([shell, script, ...rest]: string[], ctx: BashContext): boolean {
-  if ((shell !== "sh" && shell !== "bash") || !script || !scriptPaths(ctx.cwd, ctx.home, SH_SCRIPT).includes(script)) return false;
-  return sameArgs(rest, ["--module", "--tests", "--out"], ctx.coverage);
+function shCoverage(t: string[], ctx: BashContext): boolean {
+  const rest = shScriptArgs(t, scriptPaths(ctx.cwd, ctx.home, SH_SCRIPT));
+  return rest !== null && sameArgs(rest, ["--module", "--tests", "--out"], ctx.coverage);
 }
 
-/** `(powershell|pwsh) [-NoProfile] [-ExecutionPolicy Bypass] -File run-coverage.ps1 -Module M -Tests T -Out R`, in that order. */
-function psCoverage([shell, ...rest]: string[], ctx: BashContext): boolean {
-  if (shell !== "powershell" && shell !== "pwsh") return false;
-  let i = 0;
-  if (rest[i] === "-NoProfile") i += 1;
-  if (rest[i] === "-ExecutionPolicy" && rest[i + 1] === "Bypass") i += 2;
-  if (rest[i] !== "-File" || !scriptPaths(ctx.cwd, ctx.home, PS_SCRIPT).includes(rest[i + 1] ?? "")) return false;
-  return sameArgs(rest.slice(i + 2), ["-Module", "-Tests", "-Out"], ctx.coverage);
+/** `(powershell|pwsh) [-NoProfile] [-ExecutionPolicy Bypass] -File run-coverage.ps1 -Module M -Tests T -Out R`. */
+function psCoverage(t: string[], ctx: BashContext): boolean {
+  const rest = psScriptArgs(t, scriptPaths(ctx.cwd, ctx.home, PS_SCRIPT));
+  return rest !== null && sameArgs(rest, ["-Module", "-Tests", "-Out"], ctx.coverage);
 }
 
 export function bashAllowed(stage: BashStage, command: string, ctx: BashContext): boolean {

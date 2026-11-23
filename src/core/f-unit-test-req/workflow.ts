@@ -88,6 +88,7 @@ export interface ReqSession extends PlanGateState {
   fetched: Set<string>;
   /** Set when the run ended without a clean build. */
   incomplete?: string;
+  doneAt?: number;
 }
 
 interface Stage {
@@ -184,7 +185,10 @@ export const endSession = (sessionId: string): void => void sessions.delete(sess
 
 export function noteUserMessage(sessionId: string, createdAt: number): void {
   const session = sessions.get(sessionId);
-  if (session) noteReply(session, createdAt);
+  if (!session) return;
+  // The done turn is the last one the workflow guides; the user's next message is free (e.g. "fix it").
+  if (session.stage === "done" && session.doneAt !== undefined && createdAt > session.doneAt) return void sessions.delete(sessionId);
+  noteReply(session, createdAt);
 }
 
 export function takeAbortRequest(sessionId: string): boolean {
@@ -306,7 +310,8 @@ function planProblems(p: PlanInputs, cwd: string): { problems: string[]; missing
   if (!p.program_id && !p.no_program) problems.push("program_id: no program given. Look for the Program ID in the requirement, else ask the user for it (or whether none applies) and END YOUR TURN; set no_program=true only after the user said none applies");
   if (!p.program_id && p.source === "file" && p.requirement_file && isFile(abs(p.requirement_file))) {
     const named = PROGRAM_LABEL.exec(fs.readFileSync(abs(p.requirement_file), "utf-8"));
-    if (named) problems.push(`program_id: the requirement file names program ${named[1]}; read its specification from the MCP and set program_id and group_name`);
+    // The label match is case-insensitive; a real ID is an uppercase code with a digit (SONAQ001), not "PENDING".
+    if (named && /^[A-Z][A-Z0-9]*\d[A-Z0-9]*$/.test(named[1]!)) problems.push(`program_id: the requirement file names program ${named[1]}; read its specification from the MCP and set program_id and group_name`);
   }
   const moduleDir = p.module.replace(/^:/, "").replace(/:/g, "/");
   if (!/^[\w.\/:-]+$/.test(p.module)) problems.push(`module: "${p.module}" may contain only letters, digits, _ . / : -`);
@@ -462,6 +467,7 @@ function environmentFailure(session: ReqSession, line: string): string {
 /** Closes the workflow: the plugin's own list of the tests that exist, for the console explanation. */
 function finish(session: ReqSession, lead: string): string {
   session.stage = "done";
+  session.doneAt = Date.now();
   const lines: string[] = [];
   for (const file of [...session.touched].filter((f) => f.endsWith(".java"))) {
     const abs = path.resolve(session.cwd, file);
