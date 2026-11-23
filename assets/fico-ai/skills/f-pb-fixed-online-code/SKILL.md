@@ -1,9 +1,9 @@
 ---
-name: pb-fixed-online-code
+name: f-pb-fixed-online-code
 description: 'Scaffolds Controller, Service, and Input/Output VO classes for a new fixed-text (non-JSON) online service in the FICO framework, given a program ID. TRIGGER when user asks to generate online code for a specific program ID in Korean or English (e.g. XXXX 프로그램 아이디 온라인 코드 생성해줘, XXXX 온라인 코드 만들어줘, generate online code for XXXX). DO NOT TRIGGER when user asks about SQL queries, Mapper code, or non-online-code tasks.'
 ---
 
-# pb-fixed-online-code
+# f-pb-fixed-online-code
 
 Generates Controller, Service, and Input/Output VO classes for a new fixed-text online service.
 This skill does NOT generate DB Access Layer (Mapper) code.

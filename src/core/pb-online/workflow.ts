@@ -1,7 +1,7 @@
 /**
- * /pb-online-code harness: the stage graph and its per-session state.
+ * /f-pb-fixed-online-code harness: the stage graph and its per-session state.
  *
- * The domain knowledge stays in the standard `pb-fixed-online-code` skill and
+ * The domain knowledge stays in the standard `f-pb-fixed-online-code` skill and
  * the fico-mcp server (installed by `gdc fico-init`). This file only owns the
  * flow: which stage a session is in, what each stage may touch, and what has to
  * be true to leave it.
@@ -19,11 +19,11 @@ import { MAX_WAIT_CALLS, SessionStore, awaitingReply, noteReply, takeAbort } fro
 
 export { MCP_SERVER, SKILL_NAME };
 
-export const COMMAND_NAME = "pb-online-code";
-export const STAGE_TOOL = "pb_online_stage";
+export const COMMAND_NAME = "f-pb-fixed-online-code";
+export const STAGE_TOOL = "f_pb_fixed_online_code_stage";
 // Separate from f-review's kb_search, which only answers while a review is active.
-export const KB_TOOL = "pb_online_kb_search";
-export const REPORT_DIR = ".fico/report/pb-online";
+export const KB_TOOL = "f_pb_fixed_online_code_kb_search";
+export const REPORT_DIR = ".fico/report/f-pb-fixed-online-code";
 
 /** Verify→execute round trips before the run is reported as incomplete. */
 export const MAX_REWORK = 3;
@@ -211,7 +211,7 @@ export function takeAbortRequest(sessionId: string): boolean {
 export function renderStageGuide(stageId: StageId): string {
   const stage = STAGES[stageId];
   const lines = [
-    `[pb-online-code] Current stage: ${stageId} (plan → execute → verify → report → cleanup)`,
+    `[f-pb-fixed-online-code] Current stage: ${stageId} (plan → execute → verify → report → cleanup)`,
     `Goal: ${stage.goal}`,
     `Skill: ${SKILL_NAME}`,
     "Steps:",
@@ -243,18 +243,18 @@ export function gateTool(sessionId: string, tool: string, args: Record<string, u
   if (!session) return null;
   if (tool !== STAGE_TOOL && awaitingReply(session)) {
     session.awaitingCalls += 1;
-    return `pb-online-code: the plan is waiting for the user's reply. Do not call ${tool} or any other tool. END YOUR TURN now.`;
+    return `f-pb-fixed-online-code: the plan is waiting for the user's reply. Do not call ${tool} or any other tool. END YOUR TURN now.`;
   }
   if (STAGES[session.stage].blocked.includes(tool)) {
-    return `pb-online-code: ${tool} is not allowed in the ${session.stage} stage.\n\n${renderStageGuide(session.stage)}`;
+    return `f-pb-fixed-online-code: ${tool} is not allowed in the ${session.stage} stage.\n\n${renderStageGuide(session.stage)}`;
   }
   if (tool === "apply_patch" && typeof args.patchText === "string" && /^\*\*\* (?:Delete File|Move to):/m.test(args.patchText)) {
-    return "pb-online-code: apply_patch may not delete or move files; existing code must be preserved.";
+    return "f-pb-fixed-online-code: apply_patch may not delete or move files; existing code must be preserved.";
   }
   if (session.stage === "execute" && WRITES.includes(tool)) {
     const unplanned = targetsOf(tool, args).map((f) => toRelative(session.cwd, f)).filter((f) => !inPlan(session, f));
     if (unplanned.length > 0) {
-      return `pb-online-code: ${unplanned.join(", ")} is not in the approved plan. Write only the planned files: ${(session.inputs?.files ?? []).join(", ")}. If another file is really needed, say so in the report.`;
+      return `f-pb-fixed-online-code: ${unplanned.join(", ")} is not in the approved plan. Write only the planned files: ${(session.inputs?.files ?? []).join(", ")}. If another file is really needed, say so in the report.`;
     }
   }
   if (tool === "bash" && session.stage === "execute") session.bashBefore = snapshotFiles(session.cwd);
@@ -457,7 +457,7 @@ function writeReport(session: PbSession, summary: string): string {
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, "report.md");
   const body = [
-    "# pb-online-code 리포트",
+    "# f-pb-fixed-online-code 리포트",
     "",
     `- 요청: ${session.request}`,
     `- 프로그램: ${session.inputs?.group_name}/${session.inputs?.program_id}`,
@@ -552,10 +552,10 @@ export function completeStage(sessionId: string, input: StageInput): string {
 export const COMMAND_DESCRIPTION = "FICO PB 고정길이 온라인 코드(Controller/Service/In·Out VO) 스켈레톤 생성";
 
 export const STAGE_TOOL_DESCRIPTION =
-  "Finish the current stage of the /pb-online-code workflow (plan, execute, verify, report, cleanup) and get the next stage's guide. Only callable meaningfully while that workflow is active.";
+  "Finish the current stage of the /f-pb-fixed-online-code workflow (plan, execute, verify, report, cleanup) and get the next stage's guide. Only callable meaningfully while that workflow is active.";
 
 export const KB_TOOL_DESCRIPTION =
-  "Search the in-house framework knowledge base (md pages outside git) for a class, annotation or utility during the /pb-online-code execute and verify stages. Returns the best pages in full and lists the rest by path.";
+  "Search the in-house framework knowledge base (md pages outside git) for a class, annotation or utility during the /f-pb-fixed-online-code execute and verify stages. Returns the best pages in full and lists the rest by path.";
 
 export const COMMAND_TEMPLATE =`Generate FICO PB fixed-text online code (Controller, Service, Input/Output VO) by following the stages below. The plugin enforces them: tools outside the current stage are rejected, and every ${STAGE_TOOL} result tells you the next stage.
 

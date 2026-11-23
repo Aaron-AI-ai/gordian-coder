@@ -20,7 +20,7 @@ describe("pb-online module", () => {
     const cfg = {} as Config;
     await mod().config!(cfg);
     const cmd = cfg.command![COMMAND_NAME]!;
-    expect(cmd.template).toContain("pb-fixed-online-code");
+    expect(cmd.template).toContain("f-pb-fixed-online-code");
     expect(cmd.template).toContain(STAGE_TOOL);
     expect(cmd.template).toContain("$ARGUMENTS");
     expect(cmd.template).not.toContain("public class {ServiceId}Controller");
@@ -144,6 +144,6 @@ describe("pb-online KB search", () => {
   });
 
   test("is inert outside the workflow", async () => {
-    expect(await modIn(dir).tools[KB_TOOL]!.execute({ query: "x" }, ctx)).toContain("No /pb-online-code");
+    expect(await modIn(dir).tools[KB_TOOL]!.execute({ query: "x" }, ctx)).toContain("No /f-pb-fixed-online-code");
   });
 });

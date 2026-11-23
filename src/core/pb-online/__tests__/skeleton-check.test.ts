@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { checkSkeleton } from "../skeleton-check";
 
-const TEMPLATES = path.resolve(import.meta.dir, "../../../../assets/fico-ai/skills/pb-fixed-online-code/templates");
+const TEMPLATES = path.resolve(import.meta.dir, "../../../../assets/fico-ai/skills/f-pb-fixed-online-code/templates");
 const VALUES: Record<string, string> = {
   PackagePath: "x.online.qry", CurrentDate: "2026.11.10", AuthorName: "FICO AI", ServiceId: "AIAC0007", serviceId: "aiac0007",
   ServiceKoreanName: "계좌", ServiceDescription: "설명", ChangeDescription: "신규", Collection: "ac", DependencyType: "Foo",

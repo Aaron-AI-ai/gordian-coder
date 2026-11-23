@@ -134,7 +134,7 @@ describe("with both workflows registered", () => {
     expect(pbGet(SID)).toBeUndefined();
     expect(getSession("pb-ses")).toBeUndefined();
     expect(gate("write", SID)).toThrow(/f-unit-test-code/);
-    expect(gate("write", "pb-ses")).toThrow(/pb-online/);
+    expect(gate("write", "pb-ses")).toThrow(/f-pb-fixed-online-code/);
     expect(gate("read", "unrelated")).not.toThrow();
     pbEnd("pb-ses");
   });

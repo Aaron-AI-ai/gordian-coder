@@ -82,7 +82,7 @@ describe("stage graph", () => {
     expect(guide).toContain("plan");
     expect(guide).toContain("read_mcp_resource");
     expect(guide).toContain("write");
-    expect(guide).toContain("pb-fixed-online-code");
+    expect(guide).toContain("f-pb-fixed-online-code");
   });
 
   test("a stale stage is rejected and the session does not move", () => {
@@ -225,7 +225,7 @@ describe("bash changes in execute", () => {
     const out = done({ stage: "verify", result: "pass", note: "ok" });
     expect(out).toContain("Stray.java");
     done({ stage: "report", note: "s" });
-    const root = path.join(cwd, ".fico", "report", "pb-online");
+    const root = path.join(cwd, ".fico", "report", "f-pb-fixed-online-code");
     const report = fs.readFileSync(path.join(root, fs.readdirSync(root)[0]!, "report.md"), "utf-8");
     expect(report).toContain("계획 외 변경");
     expect(report).toContain("Stray.java");
@@ -434,7 +434,7 @@ describe("execute and verify", () => {
 });
 
 describe("target controller matching", () => {
-  const TPL = path.resolve(import.meta.dir, "../../../../assets/fico-ai/skills/pb-fixed-online-code/templates/ControllerTemplate.java");
+  const TPL = path.resolve(import.meta.dir, "../../../../assets/fico-ai/skills/f-pb-fixed-online-code/templates/ControllerTemplate.java");
   const FILE = "a-online/src/main/java/x/online/qry/controller/AcController.java";
 
   test.each(["AcController", "AcController.java", "qry/controller/AcController.java"])(
@@ -456,7 +456,7 @@ describe("target controller matching", () => {
 });
 
 describe("structural check at the verify gate", () => {
-  const TEMPLATES = path.resolve(import.meta.dir, "../../../../assets/fico-ai/skills/pb-fixed-online-code/templates");
+  const TEMPLATES = path.resolve(import.meta.dir, "../../../../assets/fico-ai/skills/f-pb-fixed-online-code/templates");
   const VO_FILE = "a-online/src/main/java/x/online/qry/model/vo/AIAC0007In.java";
   const voSource = (): string =>
     fs
@@ -502,7 +502,7 @@ describe("structural check at the verify gate", () => {
     done({ stage: "execute" });
     expect(done({ stage: "verify", result: "pass", note: "ok" })).toContain("could not parse");
     done({ stage: "report", note: "summary" });
-    const root = path.join(cwd, ".fico", "report", "pb-online");
+    const root = path.join(cwd, ".fico", "report", "f-pb-fixed-online-code");
     const report = fs.readFileSync(path.join(root, fs.readdirSync(root)[0]!, "report.md"), "utf-8");
     expect(report).toContain("구조 검사 불가");
     expect(report).toContain(file);
@@ -510,13 +510,13 @@ describe("structural check at the verify gate", () => {
 });
 
 describe("report and cleanup", () => {
-  test("report is written under .fico/report/pb-online and cleanup ends the session", () => {
+  test("report is written under .fico/report/f-pb-fixed-online-code and cleanup ends the session", () => {
     reachVerify();
     done({ stage: "verify", result: "pass", note: "rule findings" });
     expect(done({ stage: "report" })).toContain("note");
 
     const out = done({ stage: "report", note: "made one controller" });
-    const root = path.join(cwd, ".fico", "report", "pb-online");
+    const root = path.join(cwd, ".fico", "report", "f-pb-fixed-online-code");
     const [dir] = fs.readdirSync(root);
     expect(dir).toStartWith("report-");
     const report = fs.readFileSync(path.join(root, dir!, "report.md"), "utf-8");

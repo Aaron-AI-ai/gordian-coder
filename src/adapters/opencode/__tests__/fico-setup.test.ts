@@ -113,6 +113,13 @@ describe("skill install", () => {
     expect(fs.existsSync(path.join(skills, SKILL_NAME, "stale.md"))).toBe(false);
   });
 
+  test("a reinstall removes the skill under its old name", () => {
+    write(path.join(skills, "pb-fixed-online-code", "SKILL.md"), "old");
+    installSkill(assets, skills);
+    expect(fs.existsSync(path.join(skills, "pb-fixed-online-code"))).toBe(false);
+    expect(fs.existsSync(path.join(skills, SKILL_NAME, "SKILL.md"))).toBe(true);
+  });
+
   test("skillDrift lists every skill's missing files", () => {
     const drift = skillDrift(assets, skills);
     expect(drift).toContain(`${SKILL_NAME}/SKILL.md`);

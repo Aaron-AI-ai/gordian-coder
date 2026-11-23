@@ -12,7 +12,7 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { isGordianEntry, OpencodeInitError, readConfig } from "./init";
-import { MCP_SERVER, SKILL_NAME, SKILL_NAMES } from "../../core/pb-online/names";
+import { MCP_SERVER, RETIRED_SKILL_NAMES, SKILL_NAME, SKILL_NAMES } from "../../core/pb-online/names";
 
 // ponytail: only the skills listed in SKILL_NAMES are shipped; other vendored skills join when their workflows move.
 // Each environment points elsewhere with FICO_API_BASE_URL or --fico-api-url.
@@ -93,6 +93,7 @@ export function skillDrift(assets: string, skillsDir: string): string[] {
  * them into every OpenCode session including f-review and f-log.
  */
 export function installSkill(assets: string, skillsDir: string): string {
+  for (const old of RETIRED_SKILL_NAMES) fs.rmSync(path.join(skillsDir, old), { recursive: true, force: true });
   for (const skill of SKILL_NAMES) {
     if (!fs.existsSync(shippedSkillDir(assets, skill))) continue;
     const target = path.join(skillsDir, skill);

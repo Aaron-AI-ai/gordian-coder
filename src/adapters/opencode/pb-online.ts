@@ -1,5 +1,5 @@
 /**
- * /pb-online-code wiring for the OpenCode plugin. Every hook is a no-op unless
+ * /f-pb-fixed-online-code wiring for the OpenCode plugin. Every hook is a no-op unless
  * the session started this workflow, so f-review and f-log never see it.
  */
 
