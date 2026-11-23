@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { buildReviewEvidence, reviewEvidence } from "../dossier";
+import { reviewEvidence } from "../dossier";
 
 const tmps: string[] = [];
 
@@ -47,9 +47,9 @@ afterEach(() => {
   while (tmps.length) rmSync(tmps.pop()!, { recursive: true, force: true });
 });
 
-describe("buildReviewEvidence", () => {
+describe("reviewEvidence text", () => {
   it("combines related-code and history evidence in an automatically injected dossier", () => {
-    const out = buildReviewEvidence(repo(), "HEAD", "src/user-service.ts");
+    const out = reviewEvidence(repo(), "HEAD", "src/user-service.ts").text;
     expect(out).toContain("Related code");
     expect(out).toContain("Git history");
     expect(out).toContain("src/controller.ts");
@@ -57,7 +57,7 @@ describe("buildReviewEvidence", () => {
   });
 
   it("surfaces related files as a path list + grep recipe, not inlined previews", () => {
-    const out = buildReviewEvidence(repo(), "HEAD", "src/user-service.ts");
+    const out = reviewEvidence(repo(), "HEAD", "src/user-service.ts").text;
     expect(out).toContain("src/repository.ts"); // ranked path candidate present
     expect(out).toContain("code_search(<symbol>)"); // recipe telling the model to grep
     expect(out).not.toContain("Related code preview"); // no first-lines preview auto-injected
@@ -77,7 +77,7 @@ describe("buildReviewEvidence", () => {
     git(["add", "-A"]);
     git(["commit", "-qm", "add java service"]);
 
-    const out = buildReviewEvidence(cwd, "HEAD", "src/Svc.java");
+    const out = reviewEvidence(cwd, "HEAD", "src/Svc.java").text;
     expect(out).toContain("Unresolved imports (not confirmed external)");
     expect(out).toContain("PBOnlineException");
     expect(out).toContain("one targeted code_search(<symbol>) or file_find lookup");
@@ -85,7 +85,7 @@ describe("buildReviewEvidence", () => {
     expect(out).not.toContain("they are external");
     expect(out).not.toContain("java.util.List");
     // A file whose imports all resolve gets no unresolved section at all.
-    expect(buildReviewEvidence(cwd, "HEAD", "src/controller.ts")).not.toContain("Unresolved imports");
+    expect(reviewEvidence(cwd, "HEAD", "src/controller.ts").text).not.toContain("Unresolved imports");
   });
 });
 

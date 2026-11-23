@@ -121,12 +121,9 @@ function kbSection(docs: KbDoc[]): { rendered: string[]; kept: KbDoc[] } {
  * function the code under review actually calls. Instead the model is told to
  * grep those project files for the specific symbols it uses — a targeted
  * code_search lands the real definition, and it naturally scopes to whatever
- * segment/diff is being reviewed. */
-export function buildReviewEvidence(cwd: string, ref: string | null, file: string): string {
-  return reviewEvidence(cwd, ref, file).text;
-}
-
-/** What the evidence build actually opened. Sources and docs are the two
+ * segment/diff is being reviewed.
+ *
+ * What the evidence build actually opened. Sources and docs are the two
  * things a reviewer would otherwise have had to fetch by hand; the structured
  * lists let tests verify injection without parsing `text`. */
 export interface ReviewEvidence {

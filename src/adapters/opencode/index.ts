@@ -18,76 +18,6 @@ import {
   beforeReviewToolCall,
   afterReviewToolCall,
 } from "./repeat-guard";
-import {
-  getAllTools,
-  processMessage,
-  handleEvent,
-  beforeToolExecute,
-  afterToolExecute,
-  type GordianContext,
-  type Message,
-  type ToolDefinition as CoreToolDefinition,
-} from "../../core";
-
-const z = tool.schema;
-
-/**
- * Convert core tool to OpenCode tool format
- */
-function convertTool(coreTool: CoreToolDefinition) {
-  // Build zod schema from core parameters
-  const zodShape: Record<string, unknown> = {};
-
-  for (const [key, param] of Object.entries(coreTool.parameters)) {
-    switch (param.type) {
-      case "string":
-        zodShape[key] = param.required
-          ? z.string().describe(param.description)
-          : z.string().optional().describe(param.description);
-        break;
-      case "number":
-        zodShape[key] = param.required
-          ? z.number().describe(param.description)
-          : z.number().optional().describe(param.description);
-        break;
-      case "boolean":
-        zodShape[key] = param.required
-          ? z.boolean().describe(param.description)
-          : z.boolean().optional().describe(param.description);
-        break;
-      default:
-        zodShape[key] = param.required
-          ? z.string().describe(param.description)
-          : z.string().optional().describe(param.description);
-    }
-  }
-
-  return tool({
-    description: coreTool.description,
-    args: zodShape as Parameters<typeof tool>[0]["args"],
-    execute: async (args, _ctx) => {
-      const result = await coreTool.execute(args as Record<string, unknown>);
-      if (result.success) {
-        return JSON.stringify(result.data);
-      }
-      return result.error || "Error executing tool";
-    },
-  });
-}
-
-/**
- * Convert all core tools to OpenCode tool format
- */
-function createOpenCodeTools() {
-  const tools: Record<string, ReturnType<typeof tool>> = {};
-
-  for (const coreTool of getAllTools()) {
-    tools[coreTool.name] = convertTool(coreTool);
-  }
-
-  return tools;
-}
-
 /**
  * OpenCode Plugin implementation
  */
@@ -95,12 +25,6 @@ const OpenCodeAdapter: Plugin = async (input) => {
   // Printed to the OpenCode server log on load — lets you verify which build is
   // actually deployed (the plugin path points at a local dist bundle).
   console.error(`[gordian-coder] opencode plugin v${VERSION} loaded`);
-
-  const context: GordianContext = {
-    sessionId: undefined,
-    workingDirectory: input.directory,
-    config: {},
-  };
 
   // Feature modules come from the registry (modules.ts) — register new
   // modules there; this file stays untouched.
@@ -137,8 +61,7 @@ const OpenCodeAdapter: Plugin = async (input) => {
   return {
     ...commandHooks,
 
-    // Register tools from core + feature-module tools
-    tool: { ...createOpenCodeTools(), ...moduleTools },
+    tool: moduleTools,
 
     // Let modules inject bundled agents/commands into the OpenCode config
     config: async (cfg) => {
@@ -156,15 +79,6 @@ const OpenCodeAdapter: Plugin = async (input) => {
 
     // Event handler
     event: async (hookInput) => {
-      const { event } = hookInput;
-      await handleEvent(
-        {
-          type: event.type as "session.created" | "session.ended",
-          timestamp: Date.now(),
-          data: event as unknown as Record<string, unknown>,
-        },
-        context
-      );
       // Let feature modules react to raw events (e.g. review's idle watchdog).
       for (const ev of moduleEvents) await ev(hookInput);
     },
@@ -179,11 +93,6 @@ const OpenCodeAdapter: Plugin = async (input) => {
         throw new Error(budget.message);
       }
       for (const gate of moduleToolGates) gate(hookInput.tool, sessionID, output.args as Record<string, unknown>);
-      await beforeToolExecute(
-        hookInput.tool,
-        output.args as Record<string, unknown>,
-        { ...context, sessionId: hookInput.sessionID }
-      );
     },
 
     // Hook: after tool execution
@@ -193,11 +102,6 @@ const OpenCodeAdapter: Plugin = async (input) => {
         const args = (hookInput as { args?: Record<string, unknown> }).args ?? {};
         h(hookInput.tool, hookInput.sessionID ?? "", (hookOutput.metadata ?? {}) as Record<string, unknown>, hookOutput.output, args);
       }
-      await afterToolExecute(
-        hookInput.tool,
-        hookOutput,
-        { ...context, sessionId: hookInput.sessionID }
-      );
       // Native read-only explorers (glob/grep/read/lsp/…) bypass the f-review tool
       // wrappers — when a review is active, count them against the same
       // exploration budget / duplicate guards the f-review tools use.
@@ -234,39 +138,6 @@ const OpenCodeAdapter: Plugin = async (input) => {
         hookOutput.output = `${hookOutput.output}\n⚠️ ${budget.message}`;
       }
       if (budget.abort) await abortSession(hookInput.sessionID ?? "");
-    },
-
-    // Hook: modify LLM call parameters (temperature, topP, topK, options)
-    // — placeholder, no-op for now. Mutate `output` fields to override.
-    "chat.params": async (_hookInput, _output) => {},
-
-    // Hook: before session compaction — placeholder, no-op for now.
-    // Push to output.context to add compaction hints, or set output.prompt
-    // to replace the compaction prompt (e.g. preserve review state).
-    "experimental.session.compacting": async (_hookInput, _output) => {},
-
-    // Hook: after a text part completes — placeholder, no-op for now.
-    // Use to inspect/post-process completed assistant text.
-    "experimental.text.complete": async (_hookInput, _output) => {},
-
-    // Hook: chat message interceptor
-    "chat.message": async (hookInput, output) => {
-      const messageText =
-        output.parts
-          ?.filter((p) => p.type === "text" && "text" in p)
-          .map((p) => ("text" in p ? p.text : ""))
-          .join("\n")
-          .trim() || "";
-
-      const message: Message = {
-        role: "user",
-        content: messageText,
-      };
-
-      await processMessage(message, {
-        ...context,
-        sessionId: hookInput.sessionID,
-      });
     },
   };
 };

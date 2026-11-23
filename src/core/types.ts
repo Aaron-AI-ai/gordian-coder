@@ -22,30 +22,3 @@ export interface ToolResult {
   data?: unknown;
   error?: string;
 }
-
-// Message handling interface
-export interface Message {
-  role: "user" | "assistant" | "system";
-  content: string;
-  metadata?: Record<string, unknown>;
-}
-
-// Event types
-export type EventType =
-  | "session.created"
-  | "session.ended"
-  | "message.received"
-  | "tool.executed";
-
-export interface GordianEvent {
-  type: EventType;
-  timestamp: number;
-  data?: Record<string, unknown>;
-}
-
-// Plugin context interface (platform-agnostic)
-export interface GordianContext {
-  sessionId?: string;
-  workingDirectory?: string;
-  config?: Record<string, unknown>;
-}

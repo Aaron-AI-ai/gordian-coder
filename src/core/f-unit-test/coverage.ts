@@ -144,11 +144,6 @@ export function readFailedDetails(resultsDir: string): FailedTest[] {
   return failed
 }
 
-/** `<failure`/`<error`가 있는 testcase를 "Class.method"로. */
-export function readFailedTests(resultsDir: string): string[] {
-  return readFailedDetails(resultsDir).map((d) => d.id)
-}
-
 export function isFullyCovered(c: FileCoverage | null): boolean {
   return c !== null && c.line.missed === 0 && c.branch.missed === 0
 }

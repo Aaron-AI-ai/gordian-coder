@@ -17,7 +17,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 1/3 Bun 설치        → %USERPROFILE%\.bun\bin\bun.exe   (약 108MB 압축 해제)
 2/3 빌드 산출물 배치 → %USERPROFILE%\gordian-coder\dist\
-3/3 글로벌 링크      → bun link (gdc, gordian-coder-cli)
+3/3 글로벌 링크      → bun link (gdc)
 ```
 
 **설치 후 새 터미널을 열어야** PATH가 적용됩니다.
@@ -63,8 +63,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 └── .bun\
     ├── bin\
     │   ├── bun.exe
-    │   ├── gdc                    ← Cline 훅 어댑터 / opencode 연동 CLI
-    │   └── gordian-coder-cli
+    │   └── gdc                    ← Cline 훅 어댑터 / opencode 연동 CLI
     └── install\global\node_modules\gordian-coder → ①로 연결
 ```
 
@@ -216,5 +215,5 @@ gdc kb-sync                       git wiki → KB 동기화 (사용법: 03-f-rev
 | 대상 | 경로 |
 |---|---|
 | 본체 | `%USERPROFILE%\gordian-coder\dist\` |
-| 실행 명령 | `%USERPROFILE%\.bun\bin\{gdc, gordian-coder-cli}` |
+| 실행 명령 | `%USERPROFILE%\.bun\bin\gdc` |
 | 글로벌 링크 | `%USERPROFILE%\.bun\install\global\node_modules\gordian-coder` |

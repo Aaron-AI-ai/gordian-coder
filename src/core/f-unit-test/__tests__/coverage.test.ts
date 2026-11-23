@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { isFullyCovered, readCoverage, readFailedDetails, readFailedTests, readTargetCoverage, readTestRun } from "../coverage"
+import { isFullyCovered, readCoverage, readFailedDetails, readTargetCoverage, readTestRun } from "../coverage"
 
 const XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <!DOCTYPE report PUBLIC "-//JACOCO//DTD Report 1.1//EN" "report.dtd">
@@ -70,15 +70,15 @@ describe("readCoverage", () => {
   })
 })
 
-describe("readFailedTests", () => {
+describe("readFailedDetails ids", () => {
   test("returns failure and error testcases only", () => {
     const d = mkdtempSync(join(tmpdir(), "cov-"))
     writeFileSync(join(d, "TEST-a.xml"), `<testsuite><testcase name="f" classname="p.A" time="0"><failure message="x">t</failure></testcase><testcase name="ok" classname="p.A"/></testsuite>`)
     writeFileSync(join(d, "TEST-b.xml"), `<testsuite><testcase classname="p.B" name="e"><error type="X"/></testcase></testsuite>`)
-    expect(readFailedTests(d).sort()).toEqual(["p.A.f", "p.B.e"])
+    expect(readFailedDetails(d).map((x) => x.id).sort()).toEqual(["p.A.f", "p.B.e"])
   })
   test("missing dir gives []", () => {
-    expect(readFailedTests("/nonexistent-dir-xyz")).toEqual([])
+    expect(readFailedDetails("/nonexistent-dir-xyz")).toEqual([])
   })
 })
 
@@ -115,9 +115,6 @@ describe("readFailedDetails", () => {
     expect(b!.message).toBe("NPE & more")
     expect(b!.frame).toBe("ShippingFeeService.java:21")
     expect(c).toMatchObject({ id: "p.X.bare", message: "x", frame: "", type: "" })
-  })
-  test("readFailedTests stays the id list of the same testcases", () => {
-    expect(readFailedTests(dir())).toEqual(["p.ShippingFeeServiceTest.fee_normal1", "p.ShippingFeeServiceTest.boom", "p.X.bare"])
   })
 })
 

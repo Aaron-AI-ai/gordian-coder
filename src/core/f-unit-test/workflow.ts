@@ -13,7 +13,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { localFileStamp } from "../time";
 import { UNIT_TEST_SKILL_NAME } from "../pb-online/names";
-import { MAX_WAIT_CALLS, awaitingReply, noteReply, takeAbort, type PlanGateState } from "../plan-gate";
+import { MAX_WAIT_CALLS, awaitingReply, noteReply, takeAbort, type PlanGateState, SessionStore } from "../plan-gate";
 import { isFullyCovered, readCoverage, readFailedDetails, readTestRun, type FailedTest, type TestRun, type FileCoverage } from "./coverage";
 import { checkTestSource, testMethodBodies, testMethodNames } from "./test-check";
 import { writeReport } from "./report";
@@ -187,12 +187,10 @@ export const STAGES: Record<StageId, Stage> = {
   },
 };
 
-const sessions = new Map<string, FutSession>();
+const sessions = new SessionStore<FutSession>(MAX_SESSIONS);
 
 export function startSession(sessionId: string, request: string, cwd: string): FutSession {
-  sessions.delete(sessionId);
-  if (sessions.size >= MAX_SESSIONS) sessions.delete(sessions.keys().next().value!);
-  const session: FutSession = {
+  return sessions.start(sessionId, {
     stage: "plan",
     request,
     startedAt: Date.now(),
@@ -214,9 +212,7 @@ export function startSession(sessionId: string, request: string, cwd: string): F
     testRun: { total: 0, passed: 0, failed: 0, errored: 0, skipped: 0, seconds: 0, tests: [] },
     mapperChecks: [],
     lastProblems: [],
-  };
-  sessions.set(sessionId, session);
-  return session;
+  });
 }
 
 export function getSession(sessionId: string): FutSession | undefined {

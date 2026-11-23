@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { localFileStamp } from "../../time";
 import {
-  newRunId, runDir, runExists, writeRunText, writeRunJson, readRunText, readRunJson,
+  newRunId, runDir, writeRunText, writeRunJson, readRunText, readRunJson,
   loadJudgments, saveJudgments, submissionCount, mergeCallLog,
 } from "../run-store";
 import { newLogSession, setLogState, getLogState, clearLogState } from "../state";
@@ -18,14 +18,14 @@ describe("run-store", () => {
     // Local-clock stamp (what a person reads), plus 4 hex.
     expect(id).toMatch(new RegExp(`^${localFileStamp(when)}-[0-9a-f]{4}$`));
     expect(runDir(id, cwd)).toBe(join(cwd, ".fico/f-log/runs/", id));
-    expect(runExists(id, cwd)).toBe(false);
+    expect(existsSync(runDir(id, cwd))).toBe(false);
   });
 
   test("text and json round-trip, missing → null", () => {
     const id = newRunId();
     writeRunText(id, cwd, "input.log", "boom");
     writeRunJson(id, cwd, "plan.json", { a: 1 });
-    expect(runExists(id, cwd)).toBe(true);
+    expect(existsSync(runDir(id, cwd))).toBe(true);
     expect(readRunText(id, cwd, "input.log")).toBe("boom");
     expect(readRunJson<{ a: number }>(id, cwd, "plan.json")).toEqual({ a: 1 });
     expect(readRunJson(id, cwd, "nope.json")).toBeNull();

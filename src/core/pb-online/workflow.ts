@@ -15,7 +15,7 @@ import * as path from "node:path";
 import { localFileStamp } from "../time";
 import { checkSkeleton } from "./skeleton-check";
 import { MCP_SERVER, SKILL_NAME } from "./names";
-import { MAX_WAIT_CALLS, awaitingReply, noteReply, takeAbort } from "../plan-gate";
+import { MAX_WAIT_CALLS, SessionStore, awaitingReply, noteReply, takeAbort } from "../plan-gate";
 
 export { MCP_SERVER, SKILL_NAME };
 
@@ -169,12 +169,10 @@ export interface StageInput {
   result?: "pass" | "fail";
 }
 
-const sessions = new Map<string, PbSession>();
+const sessions = new SessionStore<PbSession>(MAX_SESSIONS);
 
 export function startSession(sessionId: string, request: string, cwd: string): PbSession {
-  sessions.delete(sessionId);
-  if (sessions.size >= MAX_SESSIONS) sessions.delete(sessions.keys().next().value!);
-  const session: PbSession = {
+  return sessions.start(sessionId, {
     stage: "plan",
     request,
     cwd,
@@ -187,9 +185,7 @@ export function startSession(sessionId: string, request: string, cwd: string): P
     rework: 0,
     awaitingCalls: 0,
     verification: "pending",
-  };
-  sessions.set(sessionId, session);
-  return session;
+  });
 }
 
 export function getSession(sessionId: string): PbSession | undefined {

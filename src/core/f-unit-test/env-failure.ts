@@ -27,7 +27,3 @@ export function environmentFailureLine(log: string): string | null {
   if (lines.some((l) => JAVAC_ERROR.test(l))) return null;
   return lines.find((l) => ENV_FAILURE.test(l))?.trim() ?? null;
 }
-
-export function isEnvironmentFailure(log: string): boolean {
-  return environmentFailureLine(log) !== null;
-}

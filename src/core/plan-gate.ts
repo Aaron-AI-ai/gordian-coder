@@ -34,3 +34,16 @@ export function takeAbort(s: PlanGateState): boolean {
   s.awaitingCalls = 0;
   return true;
 }
+
+/** Per-session workflow state, bounded: past `max` the oldest session is dropped; restarting a session replaces it. */
+export class SessionStore<S> extends Map<string, S> {
+  constructor(private readonly max: number) {
+    super();
+  }
+  start(sessionId: string, session: S): S {
+    this.delete(sessionId);
+    if (this.size >= this.max) this.delete(this.keys().next().value!);
+    this.set(sessionId, session);
+    return session;
+  }
+}

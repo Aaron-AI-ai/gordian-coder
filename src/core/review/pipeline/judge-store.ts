@@ -136,7 +136,6 @@ export const InvalidJudgeSubmissionSchema = z.object({
   at: z.string(),
 });
 
-export type InvalidJudgeSubmission = z.infer<typeof InvalidJudgeSubmissionSchema>;
 
 export const JudgeTerminalSchema = z.object({
   status: z.literal("judge-incomplete"),

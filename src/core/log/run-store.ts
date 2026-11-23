@@ -3,7 +3,7 @@
  * subagents in their own sessions, so everything they share lives here, never
  * in process memory. Files are written whole and never rotated (spec §12).
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { localFileStamp } from "../time";
 import { loadLogConfig } from "./config";
@@ -42,10 +42,6 @@ export function newRunId(now: Date = new Date()): string {
 
 export function runDir(runId: string, cwd: string): string {
   return join(cwd, loadLogConfig(cwd).runsDir, runId);
-}
-
-export function runExists(runId: string, cwd: string): boolean {
-  return existsSync(join(runDir(runId, cwd), "run.json")) || existsSync(runDir(runId, cwd));
 }
 
 export function writeRunText(runId: string, cwd: string, name: string, text: string): void {

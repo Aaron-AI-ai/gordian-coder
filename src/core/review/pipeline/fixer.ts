@@ -23,7 +23,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { capped } from "../contract";
 import { loadRun, reviewSlug, runDir } from "./artifact";
-import { FCQ_SEVERITIES, readFcqFile, type FcqFileViolation } from "../evidence/fcq";
+import { readFcqFile, type FcqFileViolation } from "../evidence/fcq";
 import { planJudgeParts } from "./judge-parts";
 import { fileLineCount, fileRead } from "../tools/read";
 
@@ -85,7 +85,6 @@ export const FixSubmitSchema = z.object({
   part: z.number().int().nonnegative().optional(),
   fixes: z.array(FixSchema).transform((a) => a.slice(0, FIX_MAX_ITEMS)),
 });
-export type FixSubmitPayload = z.infer<typeof FixSubmitSchema>;
 
 export const FileFixesSchema = z.object({
   file: z.string(),
@@ -559,7 +558,3 @@ export function fixCoverage(
     };
   });
 }
-
-/** Severities the fix pass is expected to cover — every one fcq reports. */
-export const FIX_SEVERITIES = FCQ_SEVERITIES;
-export type { FcqFileViolation };

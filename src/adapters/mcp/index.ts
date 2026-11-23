@@ -7,11 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import {
-  getAllTools,
-  type ToolDefinition,
-  type ParameterDefinition,
-} from "../../core";
+import type { ToolDefinition, ParameterDefinition } from "../../core/types";
 import { createReviewTools } from "./review";
 import { VERSION } from "../../version";
 
@@ -81,8 +77,7 @@ export function createMcpServer(): McpServer {
     version: VERSION,
   });
 
-  // Register all core tools + the review tools as MCP tools
-  for (const coreTool of [...getAllTools(), ...createReviewTools()]) {
+  for (const coreTool of createReviewTools()) {
     const shape = toolToMcpShape(coreTool);
     const toolName = coreTool.name;
 

@@ -3,7 +3,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { resolveAssetsDir } from "../../../adapters/opencode/fico-setup";
 import { UNIT_TEST_SKILL_NAME } from "../../pb-online/names";
-import { ENV_FAILURE_PATTERN, JAVAC_ERROR_PATTERN, MAIN_JAVAC_ERROR_PATTERN, environmentFailureLine, isEnvironmentFailure } from "../env-failure";
+import { ENV_FAILURE_PATTERN, JAVAC_ERROR_PATTERN, MAIN_JAVAC_ERROR_PATTERN, environmentFailureLine } from "../env-failure";
+
+const isEnvironmentFailure = (log: string): boolean => environmentFailureLine(log) !== null;
 
 const NEXUS_429 =
   "> Could not HEAD 'http://nexus/x/maven-metadata.xml'. Received status code 429 from server: Too many authentication attempts";

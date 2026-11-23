@@ -3,72 +3,30 @@
  * the session started this workflow, so f-review and f-log never see it.
  */
 
-import type { PluginInput, Hooks } from "@opencode-ai/plugin";
+import type { PluginInput } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
+import * as wf from "../../core/pb-online/workflow";
 import {
-  COMMAND_DESCRIPTION,
   COMMAND_NAME,
-  COMMAND_TEMPLATE,
   KB_TOOL,
   KB_TOOL_DESCRIPTION,
   STAGE_TOOL,
   STAGE_TOOL_DESCRIPTION,
   completeStage,
-  gateTool,
   getSession,
   noteToolResult,
-  noteUserMessage,
-  renderStageGuide,
-  startSession,
-  takeAbortRequest,
   type StageInput,
 } from "../../core/pb-online/workflow";
 import { kbSearch } from "../../core/kb/framework-kb";
-import type { CommandBeforeHook, OpenCodeModule, ToolGate, ToolResultHook } from "./modules";
+import type { OpenCodeModule, ToolResultHook } from "./modules";
+import { workflowHooks } from "./workflow-module";
 
 const z = tool.schema;
 
 export function createPbOnlineModule(input: PluginInput): OpenCodeModule {
-  // `??=` keeps a project/global md command of the same name authoritative.
-  const config: NonNullable<Hooks["config"]> = async (cfg) => {
-    (cfg.command ??= {})[COMMAND_NAME] ??= {
-      description: COMMAND_DESCRIPTION,
-      template: COMMAND_TEMPLATE,
-    };
-  };
-
-  const commandBefore: CommandBeforeHook = async ({ command, sessionID, arguments: raw }) => {
-    if (command === COMMAND_NAME) startSession(sessionID, raw, input.directory);
-  };
-
-  // A model that ignores "END YOUR TURN" loops until its step limit; abort the turn instead.
-  const stopIfLooping = (sessionID: string): void => {
-    if (!takeAbortRequest(sessionID)) return;
-    void input.client?.session.abort({ path: { id: sessionID } }).catch((err: unknown) => {
-      console.error(`[gordian-coder] pb-online abort(${sessionID}) failed: ${err instanceof Error ? err.message : String(err)}`);
-    });
-  };
-
-  const toolBefore: ToolGate = (toolName, sessionID, args) => {
-    const rejection = gateTool(sessionID, toolName, args);
-    if (!rejection) return;
-    stopIfLooping(sessionID);
-    throw new Error(rejection);
-  };
-
+  const { stopIfLooping, ...hooks } = workflowHooks(input, wf, { keepOnOtherCommand: true });
   const toolAfter: ToolResultHook = (toolName, sessionID, metadata, output, args) =>
     noteToolResult(sessionID, toolName, metadata, output, args);
-
-  const systemTransform: NonNullable<Hooks["experimental.chat.system.transform"]> = async (hookInput, output) => {
-    const session = getSession(hookInput.sessionID);
-    if (session) output.system.push(renderStageGuide(session.stage));
-  };
-
-  const event: NonNullable<Hooks["event"]> = async ({ event }) => {
-    if (event.type !== "message.updated" || event.properties.info.role !== "user") return;
-    const { sessionID, time } = event.properties.info;
-    noteUserMessage(sessionID, time.created);
-  };
 
   return {
     tools: {
@@ -106,11 +64,7 @@ export function createPbOnlineModule(input: PluginInput): OpenCodeModule {
         },
       }),
     },
-    config,
-    commandBefore,
-    toolBefore,
+    ...hooks,
     toolAfter,
-    systemTransform,
-    event,
   };
 }

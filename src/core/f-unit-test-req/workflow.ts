@@ -14,7 +14,7 @@ import * as path from "node:path";
 import { localFileStamp } from "../time";
 import { MCP_SERVER, UNIT_TEST_REQ_SKILL_NAME } from "../pb-online/names";
 import { isFailedResource, normalizeUri } from "../pb-online/workflow";
-import { MAX_WAIT_CALLS, awaitingReply, noteReply, takeAbort, type PlanGateState } from "../plan-gate";
+import { MAX_WAIT_CALLS, awaitingReply, noteReply, takeAbort, type PlanGateState, SessionStore } from "../plan-gate";
 import { foreignScriptProblem } from "../report-language";
 import { checkTestSource, testMethodBodies, testMethodNames } from "../f-unit-test/test-check";
 import { environmentFailureLine } from "../f-unit-test/env-failure";
@@ -157,12 +157,10 @@ export const STAGES: Record<StageId, Stage> = {
   },
 };
 
-const sessions = new Map<string, ReqSession>();
+const sessions = new SessionStore<ReqSession>(MAX_SESSIONS);
 
 export function startSession(sessionId: string, request: string, cwd: string): ReqSession {
-  sessions.delete(sessionId);
-  if (sessions.size >= MAX_SESSIONS) sessions.delete(sessions.keys().next().value!);
-  const session: ReqSession = {
+  return sessions.start(sessionId, {
     stage: "plan",
     request,
     cwd,
@@ -175,9 +173,7 @@ export function startSession(sessionId: string, request: string, cwd: string): R
     awaitingCalls: 0,
     fixRetries: 0,
     fetched: new Set(),
-  };
-  sessions.set(sessionId, session);
-  return session;
+  });
 }
 
 export const getSession = (sessionId: string): ReqSession | undefined => sessions.get(sessionId);

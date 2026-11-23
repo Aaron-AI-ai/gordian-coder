@@ -21,6 +21,7 @@ import { MTIME_SLACK_MS, WRITES, escapes, fqcn, isDir, isFile, paths, toRelative
 import { ANALYSIS_BASH_RULE, analysisBashAllowed } from "./bash-gate";
 import { gradleCommandText, readCoverageXmlText, runTests } from "./runner";
 import { writeReport } from "./report";
+import { SessionStore } from "../plan-gate";
 
 export { UNIT_TEST_ANALYSIS_SKILL_NAME };
 
@@ -114,15 +115,10 @@ export const STAGES: Record<StageId, Stage> = {
   },
 };
 
-const sessions = new Map<string, AnalysisSession>();
+const sessions = new SessionStore<AnalysisSession>(MAX_SESSIONS);
 
-export function startSession(sessionId: string, request: string, cwd: string): AnalysisSession {
-  sessions.delete(sessionId);
-  if (sessions.size >= MAX_SESSIONS) sessions.delete(sessions.keys().next().value!);
-  const session: AnalysisSession = { stage: "plan", request, cwd, startedAt: Date.now(), envRetries: 0 };
-  sessions.set(sessionId, session);
-  return session;
-}
+export const startSession = (sessionId: string, request: string, cwd: string): AnalysisSession =>
+  sessions.start(sessionId, { stage: "plan", request, cwd, startedAt: Date.now(), envRetries: 0 });
 
 export const getSession = (sessionId: string): AnalysisSession | undefined => sessions.get(sessionId);
 export const endSession = (sessionId: string): void => void sessions.delete(sessionId);

@@ -239,7 +239,6 @@ export const SubmitSchema = z.object({
   findings: z.array(FindingSchema).transform((a) => a.slice(0, 50)),
 });
 
-export type SubmitPayload = z.infer<typeof SubmitSchema>;
 
 /** True when `s` looks like runaway repetition (a small model looping on one
  * phrase): most fixed-size chunks of a long string are duplicates of each other.

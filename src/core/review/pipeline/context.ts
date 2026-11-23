@@ -106,16 +106,6 @@ export function gitDiffFiles(range: string, cwd: string = process.cwd()): string
     .filter(Boolean);
 }
 
-/** Unified diff for a single file within `range` ("" when range is null). */
-export function gitDiffForFile(
-  file: string,
-  range: string | null,
-  cwd: string = process.cwd()
-): string {
-  if (!range) return "";
-  return git(["diff", range, "--", file], cwd).trim();
-}
-
 /** Split a `git diff` output into per-file chunks, keyed by the wanted paths. */
 function parseDiffPerFile(full: string, want: Set<string>): Record<string, string> {
   const map: Record<string, string> = {};

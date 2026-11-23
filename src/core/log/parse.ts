@@ -88,10 +88,6 @@ const PB_CODE_TYPE: Record<string, string> = {
   "415": "org.springframework.web.HttpMediaTypeNotSupportedException",
 };
 
-export function isExceptionType(s: string): boolean {
-  return /^[\w$.]+(?:Exception|Error|Throwable)[\w$]*$/.test(s);
-}
-
 export function stripLinePrefix(line: string): { text: string; logger?: string; found: boolean } {
   const f = FICO_PREFIX.exec(line);
   if (f) return { text: line.slice(f[0].length), logger: f[1], found: true };

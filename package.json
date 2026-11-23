@@ -7,7 +7,6 @@
   "type": "module",
   "bin": {
     "gordian-coder-mcp": "./dist/adapters/mcp/server.js",
-    "gordian-coder-cli": "./dist/adapters/cli/cli.js",
     "gdc": "./dist/adapters/cline/cli.js"
   },
   "files": [
@@ -27,10 +26,6 @@
       "types": "./dist/adapters/mcp/index.d.ts",
       "import": "./dist/adapters/mcp/index.js"
     },
-    "./cli": {
-      "types": "./dist/adapters/cli/index.d.ts",
-      "import": "./dist/adapters/cli/index.js"
-    },
     "./cline": {
       "types": "./dist/adapters/cline/index.d.ts",
       "import": "./dist/adapters/cline/index.js"
@@ -41,9 +36,8 @@
     }
   },
   "scripts": {
-    "build": "bun build src/index.ts src/adapters/mcp/server.ts src/adapters/cli/cli.ts src/adapters/cline/cli.ts src/adapters/opencode/index.ts --outdir dist --target bun --format esm && tsc --emitDeclarationOnly",
+    "build": "bun build src/index.ts src/adapters/mcp/server.ts src/adapters/cline/cli.ts src/adapters/opencode/index.ts --outdir dist --target bun --format esm && tsc --emitDeclarationOnly",
     "start:cline": "bun run src/adapters/cline/cli.ts",
-    "start:cli": "bun run src/adapters/cli/cli.ts",
     "clean": "rm -rf dist",
     "prepublishOnly": "bun run clean && bun run build",
     "typecheck": "tsc --noEmit",
