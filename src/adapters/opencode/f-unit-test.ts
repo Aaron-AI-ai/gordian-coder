@@ -98,6 +98,10 @@ export function createFUnitTestModule(input: PluginInput): OpenCodeModule {
                   })
                 )
                 .optional(),
+              update_existing: z
+                .array(z.object({ file: z.string(), test: z.string(), reason: z.string() }))
+                .optional()
+                .describe("Existing @Test methods this change breaks, approved to update their expected values"),
             })
             .optional()
             .describe("plan only: the test plan inputs, submitted with the plan"),

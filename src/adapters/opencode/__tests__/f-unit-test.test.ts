@@ -158,5 +158,12 @@ describe("with both workflows registered", () => {
     });
     expect(parsed.success).toBe(true);
   });
+
+  test("the stage tool schema keeps update_existing instead of stripping it", () => {
+    const schema = z.object(mod().tools[STAGE_TOOL]!.args);
+    const update_existing = [{ file: TEST_FILE, test: "age45", reason: "12000 → 11000" }];
+    const parsed = schema.parse({ stage: "plan", note: "p", inputs: { ...plan, update_existing } }) as { inputs: { update_existing?: unknown } };
+    expect(parsed.inputs.update_existing).toEqual(update_existing);
+  });
 });
 

@@ -4,8 +4,8 @@
  *   plan → execute (the plugin runs Gradle itself) → report
  *
  * plan fixes what runs (module, the selected tests or all) and needs no approval: nothing is changed.
- * execute: the plugin runs Gradle itself (runner.ts); the model only calls the stage tool and waits. report: green → the plugin writes report.md/.html itself; red (failing
- * test, no build, nothing ran) → no file, the model explains cause and fix on the console. Every file write
+ * execute: the plugin runs Gradle itself (runner.ts); the model only calls the stage tool and waits. report: tests ran → the plugin writes report.md/.html itself (failures
+ * marked) and on a failure the model also explains cause and fix; no build or nothing ran → no file, console only. Every file write
  * and every other bash command is refused in all stages.
  */
 
@@ -323,7 +323,7 @@ export const COMMAND_DESCRIPTION = "단위 테스트 실행 후 결과 리포트
 export const STAGE_TOOL_DESCRIPTION =
   "Finish the current stage of the /f-unittest-analysis workflow (plan, execute) and get the next stage's guide. Only callable meaningfully while that workflow is active.";
 
-export const COMMAND_TEMPLATE = `Run the existing unit tests and report by following the stages below. Input: optional \`--test <class | file | Class#method>\` (repeatable); no input runs every test of the module. The plugin enforces the stages: tools outside the current stage are rejected, the result is judged from the run script's files, and every ${STAGE_TOOL} result tells you the next stage. You never create or change any file: a green run gets a report written by the plugin, a red run gets cause and fix guidance on the console only.
+export const COMMAND_TEMPLATE = `Run the existing unit tests and report by following the stages below. Input: optional \`--test <class | file | Class#method>\` (repeatable); no input runs every test of the module. The plugin enforces the stages: tools outside the current stage are rejected, the result is judged from the run script's files, and every ${STAGE_TOOL} result tells you the next stage. You never create or change any file: whenever tests ran, the plugin writes the report (failing tests marked) and a red run also gets cause and fix guidance on the console; a build failure or a run with no test gets console guidance only.
 
 ${renderStageGuide("plan")}
 
