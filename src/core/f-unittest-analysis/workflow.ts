@@ -55,7 +55,7 @@ export interface StageInput {
 
 export type Outcome =
   | { kind: "pass"; reportFile: string; run: TestRun; scriptWarn?: string }
-  | { kind: "failed"; run: TestRun; failures: FailedTest[] }
+  | { kind: "failed"; reportFile: string; run: TestRun; failures: FailedTest[]; scriptWarn?: string }
   | { kind: "build"; log: string }
   | { kind: "none"; log: string };
 
@@ -140,21 +140,21 @@ const failureLine = (d: FailedTest): string =>
 
 /** What the model must do in the report stage, per outcome. */
 function reportSteps(o: Outcome): string[] {
-  const guide = `Read at most the failing tests and the code they call (read-only, a few reads), then your reply MUST be a Korean text message following the skill's docs/f-unittest-analysis-guide.md (per failure: 테스트, 원인, 판단, 수정 방법). Ending the turn after only tool calls, with no text, is a failure. Write NO report and NO file, edit no code, and run nothing.`;
+  const guideCore = `Read at most the failing tests and the code they call (read-only, a few reads), then your reply MUST be a Korean text message following the skill's docs/f-unittest-analysis-guide.md (per failure: 테스트, 원인, 판단, 수정 방법). Ending the turn after only tool calls, with no text, is a failure. Edit no code, and run nothing.`;
   switch (o.kind) {
     case "pass":
       return [`All ${o.run.total} tests passed (skipped ${o.run.skipped}). The plugin wrote the report: ${o.reportFile} (and report.html next to it).${o.scriptWarn ? `\n${o.scriptWarn}` : ""}`, `Now reply to the user, and only this, in Korean: "리포트: ${o.reportFile} (같은 폴더에 report.html) — 전체 ${o.run.total}개 통과". Do not call any tool.`];
     case "failed":
       return [
-        `${o.run.failed + o.run.errored} of ${o.run.total} tests failed (passed ${o.run.passed}, skipped ${o.run.skipped}). The report is only issued for a green run, so none was written.`,
+        `${o.run.failed + o.run.errored} of ${o.run.total} tests failed (passed ${o.run.passed}, skipped ${o.run.skipped}). The plugin wrote the report anyway: ${o.reportFile} (and report.html next to it), with every test's result including the failing ones marked.${o.scriptWarn ? `\n${o.scriptWarn}` : ""}`,
         "Failures:",
         ...o.failures.map(failureLine),
-        `Per failure give the cause, which side is wrong and how to fix it. ${guide}`,
+        `Tell the user the report path and the pass/fail totals, then per failure give the cause, which side is wrong and how to fix it. ${guideCore} The plugin already wrote the report; do not write another yourself.`,
       ];
     case "build":
-      return ["The module did not compile, so no test ran. No report is written.", `Build log (tail):\n${o.log}`, `Give the cause and how to fix the first error. ${guide}`];
+      return ["The module did not compile, so no test ran. No report is written: there is no test result to put in one.", `Build log (tail):\n${o.log}`, `Give the cause and how to fix the first error. ${guideCore} Write NO report and NO file yourself.`];
     case "none":
-      return ["No test ran: the selection matched no test, or the module has none. No report is written.", `Log (tail):\n${o.log}`, `Say why nothing ran and how to select correctly. ${guide}`];
+      return ["No test ran: the selection matched no test, or the module has none. No report is written: there is no test result to put in one.", `Log (tail):\n${o.log}`, `Say why nothing ran and how to select correctly. ${guideCore} Write NO report and NO file yourself.`];
   }
 }
 
@@ -268,9 +268,9 @@ function completeExecute(session: AnalysisSession): string {
   }
   const run = readTestRun(path.join(dir, "test-results"));
   if (status.tests !== "run" || run.total === 0) return close(session, { kind: "none", log });
-  if (run.failed + run.errored > 0) return close(session, { kind: "failed", run, failures: readFailedDetails(path.join(dir, "test-results")) });
   const inputs = session.inputs!;
   const xml = readCoverageXmlText(dir);
+  const failures = run.failed + run.errored > 0 ? readFailedDetails(path.join(dir, "test-results")) : [];
   const reportFile = writeReport({
     cwd: session.cwd,
     request: session.request,
@@ -278,11 +278,13 @@ function completeExecute(session: AnalysisSession): string {
     selection: selectionNames(inputs),
     command: gradleCommandText(inputs.module, selectionNames(inputs)),
     run,
+    failures,
     coverage: xml ? readTargetCoverage(xml, run.tests.map((t) => t.cls)) : null,
     startedAt: session.startedAt,
   });
-  const scriptWarn = reportScriptWarning(fs.readFileSync(path.join(session.cwd, reportFile), "utf-8"), REPLY_LANGUAGE);
-  return close(session, { kind: "pass", reportFile, run, scriptWarn: scriptWarn || undefined });
+  const scriptWarn = reportScriptWarning(fs.readFileSync(path.join(session.cwd, reportFile), "utf-8"), REPLY_LANGUAGE) || undefined;
+  if (failures.length > 0) return close(session, { kind: "failed", reportFile, run, failures, scriptWarn });
+  return close(session, { kind: "pass", reportFile, run, scriptWarn });
 }
 
 /** execute: the plugin runs the tests itself, then judges. `onProgress` feeds the tool's title while it runs. */

@@ -98,15 +98,21 @@ describe("execute", () => {
     expect(md).toContain("- 입력: (없음)");
     expect(md).toContain("전체 (입력 없음)");
   });
-  test("a failing test gives console guidance and no report", () => {
+  test("a failing test still writes a report (failures marked) plus console guidance", () => {
     ran({ compile: "ok", log: "", tests: "run" }, ok + bad);
     const out = completeStage(SID, { stage: "execute" });
     expect(session().outcome!.kind).toBe("failed");
     expect(out).toContain("PayTest.b");
     expect(out).toContain("Pay.java:9");
     expect(out).toContain("expected: <1> but was: <2>");
-    expect(out).toContain("NO report");
-    expect(fs.existsSync(path.join(root, ".fico/report"))).toBe(false);
+    expect(out).toContain("wrote the report anyway");
+    const reportFile = (session().outcome as { reportFile: string }).reportFile;
+    expect(reportFile).toBeTruthy();
+    const md = fs.readFileSync(path.join(root, reportFile), "utf-8");
+    expect(md).toContain("- 결과: FAIL");
+    expect(md).toContain("실패 1");
+    expect(md).toContain("## 실패 내역");
+    expect(md).toContain("단언 실패");
   });
   test("a compile failure and an empty run get guidance without a report", () => {
     ran({ compile: "fail", log: "PayTest.java:3: error: bad" });

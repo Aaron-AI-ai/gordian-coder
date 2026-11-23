@@ -1,6 +1,6 @@
 # Failure guidance rule
 
-Used when a run is not green. Console only, Korean, no files, no code edits.
+Used when a run has a test failure. The plugin already wrote the report with every result, failing tests included — this console explanation is in addition to that, not instead of it. Korean, no code edits, no report of your own.
 
 Per failed test, in this order:
 1. **테스트**: `Class.method` and the failing line (`File.java:NN`).

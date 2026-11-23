@@ -1,6 +1,6 @@
 ---
 name: f-unittest-analysis
-description: 'Runs the existing JUnit unit tests of a FICO Java module (all of them, or only the ones named) and publishes a report of the results. It never creates or edits test code or production code: when a test fails it only explains the cause and the fix on the console. TRIGGER when user asks to run the unit tests and report the result in Korean or English (e.g. 단위 테스트 돌려서 결과 리포트 만들어줘, 이 테스트만 실행해줘, 단위 테스트 분석, run the unit tests and report). DO NOT TRIGGER for writing tests (use f-unit-test-code or f-unit-test-req) or non-Java code.'
+description: 'Runs the existing JUnit unit tests of a FICO Java module (all of them, or only the ones named) and publishes a report of the results, pass or fail. It never creates or edits test code or production code: on a fail it also explains the cause and the fix on the console. TRIGGER when user asks to run the unit tests and report the result in Korean or English (e.g. 단위 테스트 돌려서 결과 리포트 만들어줘, 이 테스트만 실행해줘, 단위 테스트 분석, run the unit tests and report). DO NOT TRIGGER for writing tests (use f-unit-test-code or f-unit-test-req) or non-Java code.'
 ---
 
 # f-unittest-analysis
@@ -21,5 +21,5 @@ Runs the tests that already exist and reports. It does **not** write or change a
 Call the stage tool with stage `execute` and wait; it can take a few minutes. The plugin itself builds the module and runs the selected tests with Gradle (offline first), the same on Windows and Linux/macOS. You run nothing in bash. A dependency/network failure is an environment problem: report it and stop.
 
 ### 3. Report
-- **All tests pass:** the plugin writes the report (`.fico/report/f-unittest-analysis/report-<time>/report.md` and `report.html`, with the run input, overall coverage, the list of files run, and per-file/per-test results — the HTML lets you expand the file list and search the detail section by file name). Tell the user the path and the totals in one or two lines.
-- **A test fails, or the tests do not compile, or nothing ran:** write **no report and no file**. Read the failing test and the code it calls (read-only) and explain on the console, per failure: the cause, whether the test or the production code is wrong, and how to fix it (see `docs/f-unittest-analysis-guide.md`). Never fix it yourself.
+- **Tests ran** (whether all passed or some failed): the plugin writes the report (`.fico/report/f-unittest-analysis/report-<time>/report.md` and `report.html`) with the run input, overall coverage, the list of files run, and per-file/per-test results, every failing test marked and listed with its cause — the HTML lets you expand the file list and search the detail section by file name. Tell the user the report path and the pass/fail totals either way; on a fail, also read the failing test and the code it calls (read-only) and explain on the console, per failure: the cause, whether the test or the production code is wrong, and how to fix it (see `docs/f-unittest-analysis-guide.md`). Never fix it yourself.
+- **The tests do not compile, or nothing ran:** there is no test result to report, so write **no report and no file**. Explain the cause on the console the same way.
