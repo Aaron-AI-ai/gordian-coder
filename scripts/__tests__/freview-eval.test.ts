@@ -215,3 +215,23 @@ ${toBe}
     expect(scoreBugCase(c, parseFileFindings(report("} catch (PBBaseException e) {\n    log.warn(\"x\");\n}"), file))).toBe(false);
   });
 });
+
+describe("clearUnfinishedRuns", () => {
+  test("removes unfinished runs and keeps the rest of the target", async () => {
+    const { mkdtempSync, existsSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { createRun } = await import("../../src/core/review/pipeline/run-store");
+    const { runDir } = await import("../../src/core/review/pipeline/artifact");
+    const { clearUnfinishedRuns } = await import("../freview-eval");
+    const d = mkdtempSync(join(tmpdir(), "fre-"));
+    writeFileSync(join(d, "keep.txt"), "x");
+    const meta = await createRun(
+      { targets: ["a.ts"], range: null, whole: true, label: "t", language: "ko" },
+      d
+    );
+    expect(clearUnfinishedRuns(d)).toEqual([meta.runId]);
+    expect(existsSync(runDir(meta.runId, d))).toBe(false);
+    expect(existsSync(join(d, "keep.txt"))).toBe(true);
+  });
+});

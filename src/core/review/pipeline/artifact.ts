@@ -197,6 +197,9 @@ export interface RunMeta {
   fcqFix?: boolean;
   /** What the plan was called with; absent on runs planned before it was kept. */
   input?: RunInput;
+  /** Session that called f_review_plan. Only that session may finalize the
+   * run, so one orchestrator cannot overwrite another's report. */
+  createdBy?: string;
 }
 
 /** Persisted run metadata is external state, even though this process created it. */
@@ -225,6 +228,7 @@ export const RunMetaSchema: z.ZodType<RunMeta> = z.object({
   fcq: FcqRunStatusSchema.optional(),
   fcqFix: z.boolean().optional(),
   input: RunInputSchema.optional(),
+  createdBy: z.string().optional(),
 });
 
 /** Load a run's meta, or null when the run does not exist / is unreadable. */

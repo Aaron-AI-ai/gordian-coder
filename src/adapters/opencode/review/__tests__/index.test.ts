@@ -13,7 +13,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PluginInput } from "@opencode-ai/plugin";
-import { createReviewModule } from "../index";
+import { JOIN_MISS_LIMIT, commandOutputArg, createReviewModule } from "../index";
 import {
   REVIEWER_AGENT_NAME,
   REVIEWER_AGENT_PERMISSION,
@@ -55,17 +55,21 @@ function gitRepo(): string {
 /** Minimal PluginInput + a spy on the one client call the watchdog makes. */
 function moduleFor(cwd: string) {
   const prompts: string[] = [];
+  const aborted: string[] = [];
   const input = {
     directory: cwd,
     client: {
       session: {
+        abort: async (req: { path: { id: string } }) => {
+          aborted.push(req.path.id);
+        },
         promptAsync: async (req: { body: { parts: { text: string }[] } }) => {
           prompts.push(req.body.parts.map((p) => p.text).join(""));
         },
       },
     },
   } as unknown as PluginInput;
-  return { mod: createReviewModule(input), prompts };
+  return { mod: createReviewModule(input), prompts, aborted };
 }
 
 const ctx = { sessionID: SESSION } as never;
@@ -730,5 +734,74 @@ describe("part 파라미터", () => {
       ctx
     )) as string;
     expect(out).toContain("does not exist");
+  });
+});
+
+describe("tool-argument omission defenses", () => {
+  it("parses --output from raw command arguments", () => {
+    expect(commandOutputArg("--files=A.java --whole --output=out/r.md")).toBe("out/r.md");
+    expect(commandOutputArg('--output="my dir/r.md" --whole')).toBe("my dir/r.md");
+    expect(commandOutputArg("--files=A.java")).toBeUndefined();
+    // Live `opencode run --command` passes the argument string still quoted.
+    expect(commandOutputArg('"--files=A.java --whole --output=.fico/r.md"')).toBe(".fico/r.md");
+    expect(commandOutputArg('"--output=.fico/r.md --whole"')).toBe(".fico/r.md");
+  });
+
+  it("f_review_plan falls back to the command's --output when the model drops it", async () => {
+    const d = gitRepo();
+    const { mod } = moduleFor(d);
+    await mod.commandBefore(
+      { command: REVIEW_COMMAND_NAME, sessionID: SESSION, arguments: "--files=a.ts --output=eval/r.md" },
+      { parts: [] }
+    );
+    const msg = (await mod.tools.f_review_plan.execute({ files: ["a.ts"] } as never, ctx)) as string;
+    const runId = /Run created: (\S+)/.exec(msg)![1];
+    const { loadRun } = await import("../../../../core/review/pipeline/artifact");
+    expect(loadRun(runId, d)?.output).toBe("eval/r.md");
+  });
+
+  it("an explicit output argument wins over the command's", async () => {
+    const d = gitRepo();
+    const { mod } = moduleFor(d);
+    await mod.commandBefore(
+      { command: REVIEW_COMMAND_NAME, sessionID: SESSION, arguments: "--output=cmd.md" },
+      { parts: [] }
+    );
+    const msg = (await mod.tools.f_review_plan.execute({ files: ["a.ts"], output: "arg.md" } as never, ctx)) as string;
+    const runId = /Run created: (\S+)/.exec(msg)![1];
+    const { loadRun } = await import("../../../../core/review/pipeline/artifact");
+    expect(loadRun(runId, d)?.output).toBe("arg.md");
+  });
+
+  it("aborts a reviewer that repeats a file-less join of a multi-unit run", async () => {
+    const d = gitRepo();
+    const { mod, aborted } = moduleFor(d);
+    const msg = (await mod.tools.f_review_plan.execute({ files: ["a.ts", "b.ts"] } as never, ctx)) as string;
+    const runId = /Run created: (\S+)/.exec(msg)![1];
+    const rctx = { sessionID: "rv", agent: REVIEWER_AGENT_NAME } as never;
+    let out = "";
+    for (let i = 0; i < JOIN_MISS_LIMIT; i++) {
+      out = (await mod.tools.f_review_context.execute({ runId } as never, rctx)) as string;
+      if (i < JOIN_MISS_LIMIT - 1) expect(aborted).toEqual([]);
+    }
+    expect(out).toContain("STOP");
+    expect(aborted).toEqual(["rv"]);
+  });
+});
+
+describe("host-tool gate for review artifacts", () => {
+  it("rejects bash/read on plugin output from an /f-review session only", async () => {
+    const d = gitRepo();
+    const { mod } = moduleFor(d);
+    await mod.commandBefore(
+      { command: REVIEW_COMMAND_NAME, sessionID: "orch", arguments: "--files=a.ts" },
+      { parts: [] }
+    );
+    expect(() => mod.toolBefore("bash", "orch", { command: "ls .fico/f-review/runs" })).toThrow("Access denied");
+    expect(() => mod.toolBefore("read", "orch", { filePath: `${d}/.fico/eval/f-review/x.md` })).toThrow("Access denied");
+    expect(() => mod.toolBefore("bash", "orch", { command: "ls src" })).not.toThrow();
+    expect(() => mod.toolBefore("bash", "orch", { command: "echo .fico/evaluate" })).not.toThrow();
+    // An unrelated session (the user asking to open a report) is untouched.
+    expect(() => mod.toolBefore("read", "other", { filePath: ".fico/report/f-review/r.md" })).not.toThrow();
   });
 });

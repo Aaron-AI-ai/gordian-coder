@@ -374,7 +374,7 @@ registerGuardModule({
   idempotentPatterns: {
     f_review_submit: /Stale\/duplicate f_review_submit ignored|No active review/,
     f_review_judge: /already recorded|Judge INCOMPLETE|already hit the judge rework cap/,
-    f_review_plan: /Refusing to create another run|still being created by another process/,
+    f_review_plan: /Refusing to create another run|still being created by another process|already planned the same review/,
     f_review_context: /Duplicate f_review_context ignored|already has (?:a submitted|a terminal) review artifact/,
   },
   guard: (st, tool, out, args) => reviewGuard(st as Parameters<typeof reviewGuard>[0], tool, out, args),

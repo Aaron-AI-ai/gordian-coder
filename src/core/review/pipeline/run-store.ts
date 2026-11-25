@@ -39,6 +39,11 @@ export const RUNS_KEEP = 10;
  * this point instead of deleting an older run that may still have workers. */
 export const MAX_UNFINISHED_RUNS = 10;
 
+/** Unfinished runs idle longer than this do not count toward
+ * MAX_UNFINISHED_RUNS: crashed or killed reviews must not block new plans for
+ * a whole day (UNFINISHED_RUN_TTL_MS) before pruning catches up. */
+export const ACTIVE_RUN_IDLE_MS = 30 * 60 * 1000;
+
 /** Unfinished runs older than this are abandoned and eligible for pruning. */
 export const UNFINISHED_RUN_TTL_MS = 24 * 60 * 60 * 1000;
 

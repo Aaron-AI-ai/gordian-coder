@@ -8,6 +8,7 @@ import {
   fileReadDiff,
   fileFind,
   codeSearch,
+  mentionedDeniedPath,
   FILE_READ_MAX_CHARS,
   FILE_READ_MAX_LINES,
   fileLineCount,
@@ -299,5 +300,57 @@ describe("listFilesAt (non-git fallback)", () => {
     mkdirSync(join(d, "src", "main"), { recursive: true });
     writeFileSync(join(d, "src", "main", "A.java"), "class A {}");
     expect(listFilesAt(d, null)).toEqual(["src/main/A.java"]);
+  });
+});
+
+describe("exploration deny list (eval/report contamination)", () => {
+  function project(config?: object): string {
+    const d = tmp();
+    const sh = (c: string[]) => Bun.spawnSync(c, { cwd: d });
+    sh(["git", "init", "-q"]);
+    const put = (p: string, s: string) => {
+      mkdirSync(join(d, p, ".."), { recursive: true });
+      writeFileSync(join(d, p), s);
+    };
+    put("src/AcntService.java", "class AcntService { int needle; }\n");
+    put(".fico/eval/f-review/case-01-whole.md", "AcntService needle verdict\n");
+    put(".fico/report/f-review/r/review.md", "AcntService needle old report\n");
+    put("f-review-cases/case-01.yaml", "file: src/AcntService.java # needle\n");
+    if (config) put(".fico/config/fico_ai.json", JSON.stringify(config));
+    return d;
+  }
+
+  it("refuses file_read of plugin output", () => {
+    const d = project();
+    expect(fileRead(d, null, ".fico/eval/f-review/case-01-whole.md")).toContain("Access denied");
+    expect(fileRead(d, null, "./.fico/report/f-review/r/review.md")).toContain("Access denied");
+    expect(fileRead(d, null, "src/AcntService.java")).toContain("needle");
+  });
+
+  it("drops plugin output from code_search and file_find", () => {
+    const d = project();
+    const hits = codeSearch(d, null, "needle");
+    expect(hits).toContain("src/AcntService.java");
+    expect(hits).not.toContain(".fico/");
+    expect(fileFind(d, null, "case-01-whole")).not.toContain(".fico/eval");
+  });
+
+  it("honors config exploreDeny for answer keys", () => {
+    const d = project({ review: { exploreDeny: ["f-review-cases/"] } });
+    expect(fileRead(d, null, "f-review-cases/case-01.yaml")).toContain("Access denied");
+    expect(codeSearch(d, null, "needle")).not.toContain("f-review-cases");
+    expect(fileFind(d, null, "case-01.yaml")).not.toContain("f-review-cases");
+  });
+});
+
+describe("mentionedDeniedPath", () => {
+  it("matches deny entries only on path boundaries", () => {
+    const d = tmp();
+    mkdirSync(join(d, ".fico", "config"), { recursive: true });
+    writeFileSync(join(d, ".fico", "config", "fico_ai.json"), JSON.stringify({ review: { exploreDeny: ["eval"] } }));
+    expect(mentionedDeniedPath(d, "cat eval/qwen/summary.md")).toBe("eval");
+    expect(mentionedDeniedPath(d, '{"filePath":"./eval/x"}')).toBe("eval");
+    expect(mentionedDeniedPath(d, "bun run evaluate")).toBeUndefined();
+    expect(mentionedDeniedPath(d, "ls .fico/report/f-review")).toBe(".fico/report");
   });
 });

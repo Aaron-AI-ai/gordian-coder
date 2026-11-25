@@ -11,7 +11,7 @@
  */
 
 import { extname, posix } from "node:path";
-import { codeSearch, capText, isGitRepo, listFilesAt, readFileAt, sh } from "./read";
+import { codeSearch, capText, exploreDenied, isGitRepo, listFilesAt, readFileAt, sh } from "./read";
 import {
   importBindings,
   importSpecifiers,
@@ -169,7 +169,8 @@ export function discoverRelatedFiles(
   maxResults: number = RELATED_MAX
 ): RelatedFile[] {
   const normalized = normalizeRepoPath(file);
-  const files = listFilesAt(cwd, ref).map(normalizeRepoPath);
+  const denied = exploreDenied(cwd);
+  const files = listFilesAt(cwd, ref).map(normalizeRepoPath).filter((f) => !denied(f));
   const all = new Set(files);
   const content = readFileAt(cwd, ref, normalized) ?? "";
   const scores = new Map<string, { score: number; reasons: Set<string> }>();

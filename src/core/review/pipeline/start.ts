@@ -64,6 +64,10 @@ export interface StartReviewArgs {
   runId?: string;
 }
 
+/** Prefix of the refusal when a run join names zero or several files. The
+ * OpenCode adapter counts repeats of it to stop a stuck reviewer. */
+export const RUN_ONE_FILE_REFUSAL = "Run mode reviews exactly ONE file";
+
 /** Run-mode session seeding: one subagent = one file of a parallel run. The
  * review config (range/whole/rubric/language/…) comes from run.json so every
  * subagent reviews consistently; the caller may only pick WHICH target file. */
@@ -91,11 +95,15 @@ function startRunFileReview(
 
   // Defense: a run subagent reviews exactly one UNIT, and only one that the
   // plan actually queued — it cannot widen the fan-out on its own.
+  const units = runUnits(meta);
+  // A single-unit run leaves nothing to choose, so a dropped `files` (a model
+  // that re-issues {runId} alone until its step cap) is filled in, not refused.
+  if (!files?.length && units.length === 1) files = units;
   if (files?.length !== 1) {
-    return `Run mode reviews exactly ONE file: call f_review_context with runId and files=["<one target>"].`;
+    const shown = units.slice(0, 20).join(", ") + (units.length > 20 ? ", …" : "");
+    return `${RUN_ONE_FILE_REFUSAL}: call f_review_context with runId and files=["<one unit id>"], one of: ${shown}`;
   }
   const unit = files[0].replaceAll("\\", "/").replace(/^\.\//, "");
-  const units = runUnits(meta);
   if (!units.includes(unit)) {
     // The bare path of a file the plan split: hand back the exact ids rather
     // than a refusal — a small model that dropped the `#start-end` suffix
@@ -227,6 +235,7 @@ function startRunFileReview(
     `The review checklist is injected into your instructions. Use ONLY the review tools`,
     `(related_code / git_history / file_read / code_search) for deeper context — never the`,
     `host's built-in Read/Grep/Glob — then call f_review_submit.`,
+    `The file content is already in your instructions: do NOT call f_review_context again.`,
     `Review ONLY this file. When the submit confirms completion, your task is done.`,
   ].join("\n");
 }
@@ -294,8 +303,10 @@ async function startReviewUnlocked(
     } else {
       return (
         `ℹ️ Duplicate f_review_context ignored; this session is already reviewing ` +
-        `${currentFile(existing) ?? "its current target"}. Continue the existing review and call ` +
-        `f_review_submit with CURRENT_SUBMIT_TOKEN=${existing.submitToken}; progress was preserved.`
+        `${currentFile(existing) ?? "its current target"}. Do NOT call f_review_context again — ` +
+        `a third identical call is denied by the host and fails this subagent. The file is already ` +
+        `in your instructions. Next call: file_read / related_code / code_search, or f_review_submit ` +
+        `with CURRENT_SUBMIT_TOKEN=${existing.submitToken}; progress was preserved.`
       );
     }
   }

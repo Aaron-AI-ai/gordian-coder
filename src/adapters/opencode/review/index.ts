@@ -42,7 +42,11 @@ import {
   judgeContext,
   submitJudge,
   resolveMaxToolCalls,
+  RUN_ONE_FILE_REFUSAL,
 } from "../../../core/review";
+import type { CommandBeforeHook, ToolGate } from "../modules";
+import { deniedReadMessage, mentionedDeniedPath } from "../../../core/review/tools/read";
+import { dbg } from "../../../core/review/debug";
 import {
   REVIEWER_AGENT_NAME,
   REVIEWER_AGENT_DESCRIPTION,
@@ -69,13 +73,62 @@ import {
 
 const z = tool.schema;
 
+/** Same-session refusals of a run join (no/several `files`) before the
+ * reviewer session is aborted so the orchestrator can retry it. */
+export const JOIN_MISS_LIMIT = 3;
+const MAX_TRACKED = 256;
+
+/** `--output=<path>` from the raw `/f-review` arguments (quotes stripped). */
+export function commandOutputArg(raw: string): string | undefined {
+  // `opencode run --command f-review -- "<args>"` hands the whole string over
+  // still quoted, so a bare value must stop at a quote, not swallow it.
+  const m = /(?:^|[\s"'])--output=(?:"([^"]*)"|'([^']*)'|([^\s"']+))/.exec(raw);
+  return m ? (m[1] ?? m[2] ?? m[3]) : undefined;
+}
+
+/** OpenCode built-ins that can reach files outside the review tools' deny list. */
+const HOST_FILE_TOOLS = new Set(["read", "grep", "glob", "list", "bash"]);
+
+/** Insert into a session-keyed map, evicting the oldest entry past the cap. */
+function remember<V>(map: Map<string, V>, key: string, value: V): void {
+  map.delete(key);
+  map.set(key, value);
+  if (map.size > MAX_TRACKED) map.delete(map.keys().next().value!);
+}
+
 export function createReviewModule(input: PluginInput): {
   tools: Record<string, ReturnType<typeof tool>>;
   systemTransform: NonNullable<Hooks["experimental.chat.system.transform"]>;
   event: NonNullable<Hooks["event"]>;
   config: NonNullable<Hooks["config"]>;
+  commandBefore: CommandBeforeHook;
+  toolBefore: ToolGate;
 } {
   const cwd = input.directory;
+  // The user's `--output=` per orchestrator session: some models drop the
+  // `output` argument from f_review_plan (and re-plan to "fix" it), sending
+  // the report to the default path. The command line is the source of truth.
+  const commandOutputs = new Map<string, string>();
+  const joinMisses = new Map<string, number>();
+  // /f-review orchestrator sessions: their host tools (bash/read/grep) are
+  // gated too — one orchestrator browsed .fico/f-review/runs and finalized
+  // another review's run.
+  const reviewSessions = new Map<string, true>();
+
+  const toolBefore: ToolGate = (tool, sessionID, args) => {
+    if (!HOST_FILE_TOOLS.has(tool)) return;
+    if (!reviewSessions.has(sessionID) && !getState(sessionID)?.active) return;
+    const hit = mentionedDeniedPath(cwd, JSON.stringify(args ?? {}));
+    if (hit) throw new Error(deniedReadMessage(hit));
+  };
+
+  const commandBefore: CommandBeforeHook = async ({ command, sessionID, arguments: raw }) => {
+    if (command !== REVIEW_COMMAND_NAME) return;
+    remember(reviewSessions, sessionID, true);
+    const out = commandOutputArg(raw);
+    dbg("command", `/${command} session=${sessionID} --output=${out ?? "(none)"}`);
+    if (out) remember(commandOutputs, sessionID, out);
+  };
 
   const f_review_context = tool({
     description:
@@ -118,9 +171,26 @@ export function createReviewModule(input: PluginInput): {
       // The bundled reviewer only ever joins a run; telling core so lets it
       // refuse the runId-less calls a small model makes instead of starting
       // a stray sequential review that overwrites the aggregate report.
-      return startReview(args, cwd, ctx.sessionID, {
+      const out = await startReview(args, cwd, ctx.sessionID, {
         fromRunWorker: ctx.agent === REVIEWER_AGENT_NAME,
       });
+      if (!out.startsWith(RUN_ONE_FILE_REFUSAL)) {
+        joinMisses.delete(ctx.sessionID);
+        return out;
+      }
+      // A model stuck on the same bad join otherwise burns its whole step cap
+      // (29 identical calls seen); the repeat guard is not armed before the
+      // first successful join, so stop it here.
+      const n = (joinMisses.get(ctx.sessionID) ?? 0) + 1;
+      remember(joinMisses, ctx.sessionID, n);
+      if (n < JOIN_MISS_LIMIT) return out;
+      joinMisses.delete(ctx.sessionID);
+      try {
+        await input.client.session.abort({ path: { id: ctx.sessionID } });
+      } catch {
+        // ponytail: steps stays the hard stop when abort is unavailable.
+      }
+      return `${out}\nSTOP: this join failed ${n} times. End your turn now; the orchestrator will retry this file.`;
     },
   });
 
@@ -167,8 +237,10 @@ export function createReviewModule(input: PluginInput): {
           "Static analysis: run the fcq CLI over the targets before fan-out, inject its violations into each reviewer as evidence, and merge them into the final report (default from project config `fcq`; options in `fcqOptions`)"
         ),
     },
-    async execute(args) {
-      return planReview(args, cwd);
+    async execute(args, ctx) {
+      const fallback = args.output ? undefined : commandOutputs.get(ctx.sessionID);
+      if (fallback) dbg("command", `f_review_plan had no output; using the command's --output=${fallback}`);
+      return planReview({ ...args, output: args.output ?? fallback }, cwd, ctx.sessionID);
     },
   });
 
@@ -289,8 +361,8 @@ export function createReviewModule(input: PluginInput): {
     args: {
       runId: z.string().min(1).describe("The runId returned by f_review_plan"),
     },
-    async execute(args) {
-      return finalizeRun(args.runId, cwd);
+    async execute(args, ctx) {
+      return finalizeRun(args.runId, cwd, ctx.sessionID);
     },
   });
 
@@ -454,5 +526,7 @@ export function createReviewModule(input: PluginInput): {
     systemTransform,
     event,
     config,
+    commandBefore,
+    toolBefore,
   };
 }

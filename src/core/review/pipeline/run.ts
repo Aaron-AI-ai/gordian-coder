@@ -20,7 +20,7 @@ import { join } from "node:path";
 
 import { SEVERITIES, dedupeFindings, reportScriptWarning, verdict, type Finding, type Severity } from "../contract";
 import { collectTargets, resolveDiffRange, type CommitSpec } from "./context";
-import { FinalizeCacheSchema, MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, RUN_BATCH_SIZE, absoluteOutputPath, createRun, diskTextHash, filesSnapshotIdentity, finalizeFingerprint, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, runFreshness, unfinishedRuns } from "./run-store";
+import { ACTIVE_RUN_IDLE_MS, FinalizeCacheSchema, MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, RUN_BATCH_SIZE, absoluteOutputPath, createRun, diskTextHash, filesSnapshotIdentity, finalizeFingerprint, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, runFreshness, runLastActivity, unfinishedRuns } from "./run-store";
 import { loadRun, resultUnit, runUnits, type RunInput, type RunMeta } from "./artifact";
 import type { FileStatus, ReportContext } from "../report/html";
 import { RUNS_DIR, reviewArtifactHash, runDir } from "./artifact";
@@ -192,7 +192,7 @@ export function planUnits(targets: string[], whole: boolean, ref: string | null,
 
 /** Collect targets, create the run, and return the fan-out instructions the
  * orchestrator follows. All error cases come back as text (shown to the model). */
-export async function planReview(args: PlanReviewArgs, cwd: string): Promise<string> {
+export async function planReview(args: PlanReviewArgs, cwd: string, sessionId?: string): Promise<string> {
   let commit: CommitSpec | undefined;
   if (args.from) commit = { from: args.from, to: args.to ?? "HEAD" };
   else if (args.commit) commit = args.commit;
@@ -258,6 +258,7 @@ export async function planReview(args: PlanReviewArgs, cwd: string): Promise<str
     excludes: [...(config.exclude ?? []), ...(args.exclude ?? [])],
     ...(config.fcqFix === true ? { fcqFix: true } : {}),
     input: planInput(args),
+    ...(sessionId ? { createdBy: sessionId } : {}),
   };
 
   const fingerprint = planFingerprint(planned);
@@ -269,17 +270,35 @@ export async function planReview(args: PlanReviewArgs, cwd: string): Promise<str
     );
   }
   try {
-    // Every plan call fans out a fresh review, even for an identical unfinished
-    // plan — resuming a prior run's artifacts is future work. The fingerprint
-    // claim above still keeps two simultaneous identical planners from creating
-    // two runs in the same instant.
+    // An identical plan from the SAME session before any review was saved is
+    // a re-plan, not a new review: a model that thought its `output` was lost
+    // re-planned up to 7 times, one orphan run each. Hand the first run back.
+    // Once a review artifact exists the run is in progress — resuming it is
+    // still future work, so that case keeps fanning out a fresh run.
     pruneRuns(cwd);
-    const unfinished = unfinishedRuns(cwd);
-    if (unfinished.length >= MAX_UNFINISHED_RUNS) {
+    const now = Date.now();
+    const replanned = sessionId
+      ? unfinishedRuns(cwd).find(
+          (run) =>
+            run.createdBy === sessionId &&
+            planFingerprint(run) === fingerprint &&
+            readRunResults(run.runId, cwd).length === 0
+        )
+      : undefined;
+    if (replanned) {
       return (
-        `⚠️ Refusing to create another run: ${unfinished.length} unfinished runs already exist ` +
-        `(cap ${MAX_UNFINISHED_RUNS}). Finalize one of: ` +
-        unfinished.slice(0, MAX_UNFINISHED_RUNS).map((run) => run.runId).join(", ")
+        `ℹ️ This session already planned the same review as run ${replanned.runId}; no new run was ` +
+        `created. Use it:\n${renderPlanInstructions(replanned, cwd)}`
+      );
+    }
+    const active = unfinishedRuns(cwd).filter((run) => now - runLastActivity(run, cwd) <= ACTIVE_RUN_IDLE_MS);
+    if (active.length >= MAX_UNFINISHED_RUNS) {
+      // Never list the other runs: a model told "finalize one of" finalized
+      // another orchestrator's run and overwrote that review's report.
+      return (
+        `⚠️ Refusing to create another run: ${active.length} other reviews are still in progress ` +
+        `(cap ${MAX_UNFINISHED_RUNS}). Do NOT finalize, inspect, or clean up runs you did not create. ` +
+        `Stop now and tell the user to retry after the running reviews finish.`
       );
     }
 
@@ -416,9 +435,15 @@ export function renderPlanInstructions(meta: RunMeta, cwd: string): string {
     `Effective settings: deepPasses=${meta.deepPasses ?? 1} · judge=${meta.judge ? "on" : "off"} · ` +
     `fcq=${meta.fcq ? "on" : "off"} · fcqFix=${meta.fcqFix ? "on" : "off"} ` +
     (configSource ? `(config: ${configSource}, plus any call arguments)` : "(no project config found; tool defaults)");
+  // Echo where the report goes: with no visible output path a model concluded
+  // its `output` was ignored and re-planned up to 7 times (one run each).
+  const reportLine =
+    `Report output: ${resolveOutputPath(meta.output, meta.runId, cwd, new Date(meta.createdAt))} ` +
+    `— fixed for this run. Do NOT call f_review_plan again; dispatch the reviewers below.`;
   return [
     `Run created: ${meta.runId} — ${meta.targets.length} file(s)${split ? ` → ${units.length} unit(s)` : ""}, mode: ${meta.range ? `commit diff (${meta.range})` : "explicit files"}${meta.whole ? " · whole-file" : ""}${(meta.deepPasses ?? 1) > 1 ? ` · ${meta.deepPasses} review rounds/target` : ""}${meta.failOn ? ` · gate: failOn=${meta.failOn}` : ""}${meta.judge ? ` · judge gate on` : ""}${meta.fcqFix ? ` · fix pass on` : ""}.`,
     settingsLine,
+    reportLine,
     ...(split
       ? [`Units (spawn in this order; a large file is split into segment units — ONE f-reviewer per unit):`]
       : []),
@@ -432,9 +457,15 @@ export function renderPlanInstructions(meta: RunMeta, cwd: string): string {
 
 /** Aggregate a run: verify coverage, merge per-file findings into the standard
  * report (+ run summary appendix), and report what is still missing. */
-export async function finalizeRun(runId: string, cwd: string): Promise<string> {
+export async function finalizeRun(runId: string, cwd: string, sessionId?: string): Promise<string> {
   const meta = loadRun(runId, cwd);
   if (!meta) return `Unknown run: ${runId}. Call f_review_plan first.`;
+  if (sessionId && meta.createdBy && meta.createdBy !== sessionId) {
+    return (
+      `❌ Run ${runId} was planned by another session; you may finalize only the run ` +
+      `your own f_review_plan returned. Do NOT touch other runs.`
+    );
+  }
 
   const results = readRunResults(runId, cwd);
   const allJudgments = readRunJudgments(runId, cwd);

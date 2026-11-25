@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { finalizeRun, planReview, planUnits, renderCommand } from "../run";
 import { fcqShardPath } from "../../evidence/fcq";
-import { MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, UNFINISHED_RUN_TTL_MS, RUN_BATCH_SIZE, createRun, finalizeFingerprint, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, runIsTerminal, writeFileReview } from "../run-store";
+import { ACTIVE_RUN_IDLE_MS, MAX_RUN_TARGETS, MAX_UNFINISHED_RUNS, UNFINISHED_RUN_TTL_MS, RUN_BATCH_SIZE, createRun, finalizeFingerprint, pruneRuns, readRunResults, reviewCriteriaIdentity, runCoverage, runIsTerminal, writeFileReview } from "../run-store";
 import { loadRun, readFileReviewResult, resultUnit, reviewArtifactHash, runUnits, type RunMeta } from "../artifact";
 import { RUNS_DIR, reviewSlug, runDir, type FileReviewResult } from "../artifact";
 import { submitReview, guardExploration, onSessionIdle, MAX_RESUMES } from "../loop";
@@ -449,6 +449,51 @@ describe("planReview", () => {
       MAX_UNFINISHED_RUNS
     );
     expect(existsSync(runDir(ids[0], d))).toBe(true);
+    // Never point the model at other runs: one finalized a foreign run.
+    for (const id of ids) expect(refused).not.toContain(id);
+  });
+
+  it("does not count unfinished runs idle past ACTIVE_RUN_IDLE_MS toward the cap", async () => {
+    const d = gitRepo();
+    const old = new Date(Date.now() - ACTIVE_RUN_IDLE_MS - 60_000);
+    for (let i = 0; i < MAX_UNFINISHED_RUNS; i++) {
+      const meta = await createRun({ ...baseMeta(["a.ts", "b.ts"]), planGuidance: `idle-${i}` }, d);
+      const dir = runDir(meta.runId, d);
+      const runJson = join(dir, "run.json");
+      writeFileSync(runJson, JSON.stringify({ ...JSON.parse(readFileSync(runJson, "utf8")), createdAt: old.toISOString() }));
+      utimesSync(runJson, old, old);
+      utimesSync(dir, old, old);
+    }
+    expect(await planReview({ files: ["a.ts"] }, d)).toContain("Run created:");
+  });
+
+  it("echoes the report output path so the orchestrator does not re-plan", async () => {
+    const d = gitRepo();
+    expect(await planReview({ files: ["a.ts"], output: "out/r.md" }, d)).toContain("Report output: out/r.md");
+  });
+
+  it("hands back the same run when one session re-plans before any review", async () => {
+    const d = gitRepo();
+    const first = /Run created: (\S+)/.exec(await planReview({ files: ["a.ts"], output: "o.md" }, d, "orch"))![1];
+    const again = await planReview({ files: ["a.ts"], output: "o.md" }, d, "orch");
+    expect(again).toContain(`already planned the same review as run ${first}`);
+    expect(again).toContain(`Run created: ${first}`);
+    // Another session, or a different plan, still gets its own run.
+    const idOf = (m: string) => /Run created: (\S+)/.exec(m)![1];
+    expect(idOf(await planReview({ files: ["a.ts"], output: "o.md" }, d, "other"))).not.toBe(first);
+    expect(idOf(await planReview({ files: ["a.ts"], output: "p.md" }, d, "orch"))).not.toBe(first);
+    // Once a review is saved the old run is in progress: a re-plan starts fresh.
+    await writeFileReview(first, result("a.ts"), "# a", d);
+    expect(await planReview({ files: ["a.ts"], output: "o.md" }, d, "orch")).not.toContain("already planned");
+  });
+
+  it("refuses to finalize a run planned by another session", async () => {
+    const d = gitRepo();
+    const msg = await planReview({ files: ["a.ts"] }, d, "orch-A");
+    const runId = /Run created: (\S+)/.exec(msg)![1];
+    expect(loadRun(runId, d)?.createdBy).toBe("orch-A");
+    expect(await finalizeRun(runId, d, "orch-B")).toContain("planned by another session");
+    expect(await finalizeRun(runId, d, "orch-A")).not.toContain("planned by another session");
   });
 
   it("defaults files-only runs to whole-file mode", async () => {
@@ -567,6 +612,14 @@ describe("run-mode session (startReview/submitReview with runId)", () => {
     expect(getState("rs")?.targets).toEqual(["a.ts"]);
   });
 
+  it("joins the only unit of a single-unit run when files is omitted", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(["a.ts"]), d);
+    const msg = await startReview({ runId: meta.runId }, d, "rs");
+    expect(msg).toContain(`Run ${meta.runId}: reviewing a.ts`);
+    expect(getState("rs")?.targets).toEqual(["a.ts"]);
+  });
+
   it("rejects joining a run after its effective review rules changed", async () => {
     const d = gitRepo();
     const msg = await planReview({ files: ["a.ts"] }, d);
@@ -592,12 +645,15 @@ describe("run-mode session (startReview/submitReview with runId)", () => {
 
   it("rejects zero or multiple files, non-target files, and unknown runs", async () => {
     const d = gitRepo();
-    const meta = await createRun(baseMeta(["a.ts"]), d);
-    expect(await startReview({ runId: meta.runId }, d, "rs")).toContain("exactly ONE file");
+    const meta = await createRun(baseMeta(["a.ts", "b.ts"]), d);
+    const none = await startReview({ runId: meta.runId }, d, "rs");
+    expect(none).toContain("exactly ONE file");
+    expect(none).toContain("one of: a.ts, b.ts");
     expect(await startReview({ runId: meta.runId, files: ["a.ts", "b.ts"] }, d, "rs")).toContain(
       "exactly ONE file"
     );
-    expect(await startReview({ runId: meta.runId, files: ["b.ts"] }, d, "rs")).toContain(
+    const single = await createRun(baseMeta(["a.ts"]), d);
+    expect(await startReview({ runId: single.runId, files: ["b.ts"] }, d, "rs")).toContain(
       "not a target of run"
     );
     expect(await startReview({ runId: "ghost", files: ["a.ts"] }, d, "rs")).toContain("Unknown run");
@@ -789,6 +845,20 @@ describe("run-mode session (startReview/submitReview with runId)", () => {
     expect(fin?.text).toContain("partially reviewed");
     const results = readRunResults(meta.runId, d);
     expect(results[0].partial).toBe(true);
+  });
+
+  it("a cut-off session never overwrites the complete review a retry already saved", async () => {
+    const d = gitRepo();
+    const meta = await createRun(baseMeta(["a.ts"]), d);
+    await startReview({ runId: meta.runId, files: ["a.ts"] }, d, "rs");
+    // The orchestrator's retry finished the file while "rs" was still alive.
+    await writeFileReview(meta.runId, result("a.ts"), "# a", d);
+    for (let i = 0; i < MAX_RESUMES; i++) await onSessionIdle("rs");
+    const fin = await onSessionIdle("rs");
+    expect(fin?.text).toContain("partial review was discarded");
+    const results = readRunResults(meta.runId, d);
+    expect(results[0].partial).toBe(false);
+    expect(results[0].findings).toHaveLength(1);
   });
 });
 

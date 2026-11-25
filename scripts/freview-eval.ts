@@ -10,6 +10,8 @@
  */
 import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { runDir } from "../src/core/review/pipeline/artifact";
+import { unfinishedRuns } from "../src/core/review/pipeline/run-store";
 
 const SEVERITY_RANK: Record<string, number> = { blocker: 0, major: 1, minor: 2, nit: 3 };
 const LINE_TOLERANCE = 3;
@@ -182,7 +184,17 @@ export function scoreControlCase(rows: FindingRow[]): boolean {
   return !rows.some((r) => r.category !== "tests" && SEVERITY_RANK[r.severity] <= SEVERITY_RANK.minor);
 }
 
+/** 앞 케이스가 중단·실패로 남긴 미완료 run을 지운다. 쌓이면 plan 상한에 걸리고,
+ * 모델이 그 run을 finalize해 다른 케이스 리포트를 덮어쓴 일이 있었다(case-80→78). */
+export function clearUnfinishedRuns(target: string): string[] {
+  const ids = unfinishedRuns(target).map((run) => run.runId);
+  for (const id of ids) rmSync(runDir(id, target), { recursive: true, force: true });
+  return ids;
+}
+
 function runFReview(target: string, c: EvalCase, mode: "whole" | "diff", report: string, model?: string): void {
+  const cleared = clearUnfinishedRuns(target);
+  if (cleared.length) console.log(`(미완료 run ${cleared.length}개 정리: ${cleared.join(", ")})`);
   rmSync(join(target, report), { force: true });
   mkdirSync(join(target, ".fico/eval/f-review"), { recursive: true });
   const reviewArgs = mode === "whole" ? `--files=${c.file} --whole` : c.commit;

@@ -20,7 +20,7 @@ import { REQUIRED_CATEGORIES, SubmitSchema, coverage, degenerateReason, fixAddsT
 
 import { resolveOutputPath, writeReport, renderReport } from "../report/output";
 import { writeFileReview } from "./run-store";
-import { type FileReviewResult } from "./artifact";
+import { readFileReviewResult, resultUnit, type FileReviewResult } from "./artifact";
 
 import { getState, clearState, currentFile, isDone, rotateSubmitToken, type ReviewState } from "./state";
 import { fileRead, renderFileContent, sanitizeFindingLines, MAX_ITER } from "../tools/read";
@@ -472,6 +472,18 @@ async function writeRunReview(
         "",
       ].join("\n")
     : "";
+  // A cut-off session (a failed subagent the watchdog finalizes late) must not
+  // replace the complete review a retried subagent already saved — that wiped
+  // a finished review to "0 findings / INCOMPLETE" and reopened the run.
+  const existing = partial ? readFileReviewResult(st.runId!, resultUnit(result), st.cwd) : null;
+  if (existing && !existing.partial) {
+    st.active = false;
+    clearState(sessionId);
+    return (
+      `ℹ️ ${target} already has a complete review in run ${st.runId}; this cut-off session's ` +
+      `partial review was discarded.\nThis subagent's task is COMPLETE. Do not review any other file.`
+    );
+  }
   const md = `${renderReport({ [file]: merged }, `run ${st.runId} · ${st.label}`, st.language)}${quality}`;
   const path = await writeFileReview(st.runId!, result, md, st.cwd);
   st.active = false;

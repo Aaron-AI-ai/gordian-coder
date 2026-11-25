@@ -53,6 +53,7 @@ export const ReviewConfigSchema = z.object({
   fcqOptions: field(z.record(z.unknown())), // fcq CLI options (see fcq.ts FcqOptionsSchema)
   fcqFix: field(z.boolean()), // make reviewers write a TO-BE fix for EVERY fcq hit, not just CRITICAL/MAJOR
   wikiKb: field(z.record(WikiKbSourceSchema)), // name -> git wiki to mirror into the KB (see kb-sync.ts)
+  exploreDeny: field(z.array(z.string())), // extra paths (dir prefix or glob) review/f-log exploration tools must never read, e.g. eval answer keys
 });
 export type ReviewConfig = z.infer<typeof ReviewConfigSchema>;
 

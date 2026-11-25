@@ -13,6 +13,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, basename, resolve, sep } from "node:path";
 import type { Finding } from "../contract";
+import { loadConfig } from "../config";
 
 export const FILE_READ_MAX_LINES = 500;
 export const FILE_READ_MAX_CHARS = 16_000;
@@ -148,6 +149,53 @@ function walk(dir: string, base: string, out: string[]): void {
   }
 }
 
+// ── exploration deny list ────────────────────────────────────────
+
+/** Plugin output that piles up inside the project and is never source: past
+ * reports, eval reports, run artifacts. A reviewer that reads them copies an
+ * old verdict instead of reviewing the code (seen in 26/37 eval subagents). */
+export const DEFAULT_EXPLORE_DENY = [".fico/report", ".fico/eval", ".fico/f-review", ".fico/f-log"];
+
+function repoRel(cwd: string, path: string): string {
+  const p = path.replaceAll("\\", "/");
+  const rel = p.startsWith("/") ? relative(cwd, p).replaceAll("\\", "/") : p;
+  return rel.replace(/^(\.\/)+/, "");
+}
+
+/** Predicate: is `path` hidden from exploration tools? Defaults, plus the
+ * configured report `output`, plus config `exploreDeny` (dir prefix or glob). */
+export function exploreDenied(cwd: string): (path: string) => boolean {
+  const config = loadConfig(cwd);
+  const entries = [...DEFAULT_EXPLORE_DENY, ...(config.output ? [config.output] : []), ...(config.exploreDeny ?? [])];
+  const globs = entries.filter((e) => e.includes("*")).map((e) => new Bun.Glob(e));
+  const dirs = entries.filter((e) => !e.includes("*")).map((e) => repoRel(cwd, e).replace(/\/+$/, ""));
+  return (path) => {
+    const p = repoRel(cwd, path);
+    return dirs.some((d) => d && (p === d || p.startsWith(`${d}/`))) || globs.some((g) => g.match(p));
+  };
+}
+
+/** The deny-listed dir prefix a free-form host-tool argument (a bash command,
+ * a grep path) names, if any. Glob entries are not matched here. */
+export function mentionedDeniedPath(cwd: string, text: string): string | undefined {
+  const config = loadConfig(cwd);
+  const entries = [...DEFAULT_EXPLORE_DENY, ...(config.output ? [config.output] : []), ...(config.exploreDeny ?? [])];
+  const t = text.replaceAll("\\", "/");
+  return entries
+    .filter((e) => !e.includes("*"))
+    .map((e) => repoRel(cwd, e).replace(/\/+$/, ""))
+    // Path-boundary match: entry "eval" must hit "eval/x" or "./eval", never "evaluate".
+    .find((d) => d && new RegExp(`(?:^|[\\s"'=:(/])${d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:/|$|[\\s"')])`).test(t));
+}
+
+export function deniedReadMessage(path: string): string {
+  return (
+    `⛔ Access denied: ${path} is a generated review/evaluation artifact (report, eval result, ` +
+    `run data, or answer key), not project source. It is blocked for review tools — do NOT retry ` +
+    `it or search for it another way; review the code itself.`
+  );
+}
+
 /** List candidate files for the current mode. */
 export function listFilesAt(cwd: string, ref: string | null): string[] {
   if (ref && isGitRepo(cwd)) {
@@ -263,6 +311,7 @@ export function fileRead(
   end_line?: number,
   maxLines = FILE_READ_MAX_LINES
 ): string {
+  if (exploreDenied(cwd)(file_path)) return deniedReadMessage(file_path);
   const content = readFileAt(cwd, ref, file_path);
   if (content === null)
     return (
@@ -306,7 +355,9 @@ export function fileFind(
   // files (README, CHANGELOG, Jenkinsfile, Dockerfile, …) must be findable.
   const needle = case_sensitive ? query_name : query_name.toLowerCase();
   const hits: string[] = [];
+  const denied = exploreDenied(cwd);
   for (const f of listFilesAt(cwd, ref)) {
+    if (denied(f)) continue;
     const name = case_sensitive ? basename(f) : basename(f).toLowerCase();
     if (name.includes(needle)) hits.push(f);
     if (hits.length >= FILE_FIND_MAX_COUNT) break;
@@ -331,6 +382,7 @@ export function codeSearch(
 ): string {
   const raw = grepAt(cwd, ref, search_text, file_patterns, case_sensitive, use_perl_regexp);
   const byFile = new Map<string, string[]>();
+  const denied = exploreDenied(cwd);
   let total = 0;
 
   for (const line of raw.split("\n")) {
@@ -340,6 +392,7 @@ export function codeSearch(
     const m = /^(.+?):(\d+):(.*)$/.exec(s);
     if (!m) continue;
     const path = m[1].replace(/^\.\//, "");
+    if (denied(path)) continue;
     const arr = byFile.get(path) ?? [];
     arr.push(`${m[2]}|${m[3]}`);
     byFile.set(path, arr);
