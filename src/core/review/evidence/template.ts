@@ -37,6 +37,14 @@ When a general convention conflicts with a Framework Rule above, the Framework
 Rule wins; never suggest a change that violates it. Always assess the
 "framework" category and report any framework-convention violation.
 
+Category rule: a finding whose basis is a Framework Rule above or a
+\`kb_search\` result gets category "framework", even when its effect looks like
+correctness, performance or maintainability (an NPE, a forced rollback, a
+leak, a deprecated API). Express the impact through severity, not category.
+A defect inside test code that weakens what the test verifies (a swallowed
+assertion failure, a missing or always-true assertion, a test that cannot
+fail) gets category "tests", not "correctness".
+
 ### Related Code and Change History
 The <review_evidence> block is collected deterministically to help you review
 dependencies, callers, tests, and regression risk even with limited reasoning.
