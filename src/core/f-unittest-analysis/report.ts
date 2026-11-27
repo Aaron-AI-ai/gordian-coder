@@ -27,7 +27,21 @@ export interface ReportData {
   failures: FailedTest[];
   /** Overall JaCoCo line/branch totals for the run, or null when coverage could not be measured. */
   coverage: OverallCoverage | null;
+  /** Absolute run (work) directory: its jacoco.xml and jacoco-html/ are copied next to the report. */
+  runDir: string;
   startedAt: number;
+}
+
+/** JaCoCo's own HTML report, next to report.md (same layout as f-unit-test-code's report directory). */
+const JACOCO_HTML = "jacoco-html/index.html";
+
+/** Copies jacoco.xml and jacoco-html/ from the run directory into the report directory; true when the HTML is there. */
+function copyJacoco(runDir: string, reportDir: string): boolean {
+  for (const name of ["jacoco.xml", "jacoco-html"]) {
+    const from = path.join(runDir, name);
+    if (fs.existsSync(from)) fs.cpSync(from, path.join(reportDir, name), { recursive: true });
+  }
+  return fs.existsSync(path.join(reportDir, JACOCO_HTML));
 }
 
 const STATUS = { passed: "통과", failed: "단언 실패", error: "예외", skipped: "건너뜀" } as const;
@@ -78,7 +92,7 @@ function fileRow(cls: string, ts: TestRun["tests"]): { name: string; passed: num
   return { name: `${cls.split(".").pop()}.java`, passed: ts.filter((t) => t.status === "passed").length, bad: ts.filter((t) => t.status === "failed" || t.status === "error").length, skipped: ts.filter((t) => t.status === "skipped").length };
 }
 
-function renderHtml(d: ReportData, end: Date): string {
+function renderHtml(d: ReportData, end: Date, jacocoHtml: boolean): string {
   const r = d.run;
   const bad = r.failed + r.errored;
   const byCls = [...byClass(r)];
@@ -116,6 +130,10 @@ function renderHtml(d: ReportData, end: Date): string {
           .map((f) => `<tr><td><code>${esc(f.cls.split(".").pop()!)}.${esc(f.method)}</code></td><td>${f.kind === "error" ? "예외" : "단언 실패"}</td><td>${esc(describeFailure(f))}</td><td>${esc(f.frame || "-")}</td></tr>`)
           .join("")}</table></div></section>`
       : "";
+  const link = jacocoHtml ? `<p><a href="${JACOCO_HTML}">줄별 상세 (JaCoCo HTML)</a></p>` : "";
+  const coverageHtml = d.coverage
+    ? `<div class="card"><table class="t"><tr><th>대상</th><th class="num">라인</th><th class="num">분기</th></tr><tr><td>전체 (모듈 ${esc(d.module)})</td><td class="num">${pct(d.coverage.line)}</td><td class="num">${pct(d.coverage.branch)}</td></tr></table>${link}</div>`
+    : `<div class="card">측정 결과 없음${link}</div>`;
   const skipped = r.tests.filter((t) => t.status === "skipped");
   const attention = skipped.length > 0 ? `<section class="step" id="check"><h2><span class="no">!</span>확인 필요</h2><div class="card"><ul>${skipped.map((t) => `<li>건너뜀: ${esc(t.cls.split(".").pop()!)}.${esc(t.method)}</li>`).join("")}</ul></div></section>` : "";
   const v = verdictOf(r);
@@ -127,10 +145,11 @@ function renderHtml(d: ReportData, end: Date): string {
     RUNINFO: `<dl class="runinfo">${info}</dl>`,
     VERDICT: `<div class="verdict ${verdict}"><div class="head"><span class="badge ${verdict}">${v}</span></div><p class="cause">${v === "SKIP" ? ALL_SKIPPED(r) : `전체 ${r.total}개 중 통과 ${r.passed}${bad > 0 ? `, 실패 ${bad}` : ""} (건너뜀 ${r.skipped})`}</p></div>`,
     STATS: stats,
-    TOC: `<a href="#input">실행 입력</a><a href="#files">실행한 파일</a><a href="#tests">상세 결과</a>${d.failures.length > 0 ? '<a href="#failures">실패 내역</a>' : ""}${attention ? '<a href="#check">확인 필요</a>' : ""}`,
+    TOC: `<a href="#input">실행 입력</a><a href="#files">실행한 파일</a><a href="#tests">상세 결과</a><a href="#coverage">커버리지</a>${d.failures.length > 0 ? '<a href="#failures">실패 내역</a>' : ""}${attention ? '<a href="#check">확인 필요</a>' : ""}`,
     INPUT: inputHtml,
     FILES: filesHtml,
     TESTS: tests,
+    COVERAGE: coverageHtml,
     ATTENTION: [failuresHtml, attention].filter(Boolean).join("\n"),
     APPENDIX: "",
     FOOTER: "f-unittest-analysis · report.md와 같은 내용",
@@ -142,6 +161,7 @@ export function writeReport(d: ReportData): string {
   const rel = `${REPORT_DIR}/report-${localFileStamp()}`;
   const dir = path.join(d.cwd, rel);
   fs.mkdirSync(dir, { recursive: true });
+  const jacocoHtml = copyJacoco(d.runDir, dir);
   const end = new Date();
   const r = d.run;
   const bad = r.failed + r.errored;
@@ -153,7 +173,7 @@ export function writeReport(d: ReportData): string {
     verdictOf(r) === "SKIP"
       ? `- 결과: SKIP · ${ALL_SKIPPED(r)} (${secs(r.seconds)}초)`
       : `- 결과: ${bad > 0 ? "FAIL" : "PASS"} · 전체 ${r.total}개 중 통과 ${r.passed}${bad > 0 ? `, 실패 ${bad}` : ""} (건너뜀 ${r.skipped}, ${secs(r.seconds)}초)`,
-    `- 커버리지: 라인 ${d.coverage ? pct(d.coverage.line) : "-"}, 분기 ${d.coverage ? pct(d.coverage.branch) : "-"}`,
+    `- 커버리지: 라인 ${d.coverage ? pct(d.coverage.line) : "-"}, 분기 ${d.coverage ? pct(d.coverage.branch) : "-"}${jacocoHtml ? ` · [JaCoCo HTML](${JACOCO_HTML})` : ""}`,
     "",
     "## 실행 입력",
     ...input(d).map(([k, v]) => `- ${k}: ${v}`),
@@ -170,8 +190,12 @@ export function writeReport(d: ReportData): string {
     ...(d.failures.length > 0
       ? ["## 실패 내역", "", "| 테스트 | 종류 | 원인 | 위치 |", "|---|---|---|---|", ...d.failures.map((f) => `| ${cell(`${f.cls.split(".").pop()}.${f.method}`)} | ${f.kind === "error" ? "예외" : "단언 실패"} | ${cell(describeFailure(f))} | ${f.frame || "-"} |`), ""]
       : []),
+    "## 커버리지",
+    ...(d.coverage ? ["| 대상 | 라인 | 분기 |", "|---|---|---|", `| 전체 (모듈 ${d.module}) | ${pct(d.coverage.line)} | ${pct(d.coverage.branch)} |`] : ["측정 결과 없음"]),
+    ...(jacocoHtml ? ["", `줄별 상세: [JaCoCo HTML](${JACOCO_HTML})`] : []),
+    "",
   ].join("\n");
   fs.writeFileSync(path.join(dir, "report.md"), body, "utf-8");
-  fs.writeFileSync(path.join(dir, "report.html"), renderHtml(d, end), "utf-8");
+  fs.writeFileSync(path.join(dir, "report.html"), renderHtml(d, end, jacocoHtml), "utf-8");
   return `${rel}/report.md`;
 }

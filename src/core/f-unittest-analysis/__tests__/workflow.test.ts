@@ -137,6 +137,28 @@ describe("execute", () => {
     expect(out).toContain("dependency/network");
     expect(session().stage).toBe("execute");
   });
+  test("JaCoCo xml/html are copied next to the report and linked from report.md and report.html", () => {
+    const dir = session().runDir!;
+    put(`${dir}/jacoco.xml`, `<report name="x"><counter type="LINE" missed="1" covered="3"/><counter type="BRANCH" missed="0" covered="2"/></report>`);
+    put(`${dir}/jacoco-html/index.html`, "<html>jacoco</html>");
+    ran({ compile: "ok", log: "", tests: "run" }, ok);
+    completeStage(SID, { stage: "execute" });
+    const reportFile = (session().outcome as { reportFile: string }).reportFile;
+    const reportDir = path.join(root, path.dirname(reportFile));
+    expect(fs.readFileSync(path.join(reportDir, "jacoco-html/index.html"), "utf-8")).toContain("jacoco");
+    expect(fs.existsSync(path.join(reportDir, "jacoco.xml"))).toBe(true);
+    expect(fs.readFileSync(path.join(root, reportFile), "utf-8")).toContain("줄별 상세: [JaCoCo HTML](jacoco-html/index.html)");
+    const html = fs.readFileSync(path.join(reportDir, "report.html"), "utf-8");
+    expect(html).toContain('<a href="jacoco-html/index.html">줄별 상세 (JaCoCo HTML)</a>');
+    expect(html).toContain('<a href="#coverage">커버리지</a>');
+  });
+  test("without JaCoCo output the report has no JaCoCo link", () => {
+    ran({ compile: "ok", log: "", tests: "run" }, ok);
+    completeStage(SID, { stage: "execute" });
+    const reportFile = (session().outcome as { reportFile: string }).reportFile;
+    expect(fs.readFileSync(path.join(root, reportFile), "utf-8")).not.toContain("JaCoCo HTML");
+    expect(fs.readFileSync(path.join(root, reportFile.replace(/\.md$/, ".html")), "utf-8")).toContain("측정 결과 없음");
+  });
   test("an all-skipped run is SKIP, not 통과", () => {
     ran({ compile: "ok", log: "", tests: "run" }, `<testcase name="a()" classname="x.PayTest" time="0"><skipped/></testcase>`);
     const out = completeStage(SID, { stage: "execute" });

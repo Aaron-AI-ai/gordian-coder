@@ -293,6 +293,7 @@ function completeExecute(session: AnalysisSession): string {
     run,
     failures,
     coverage: xml ? readTargetCoverage(xml, run.tests.map((t) => t.cls)) : null,
+    runDir: dir,
     startedAt: session.startedAt,
   });
   const scriptWarn = reportScriptWarning(fs.readFileSync(path.join(session.cwd, reportFile), "utf-8"), REPLY_LANGUAGE) || undefined;

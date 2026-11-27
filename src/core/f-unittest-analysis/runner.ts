@@ -1,6 +1,6 @@
 /**
  * Runs the module's tests with Gradle from the plugin itself (no shell script): build, then test. Same on
- * Windows and Linux/macOS. Leaves status.json, gradle.log and test-results/ in `outDir`, and reports short
+ * Windows and Linux/macOS. Leaves status.json, gradle.log, test-results/ and (best-effort) jacoco.xml and jacoco-html/ in `outDir`, and reports short
  * progress texts (stage, elapsed time, finished test classes) while it works.
  */
 
@@ -83,7 +83,7 @@ export async function runTests(req: RunRequest): Promise<void> {
   const resultsDir = path.join(req.cwd, mdir, "build/test-results/test");
   const logFile = path.join(req.outDir, "gradle.log");
   fs.mkdirSync(req.outDir, { recursive: true });
-  for (const stale of ["status.json", "test-results"]) fs.rmSync(path.join(req.outDir, stale), { recursive: true, force: true });
+  for (const stale of ["status.json", "test-results", "jacoco.xml", "jacoco-html"]) fs.rmSync(path.join(req.outDir, stale), { recursive: true, force: true });
   fs.writeFileSync(logFile, "");
 
   const startedAt = Date.now();
@@ -181,7 +181,7 @@ export async function runTests(req: RunRequest): Promise<void> {
   }
 }
 
-/** Converts jacoco.exec to jacoco.xml in outDir, best-effort: no java/classes/exec, or a failed cli run, just
+/** Converts jacoco.exec to jacoco.xml and JaCoCo's own HTML (jacoco-html/) in outDir, best-effort: no java/classes/exec, or a failed cli run, just
  * leaves the file absent (the report then shows no coverage; it never affects the test verdict). */
 async function writeCoverageXml(req: RunRequest, execFile: string, mdir: string, platform: NodeJS.Platform): Promise<void> {
   const classesDir = path.join(req.cwd, mdir, "build/classes/java/main");
@@ -192,13 +192,13 @@ async function writeCoverageXml(req: RunRequest, execFile: string, mdir: string,
   const code = await new Promise<number>((resolve) => {
     const child = spawn(
       javaBin,
-      ["-jar", path.join(JACOCO_TOOLS(), "jacococli.jar"), "report", execFile, "--classfiles", classesDir, "--sourcefiles", path.join(req.cwd, mdir, "src/main/java"), "--xml", xmlOut],
+      ["-jar", path.join(JACOCO_TOOLS(), "jacococli.jar"), "report", execFile, "--classfiles", classesDir, "--sourcefiles", path.join(req.cwd, mdir, "src/main/java"), "--xml", xmlOut, "--html", path.join(req.outDir, "jacoco-html")],
       { stdio: ["ignore", "ignore", "ignore"], windowsHide: true },
     );
     child.on("error", () => resolve(-1));
     child.on("close", (c) => resolve(c ?? -1));
   });
-  if (code !== 0) fs.rmSync(xmlOut, { force: true });
+  if (code !== 0) for (const f of [xmlOut, path.join(req.outDir, "jacoco-html")]) fs.rmSync(f, { recursive: true, force: true });
 }
 
 /** Raw jacoco.xml text if `runTests` produced one in outDir, else null. */
