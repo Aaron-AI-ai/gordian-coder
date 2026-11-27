@@ -84,6 +84,12 @@ describe("flog-eval", () => {
     expect(score(either, md).exception).toBe(true);
   });
 
+  // Writing "NPE" for NullPointerException is a correct answer, not a miss.
+  test("exception accepts the class-name acronym as a whole word", () => {
+    expect(score(CASE, REPORT.replaceAll("NullPointerException", "helpful NPE")).exception).toBe(true);
+    expect(score(CASE, REPORT.replaceAll("NullPointerException", "snpex")).exception).toBe(false);
+  });
+
   // fix_code alone only proves a code block exists; fix_code_any pins what the fix must say.
   test("fix_code_any requires one expected fragment inside a fix-section code block, spacing and case ignored", () => {
     expect(score({ ...CASE, fix_code_any: ["if(row==NULL)"] }, REPORT).fix_code).toBe(true);
@@ -123,7 +129,7 @@ describe("flog-eval", () => {
   test("rule check passes when the case declares no rule; english headers are recognised", () => {
     const en = `## Summary\nNPE\n## Entry point → cause path\nTLABQ001Service.java tlabq001\n## Cause and evidence\nnull\n## Resolution\nadd a null check\n## Run info\n- rules: none\n`;
     const { rule, ...rest } = CASE;
-    expect(score(rest, en)).toEqual({ exception: false, cause_file: true, cause_symbol: true, fix: true, fix_code: false, fix_forbid: true, rule: true });
+    expect(score(rest, en)).toEqual({ exception: true, cause_file: true, cause_symbol: true, fix: true, fix_code: false, fix_forbid: true, rule: true });
   });
 
   test("matchesCaseSelector: comma-separated exact ids", () => {

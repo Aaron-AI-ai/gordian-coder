@@ -84,7 +84,13 @@ export function score(c: GoldenCase, md: string) {
   return {
     // FQCN(예: java.lang.NullPointerException) 또는 단순 클래스명(NullPointerException) 중 하나만
     // 있어도 통과 — 요약문은 보통 단순 클래스명만 쓴다.
-    exception: [c.exception].flat().some((e) => has(where, e) || has(where, e.split(".").pop()!)),
+    // 약어(NullPointerException → NPE)도 단어 단위로 인정한다 — 줄여 쓴 것은 오답이 아니다.
+    exception: [c.exception].flat().some((e) => {
+      const simple = e.split(".").pop()!;
+      const acronym = simple.replace(/[^A-Z]/g, "").toLowerCase();
+      return has(where, e) || has(where, simple)
+        || (acronym.length >= 3 && new RegExp(`(^|[^a-z])${acronym}([^a-z]|$)`).test(where));
+    }),
     cause_file: c.cause_files.some((f) => has(where, f) || has(where, basename(f))),
     cause_symbol: has(where, c.cause_symbol),
     fix: c.fix_keywords_any.some((k) => has(fix, k)),
