@@ -21,7 +21,7 @@ const plan = {
   module: MODULE,
   targets: [TARGET],
   files: [TEST_FILE],
-  cases: [{ target: TARGET, method: "m", normal: ["a", "b"], boundary: ["c"], exception: ["d"], mocks: [] }],
+  cases: [{ target: TARGET, method: "m", normal: ["a", "b"], boundary: [{ input: "c", expected: "c out" }], exception: ["d"], mocks: [] }],
 };
 
 let dir: string;

@@ -41,11 +41,17 @@ export const MTIME_SLACK_MS = 1000;
 
 export type StageId = "plan" | "execute" | "verify" | "report";
 
+/** A boundary case: the exact input and what the code must return or throw for it. */
+export interface BoundaryCase {
+  input: string;
+  expected: string;
+}
+
 export interface CaseDef {
   target: string;
   method: string;
   normal: string[];
-  boundary: string[];
+  boundary: BoundaryCase[];
   exception: string[];
   mocks: string[];
   skip_reason?: string;
@@ -146,11 +152,11 @@ export const STAGES: Record<StageId, Stage> = {
       'Pick the mode from the request: `--files <paths>` → "files"; `--program <ID>` → "program" (the Controller, Service and, if needed, In/Out VO whose class names start with the ID); no argument → "git" (working tree and staged changes against HEAD, or the last commit when there are none; read-only git commands are allowed in bash).',
       "Find the Gradle module of the targets (e.g. `on-stk-ord-online`) and check the Spring Boot version in the root build.gradle (below 3.4: @MockBean instead of @MockitoBean).",
       `If a required input is missing or cannot be settled from the request and the project, ASK THE USER and END YOUR TURN before doing anything else; never guess and never put a placeholder in \`inputs\`. Required inputs: ${ASK_USER_WHEN}.`,
-      "For every public method of each target define cases: at least two normal, one boundary and one exception, plus the external classes to mock (other modules, Mappers, Redis, external API clients). A method that really needs no test gets `skip_reason` instead.",
+      "For every public method of each target define cases: at least two normal, one boundary and one exception, plus the external classes to mock (other modules, Mappers, Redis, external API clients). Each boundary case is `{ input, expected }` with the exact value(s) passed and the result or exception expected; for a comparison against a threshold give the threshold and threshold ±1 as separate boundary cases. A method that really needs no test gets `skip_reason` instead.",
       "A MyBatis Mapper interface (`@Mapper` from org.apache.ibatis, or a `*Mapper.java` interface in a mapper/mappers/repo/repository/dao/persistence package that does not use MapStruct) is tested against the real DB of the test profile, not mocked: give it its own case(s) covering every method, put the chosen test profile in the plan `note`, and list no mocks for it. If the project has several test profiles or none, ask the user which to use and END YOUR TURN. In --program mode include the Mappers the target Service uses in the same Gradle module; a Mapper of another module must be named with --files and its test goes in that module. Controller and Service tests still mock their Mappers. A class-level @Transactional rolls back only the default transaction manager: for a Mapper on a non-primary datasource the test must use `@Transactional(\"<transactionManager bean>\")`; read the bean name from the datasource config classes, put it in the plan `note`, and ask the user when it cannot be read. A bulk-delete method (`deleteAll`, `truncate*`) may get `skip_reason`.",
       "Test files go under the module's src/test/java in the target's package as `<ClassName>Test.java`; a test profile may go under src/test/resources. An existing test file is extended, never replaced: keep every existing @Test method.",
       "When the change under test alters behavior that an existing @Test asserts (typical in git mode: a threshold, a fee, an error code changed), that test will fail. Read the existing tests of each planned file against the new code, list every one this change breaks in `update_existing` = [{ file, test, reason }] (reason = what changed and the new expected value, e.g. \"age 45: 12000 → 11000, band 40 → 50\") and show the same list in the plan `note`. Only tests broken by this change go there; leave passing tests and old-format tests as they are. If you are not sure the change is intended (it could be a regression), say so in the note and let the user decide.",
-      `Write the plan for the user in your reply, in Korean (or the language the user wrote to you in); never switch to another language such as Chinese or Russian. Then call ${STAGE_TOOL} with stage "plan", the plan as \`note\` and \`inputs\` = { mode, module, targets, files, cases: [{ target, method, normal, boundary, exception, mocks, skip_reason? }], update_existing?: [{ file, test, reason }] } with project-relative paths. Once it is accepted, END YOUR TURN. Any further tool call while the plan waits is refused, and repeated calls stop the turn.`,
+      `Write the plan for the user in your reply, in Korean (or the language the user wrote to you in); never switch to another language such as Chinese or Russian. Then call ${STAGE_TOOL} with stage "plan", the plan as \`note\` and \`inputs\` = { mode, module, targets, files, cases: [{ target, method, normal, boundary: [{ input, expected }], exception, mocks, skip_reason? }], update_existing?: [{ file, test, reason }] } with project-relative paths. Once it is accepted, END YOUR TURN. Any further tool call while the plan waits is refused, and repeated calls stop the turn.`,
       `After the user approves, call ${STAGE_TOOL} with ONLY stage "plan" and user_approved=true (no note, no inputs: any change to them is a new plan that needs a new approval). If they ask for changes, submit a new \`note\` and \`inputs\` and ask again.`,
     ],
     tools: ["skill", "read", "glob", "grep", "bash (read-only git only)"],
@@ -352,6 +358,15 @@ export function noteToolResult(sessionId: string, tool: string, args: Record<str
 export const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : []);
 export const paths = (v: unknown): string[] => strings(v).map(slash).filter(Boolean);
 export const filled = (v: unknown): number => strings(v).filter((s) => s.trim()).length;
+/** Boundary items as {input, expected}; a bare string becomes the input with no expected, so the plan check can say what is missing. */
+const boundaries = (v: unknown): BoundaryCase[] =>
+  (Array.isArray(v) ? v : []).map((b) =>
+    typeof b === "string"
+      ? { input: b.trim(), expected: "" }
+      : { input: typeof b?.input === "string" ? b.input.trim() : "", expected: typeof b?.expected === "string" ? b.expected.trim() : "" },
+  );
+/** One line for a boundary case, used in the report. */
+export const boundaryText = (b: BoundaryCase): string => (b.expected ? `${b.input} → ${b.expected}` : b.input);
 
 function normalizeInputs(raw: Partial<PlanInputs>, cwd: string): PlanInputs {
   const rel = (p: string): string => toRelative(cwd, p);
@@ -365,7 +380,7 @@ function normalizeInputs(raw: Partial<PlanInputs>, cwd: string): PlanInputs {
       target: typeof c?.target === "string" ? rel(c.target) : "",
       method: typeof c?.method === "string" ? c.method : "",
       normal: strings(c?.normal),
-      boundary: strings(c?.boundary),
+      boundary: boundaries(c?.boundary),
       exception: strings(c?.exception),
       mocks: strings(c?.mocks),
     })),
@@ -415,7 +430,10 @@ function planProblems(p: PlanInputs, cwd: string, raw: Partial<PlanInputs> = {})
     }
     if (c.skip_reason?.trim()) continue;
     if (filled(c.normal) < 2) problems.push(`${where}: needs at least 2 normal cases`);
-    if (filled(c.boundary) < 1) problems.push(`${where}: needs at least 1 boundary case`);
+    if (c.boundary.length < 1) problems.push(`${where}: needs at least 1 boundary case`);
+    c.boundary.forEach((b, i) => {
+      if (!b.input || !b.expected) problems.push(`${where}: boundary ${i + 1} must be { input, expected } with both filled (the exact input value(s) and the expected result or exception)`);
+    });
     if (filled(c.exception) < 1) problems.push(`${where}: needs at least 1 exception case`);
   }
   for (const t of p.targets) if (!p.cases.some((c) => c.target === t)) problems.push(`cases: ${t} has no case (or skip_reason)`);

@@ -53,7 +53,7 @@ function okPlan(): PlanInputs {
         target: TARGET,
         method: "inquire",
         normal: ["single account", "several accounts"],
-        boundary: ["account number of max length"],
+        boundary: [{ input: "account number of max length", expected: "account returned" }],
         exception: ["AccountBSM throws PBOnlineException"],
         mocks: ["AccountBSM"],
       },
@@ -162,6 +162,29 @@ describe("plan", () => {
     expect(out).toContain("normal");
     expect(out).toContain("exception");
     expect(session().plan).toBeUndefined();
+  });
+
+  test("a boundary case must be { input, expected } with both filled", () => {
+    const plan = okPlan() as unknown as { cases: Array<{ boundary: unknown[] }> };
+    plan.cases[0]!.boundary = ["only a sentence", { input: "amount=1000000", expected: "" }];
+    const out = done({ stage: "plan", note: "p", inputs: plan as never });
+    expect(out).toStartWith("Rejected:");
+    expect(out).toContain("boundary 1 must be { input, expected }");
+    expect(out).toContain("boundary 2 must be { input, expected }");
+    expect(session().plan).toBeUndefined();
+  });
+
+  test("structured boundary cases are accepted and kept in the plan inputs", () => {
+    const plan = okPlan();
+    plan.cases[0]!.boundary = [
+      { input: " amount=1000000 ", expected: "grade B" },
+      { input: "amount=1000001", expected: "grade C" },
+    ];
+    expect(done({ stage: "plan", note: "p", inputs: plan })).not.toStartWith("Rejected:");
+    expect(session().inputs!.cases[0]!.boundary).toEqual([
+      { input: "amount=1000000", expected: "grade B" },
+      { input: "amount=1000001", expected: "grade C" },
+    ]);
   });
 
   test("plan guide tells the model to ask the user when a required input is missing", () => {
@@ -580,7 +603,7 @@ describe("verify", () => {
     const report = fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8");
     expect(report).toContain(`파일: ${TEST_FILE}`); // the eval checker looks for the test file name
     expect(report).toMatch(/\| inquire_normal2 \| 정상 \| several accounts \|/);
-    expect(report).toMatch(/\| inquire_boundary \| 경계값 \| account number of max length \|/);
+    expect(report).toMatch(/\| inquire_boundary \| 경계값 \| account number of max length → account returned \|/);
     expect(report).toMatch(/작업 일시: \d{4}-\d\d-\d\d \d\d:\d\d:\d\d ~ \d\d:\d\d:\d\d \(/);
     expect(report).toMatch(/\| inquire_exception \| 예외 \| AccountBSM throws PBOnlineException \|/);
   });
@@ -900,7 +923,7 @@ ${calls.slice(1).map((c, i) => `  @Test void b${i}_normal2() { assertEquals(1, m
     target: MAPPER,
     method: "all",
     normal: ["a", "b"],
-    boundary: ["c"],
+    boundary: [{ input: "c", expected: "c out" }],
     exception: ["d"],
     mocks: [] as string[],
   };
@@ -1089,7 +1112,7 @@ describe("approval call that changes the plan", () => {
     expect(done({ stage: "plan", note: "the plan", inputs: okPlan() })).toContain("Plan recorded");
     noteUserMessage(SID, Date.now() + 1);
     const changed = okPlan();
-    changed.cases[0]!.boundary = ["a different wording"];
+    changed.cases[0]!.boundary = [{ input: "a different wording", expected: "x" }];
     const out = done({ stage: "plan", note: "the plan", inputs: changed, user_approved: true });
     expect(out).toContain("NEW plan");
     expect(out).toContain("ONLY stage");

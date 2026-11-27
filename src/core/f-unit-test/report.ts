@@ -6,7 +6,7 @@ import { localFileStamp, localTimestamp } from "../time";
 import { esc, fill } from "../review/report/html";
 import TEMPLATE_HTML from "./report.template.html" with { type: "text" };
 import { isFullyCovered, type FailedTest } from "./coverage";
-import { MAX_COVERAGE_ROUNDS, MAX_FIX_RETRIES, REPORT_DIR, interfaceTargets, measuredTargets, verifyCommand, type FutSession, type Verification } from "./workflow";
+import { MAX_COVERAGE_ROUNDS, MAX_FIX_RETRIES, REPORT_DIR, boundaryText, interfaceTargets, measuredTargets, verifyCommand, type FutSession, type Verification } from "./workflow";
 
 const TEMPLATE = TEMPLATE_HTML as unknown as string;
 
@@ -103,7 +103,7 @@ function describeTest(session: FutSession, cls: string, method: string): { kind:
   const [, name, kind, num] = m as unknown as [string, string, "normal" | "boundary" | "exception", string];
   const cases = (session.inputs?.cases ?? []).filter((c) => c.method === name);
   const plan = cases.find((c) => `${path.posix.basename(c.target, ".java")}Test` === cls) ?? cases[0];
-  const items = plan?.[kind] ?? [];
+  const items = kind === "boundary" ? (plan?.boundary ?? []).map(boundaryText) : plan?.[kind] ?? [];
   const label = `${kind}${num || (kind === "normal" ? "1" : "")}`;
   const hit = items.find((i) => i.startsWith(`${label}:`)) ?? items[(num ? Number(num) : 1) - 1];
   // 모델이 항목 앞에 "normal1:" 또는 테스트 이름을 붙이면 뗀다: "bonus_boundary (기존 유지: ...)" → "기존 유지: ..."

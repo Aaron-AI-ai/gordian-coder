@@ -44,7 +44,10 @@ export function createFUnitTestModule(input: PluginInput): OpenCodeModule {
                     target: z.string(),
                     method: z.string(),
                     normal: strs().optional(),
-                    boundary: strs().optional(),
+                    boundary: z
+                      .array(z.union([z.object({ input: z.string(), expected: z.string() }), z.string()]))
+                      .optional()
+                      .describe("Boundary cases as { input, expected }: the exact input value(s) and the expected result or exception"),
                     exception: strs().optional(),
                     mocks: strs().optional().describe("Class names to mock (simple or fully qualified), nothing else"),
                     skip_reason: z.string().optional().describe("Instead of cases: why this method needs no test"),
