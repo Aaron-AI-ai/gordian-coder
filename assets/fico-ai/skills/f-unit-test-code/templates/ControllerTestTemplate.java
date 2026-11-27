@@ -2,7 +2,7 @@ package {PackagePath};
 
 // 예제: SONAQ001Controller(POST /ON/SONAQ001) 기준. 대상 클래스의 실제 import·메서드로 바꿔 쓴다.
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
@@ -10,7 +10,6 @@ import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
 
-import kr.co.koscom.pb.framework.site.ext.exception.PBOnlineException;
 import kr.co.koscom.pb.framework.site.ext.model.fixed.PBFixedHeader;
 import kr.co.koscom.pb.framework.site.ext.model.fixed.PBRequest;
 import kr.co.koscom.pb.framework.site.ext.model.fixed.PBResponse;
@@ -33,6 +32,10 @@ import org.springframework.transaction.annotation.Transactional;
  * {TargetClass} 단위 테스트.
  * Controller와 그 아래 같은 모듈 Service는 실제 빈이고, Service가 쓰는 BSM(다른 모듈)만 @MockitoBean이다.
  * 컨트롤러 메서드를 직접 호출해 요청 -> 응답을 검증한다.
+ * 프록시 호출이라 프레임워크 Aspect가 감싼다(형식 규칙 "Controller 테스트: 프레임워크 Aspect").
+ * 이 예제는 PBExceptionHandlerAspect가 켜진 프로젝트(scanBasePackages에 "kr.co.koscom.pb") 기준이다:
+ * 예외는 Controller 밖으로 나오지 않고 오류 응답(data null, 헤더 msgCode)으로 반환된다.
+ * 꺼진 프로젝트라면 예외 케이스를 assertThrows(PBOnlineException.class, ...)로 단언한다.
  */
 @SpringBootTest // 컨텍스트를 띄워 Controller·Service를 실제 빈으로 주입한다
 @Transactional // 테스트마다 롤백되어 상태가 남지 않는다
@@ -60,6 +63,7 @@ class {ClassName} {
         PBRequest<SONAQ001In> req = new PBRequest<>();
         req.setCommonHeader(new PBFixedHeader()); // PBResponse.success가 요청 헤더를 복사하므로 null이면 NPE
         req.setData(in);
+        // 페이징 대상이면 여기서 req.setFixedPagingInfo(paging)로 넣는다. 별도 객체를 saveToRequestScope()하면 Aspect가 덮어쓴다.
         return req;
     }
 
@@ -94,17 +98,37 @@ class {ClassName} {
         assertEquals(BigDecimal.ZERO, res.getData().getInner().getBalance());
     }
 
-    // 경계값: Service의 빈 문자열 검사 경계
+    // 경계값: 빈 계좌번호 — Service에 별도 검사가 없어 BSM 조회 결과 없음(1001) 오류 응답이 된다
     @Test
     void sonaq001_boundary() {
-        assertThrows(PBOnlineException.class, () -> target.sonaq001(request("")));
+        when(accountBSM.getAccount(any(AccountIn.class))).thenReturn(null);
+
+        PBResponse<SONAQ001Out> res = target.sonaq001(request(""));
+
+        assertNull(res.getData());
+        assertEquals("1001", res.getCommonHeader().getMsgCode());
     }
 
-    // 예외: BSM이 null을 돌려줄 때 Service가 던지는 PBOnlineException이 Controller를 통과해 나온다
+    // 예외: BSM이 null을 돌려주면 Service가 PBOnlineException(1001)을 던지고, Aspect가 오류 응답으로 바꿔 반환한다
     @Test
     void sonaq001_exception() {
         when(accountBSM.getAccount(any(AccountIn.class))).thenReturn(null);
 
-        assertThrows(PBOnlineException.class, () -> target.sonaq001(request("1234567890")));
+        PBResponse<SONAQ001Out> res = target.sonaq001(request("1234567890"));
+
+        assertNull(res.getData()); // assertThrows가 아니다: 예외는 Controller 밖으로 나오지 않는다
+        assertEquals("1001", res.getCommonHeader().getMsgCode());
+        verify(accountBSM).getAccount(any(AccountIn.class));
+    }
+
+    // 예외: BSM의 런타임 예외(DB 장애 등)는 CommonException이 아니라 기본 오류 코드 9000 응답이 된다
+    @Test
+    void sonaq001_exception2() {
+        when(accountBSM.getAccount(any(AccountIn.class))).thenThrow(new RuntimeException("db down"));
+
+        PBResponse<SONAQ001Out> res = target.sonaq001(request("1234567890"));
+
+        assertNull(res.getData());
+        assertEquals("9000", res.getCommonHeader().getMsgCode());
     }
 }

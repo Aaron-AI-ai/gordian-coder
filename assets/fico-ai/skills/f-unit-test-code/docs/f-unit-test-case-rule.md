@@ -22,7 +22,7 @@
 ## 클래스 종류별
 
 - **Service:** BSM·Mapper를 `@MockitoBean`으로 스텁해 `when(bsm.getAccount(any(AccountIn.class))).thenReturn(...)`. 반환 VO(`Out.getInner()`)의 값과 `verify(bsm)` 호출을 단언한다. 입력 검증 실패 시 BSM이 호출되지 않음(`never()`)도 확인한다.
-- **Controller:** Service는 실제 객체. `PBRequest<In>`를 만들어(`setData`, `setCommonHeader(new PBFixedHeader())`) 컨트롤러 메서드를 호출하고 `PBResponse.getData()`를 검증한다. 예외는 Service가 던진 `PBOnlineException`이 그대로 나오는지 본다.
+- **Controller:** Service는 실제 객체. `PBRequest<In>`를 만들어(`setData`, `setCommonHeader(new PBFixedHeader())`) 컨트롤러 메서드를 호출하고 `PBResponse.getData()`를 검증한다. 예외 케이스는 `PBExceptionHandlerAspect`가 켜져 있으면 반환된 오류 응답(`getData()`가 `null`, 헤더 `msgCode`)으로, 꺼져 있으면 Service가 던진 `PBOnlineException`이 그대로 나오는지(`assertThrows`)로 본다. 페이징 입력은 넘기는 `PBRequest`에 `setFixedPagingInfo`로 넣는다. 자세한 내용은 형식 규칙의 "Controller 테스트: 프레임워크 Aspect" 절을 따른다.
 - **Mapper:** mock 없이 실제 DB(프로필)를 조회한다. **Mapper 메서드마다** 아래 케이스를 만들고, 쓰기 케이스는 같은 테스트 안에서 다시 조회해 단언한다. 키는 `UT_` 접두어 + 유일 값. 예외 케이스는 `assertThrows`.
   - select: 정상 2건(서로 다른 키로 찾는 경우 / 목록·페이징 결과), 경계(결과 없음, 선택 파라미터 null, 페이징 첫/마지막 페이지), 예외(필수 파라미터 null 등 → `DataAccessException` 계열).
   - insert/update/delete: 정상 2건(영향 행 수 1 + 다시 조회해 값 확인 / 다른 컬럼 조합), 경계(최대 길이 값, 대상 없는 키의 update/delete가 0건), 예외(중복 키·NOT NULL 위반 → `DuplicateKeyException`/`DataIntegrityViolationException`).

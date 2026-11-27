@@ -27,6 +27,17 @@ describe("f-unit-test-code skill assets", () => {
     expect(src).toContain("{TargetClass}");
   });
 
+  test("Controller tests account for the framework aspects from the start", () => {
+    const fmt = read("docs/f-unit-test-format-rule.md");
+    for (const w of ["PBExceptionHandlerAspect", "scanBasePackages", "kr.co.koscom.pb.framework.site.ext", "\"9000\"", "FixedPagingPreprocessAspect", "setFixedPagingInfo", "FixedMyBatisQueryInterceptor", "setHasNextPage"]) {
+      expect(fmt).toContain(w);
+    }
+    const tpl = read("templates/ControllerTestTemplate.java");
+    expect(tpl).not.toMatch(/^\s*[^\s/*].*assertThrows\(/m); // only the Javadoc mentions it, for projects without the aspect
+    expect(tpl).toContain("getCommonHeader().getMsgCode()");
+    expect(tpl).toContain("setFixedPagingInfo");
+  });
+
   test("MapperTestTemplate.java hits the real DB: transactional, profile, real mapper, no mock", () => {
     const src = read("templates/MapperTestTemplate.java");
     for (const token of ["@SpringBootTest", "@ActiveProfiles", "@Transactional", "@Autowired", "@BeforeEach", "@AfterEach", "UT_"]) {

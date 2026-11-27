@@ -33,6 +33,21 @@
 - 생성자 주입(`@RequiredArgsConstructor`)이어도 `@MockitoBean`이 빈을 교체하므로 대상은 `@Autowired`로 받으면 된다.
 - mock의 반환값은 스텁한다. 스텁 없는 mock은 `null`/`0`을 돌려주므로 NPE를 점검한다.
 
+## Controller 테스트: 프레임워크 Aspect
+
+`@Autowired`로 받은 Controller는 프록시다. 테스트에서 메서드를 직접 불러도 프레임워크 Aspect가 실제 요청처럼 앞뒤를 감싼다. 계획 단계에서 아래를 확인해 케이스와 단언에 처음부터 반영하고, 확인 결과(켜짐/꺼짐과 근거)를 계획의 `note`에 적는다. 테스트가 실패한 뒤에 기대값을 고쳐 맞추지 않는다.
+
+1. **예외 → 오류 응답 (`PBExceptionHandlerAspect`, framework-site-ext).**
+   - **켜짐 판단:** 대상 모듈 앱 클래스의 `@SpringBootApplication(scanBasePackages = ...)`(속성이 없으면 앱 클래스의 패키지)가 `kr.co.koscom.pb.framework.site.ext`를 포함하면 켜진다. 예: `"kr.co.koscom.pb"`는 포함(켜짐), `"kr.co.koscom.pb.on.test.lab.unit"`처럼 업무 패키지만 나열하면 꺼짐.
+   - **켜졌을 때 동작:** 첫 파라미터가 `PBRequest`인 `@RestController` 메서드에서 나온 예외는 종류와 관계없이(`PBOnlineException`, `DataAccessException`, `RuntimeException` 모두) Aspect가 잡아서 오류 `PBResponse`를 **반환한다**. Controller 밖으로 예외가 나오지 않으므로 `assertThrows`는 실패한다.
+   - **켜졌을 때 예외 케이스 단언:** `assertNull(res.getData())`와 응답 헤더의 `res.getCommonHeader().getMsgCode()`로 본다. `CommonException` 계열(`PBOnlineException` 등)은 에러 코드가 숫자 4자리면 그 코드, 아니면 `"9000"`이다. 그 밖의 예외(DB 예외 등)는 항상 `"9000"`이다. 성공 응답은 `"0000"`이다. 예외를 일으킨 mock 호출은 `verify`로 확인한다.
+   - **꺼졌을 때:** Service가 던진 예외가 Controller를 그대로 통과하므로 `assertThrows`로 단언한다.
+   - Service 테스트는 Service를 직접 부르므로 이 Aspect와 관계없다. Service 예외는 항상 `assertThrows`로 본다.
+2. **요청 스코프 덮어쓰기 (`FixedPagingPreprocessAspect`, fico-fwk-extension, `kr.co.openlabs.fico` 스캔 시 켜짐).** Controller가 실행되기 전에 이 Aspect가 **Controller에 넘긴 `PBRequest` 인자**를 요청 스코프에 저장한다. 테스트에서 미리 `saveToRequestScope()`로 넣은 다른 요청 객체는 이때 덮어써져서 Service에 전달되지 않는다.
+   - 페이징·연속키 입력은 Controller에 넘기는 요청 객체 자체에 넣는다: `req.setFixedPagingInfo(paging)`. Controller 테스트에서 별도 `FixedRequest`를 만들어 `saveToRequestScope()`하지 않는다.
+   - 요청 헤더의 `contKey`는 비워 둔다. 값이 있으면 Aspect가 연속키 저장소에서 데이터를 읽으려 한다.
+3. **MyBatis 인터셉터가 돌지 않음.** Mapper를 mock하면 `FixedMyBatisQueryInterceptor`가 실행되지 않는다. 실제로는 인터셉터가 `FixedPagingInfo`의 `hasNextPage`와 연속키 값을 채우지만, mock에서는 기본값(`false`, `null`) 그대로 남는다. 다음 페이지 분기를 테스트하려면 Mapper 스텁(`thenAnswer`)에서 인자로 받은 `FixedPagingInfo`에 `setHasNextPage(true)` 등을 직접 설정한다. Service 테스트도 같다.
+
 ## 테스트 프로필
 
 위에서부터 처음 해당하는 것 하나만 쓴다.
