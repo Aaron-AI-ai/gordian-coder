@@ -154,7 +154,7 @@ function walk(dir: string, base: string, out: string[]): void {
 /** Plugin output that piles up inside the project and is never source: past
  * reports, eval reports, run artifacts. A reviewer that reads them copies an
  * old verdict instead of reviewing the code (seen in 26/37 eval subagents). */
-export const DEFAULT_EXPLORE_DENY = [".fico/report", ".fico/eval", ".fico/f-review", ".fico/f-log"];
+export const DEFAULT_EXPLORE_DENY = [".fico/report", ".fico/eval", ".fico/f-review", ".fico/f-log", ".fico/f-unittest"];
 
 function repoRel(cwd: string, path: string): string {
   const p = path.replaceAll("\\", "/");

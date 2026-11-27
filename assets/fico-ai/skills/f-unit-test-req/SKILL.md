@@ -23,6 +23,8 @@ This skill does NOT modify production code or the project's build files, and doe
 3. For every target method decide the cases per requirement item (normal 2, boundary, exception). Methods you skip need a `skip_reason`.
 4. If a required input is missing, ask the user and stop; never guess: no requirement given, a `--req-file` that does not exist, a `--program` the MCP cannot find, a missing skeleton class, an unclear Gradle module, a value the requirements do not give (error code, limit).
 
+The plugin saves each submitted plan to `.fico/f-unittest/runs/<id>/plan.md` (plan, `inputs` JSON, status, history). When you show the plan, give the user that path and how to answer: reply "승인", ask for changes in the chat, or edit the `inputs` JSON in the file and then reply "승인". On approval the plugin re-reads the file and the run follows it; work from that approved plan.
+
 ### 2. Implement with the templates
 1. Pick the template (`templates/ServiceTestTemplate.java`, `ControllerTestTemplate.java`, `MapperTestTemplate.java`), replace the placeholders and example code with the target's own. No placeholder may remain.
 2. Put the explanation in comments: class Javadoc with the requirement source, and the three-line `[요구사항] / [시나리오] / [기대]` comment above every `@Test` (see the case rule).

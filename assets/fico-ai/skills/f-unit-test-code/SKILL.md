@@ -25,6 +25,8 @@ This skill does NOT modify production code or the project's build files.
 3. For every target class decide the cases per method (normal 2, boundary, exception) following the case rule. Methods you skip need a `skip_reason`.
 4. If a required input is missing, ask the user and stop; never guess. That means: no target (no `--files`, no `--program`, and git shows no changed Java file), a `--program` ID that matches no Controller/Service class, a `--files` path that does not exist, a Gradle module that is unclear (targets in none or in several modules), case details you cannot derive from the code (for example which exception a branch should raise), or, for a Mapper target, a test profile that is unclear: the project has several (`test`, `test-oracle`, ...) and the request does not say which, or it has none (never invent an H2 profile). Put the chosen profile in the plan `note`.
 
+The plugin saves each submitted plan to `.fico/f-unittest/runs/<id>/plan.md` (plan, `inputs` JSON, status, history). When you show the plan, give the user that path and how to answer: reply "승인", ask for changes in the chat, or edit the `inputs` JSON in the file and then reply "승인". On approval the plugin re-reads the file and the run follows it; work from that approved plan.
+
 ### 2. Implement with the templates
 1. Pick the template:
 

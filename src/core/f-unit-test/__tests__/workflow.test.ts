@@ -226,6 +226,49 @@ describe("plan", () => {
     expect(session().inputs!.cases[0]!.target).toBe(TARGET);
   });
 
+  // plan.md: the plan is saved at submission, and the run proceeds from the file the user approved.
+  test("a recorded plan is saved to .fico/f-unittest/runs/<id>/plan.md and the reply tells the model to guide the user", () => {
+    const out = done({ stage: "plan", note: "the plan", inputs: okPlan() });
+    const doc = session().planDoc!;
+    expect(doc).toMatch(/^\.fico\/f-unittest\/runs\/[^/]+\/plan\.md$/);
+    expect(out).toContain(doc);
+    expect(out).toContain("승인");
+    const md = fs.readFileSync(path.join(cwd, doc), "utf-8");
+    expect(md).toContain("- 상태: 승인 대기 (rev 1)");
+    expect(md).toContain("the plan");
+    expect(md).toContain(TEST_FILE);
+  });
+
+  test("approval marks plan.md approved and points execute at it", () => {
+    done({ stage: "plan", note: "the plan", inputs: okPlan() });
+    noteUserMessage(SID, Date.now() + 1);
+    const out = done({ stage: "plan", user_approved: true });
+    expect(session().stage).toBe("execute");
+    expect(out).toContain(session().planDoc!);
+    expect(fs.readFileSync(path.join(cwd, session().planDoc!), "utf-8")).toContain("- 상태: 승인됨");
+  });
+
+  test("a user's edit of the inputs in plan.md is validated and becomes the approved plan", () => {
+    done({ stage: "plan", note: "the plan", inputs: okPlan() });
+    const abs = path.join(cwd, session().planDoc!);
+    fs.writeFileSync(abs, fs.readFileSync(abs, "utf-8").replace('"single account"', '"one account edited by the user"'));
+    noteUserMessage(SID, Date.now() + 1);
+    done({ stage: "plan", user_approved: true });
+    expect(session().stage).toBe("execute");
+    expect(session().inputs!.cases[0]!.normal[0]).toBe("one account edited by the user");
+    expect(fs.readFileSync(abs, "utf-8")).toContain("사용자 직접 수정");
+  });
+
+  test("an invalid edit in plan.md is rejected with the reason and the run stays in plan", () => {
+    done({ stage: "plan", note: "the plan", inputs: okPlan() });
+    const abs = path.join(cwd, session().planDoc!);
+    fs.writeFileSync(abs, fs.readFileSync(abs, "utf-8").replace('"mode": "files",', '"mode": files,'));
+    noteUserMessage(SID, Date.now() + 1);
+    const out = done({ stage: "plan", user_approved: true });
+    expect(session().stage).toBe("plan");
+    expect(out).toContain("invalid");
+  });
+
   test("plan waits for the user: a reply is required before approval", () => {
     done({ stage: "plan", note: "p", inputs: okPlan() });
     expect(done({ stage: "plan", user_approved: true })).toContain("has not replied");
@@ -460,6 +503,19 @@ describe("verify", () => {
     const md = fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8");
     expect(md).toContain("(jacoco-html/index.html)");
     expect(fs.readFileSync(md.length ? out.match(/Report written: (\S+)/)![1]!.replace(/\.md$/, ".html") : "", "utf-8")).toContain('href="jacoco-html/index.html"');
+  });
+
+  test("the report links plan.md, which is marked done", () => {
+    reachVerify();
+    runCoverage();
+    done({ stage: "verify", note: "n" });
+    const doc = session().planDoc!; // the session is closed by the report
+    const out = done({ stage: "report", note: "s" });
+    const md = fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8");
+    expect(md).toContain(doc);
+    const plan = fs.readFileSync(path.join(cwd, doc), "utf-8");
+    expect(plan).toContain("- 상태: 완료");
+    expect(plan).toContain("리포트: ");
   });
 
   test("without a JaCoCo HTML report the report has no link", () => {

@@ -201,7 +201,7 @@ function renderHtml(session: FutSession, summary: string, finishedAt: Date): str
     RUN: runHtml,
     COVERAGE: coverage,
     ATTENTION: attentionHtml,
-    APPENDIX: [more("요약", summary), more("검증 메모", session.verifyNote ?? ""), more("계획", session.plan ?? "")].join("\n"),
+    APPENDIX: [more("요약", summary), more("검증 메모", session.verifyNote ?? ""), more("계획", `${session.planDoc ? `계획 문서: ${session.planDoc}\n\n` : ""}${session.plan ?? ""}`)].join("\n"),
     FOOTER: "f-unit-test-code · report.md와 같은 내용",
   });
 }
@@ -261,6 +261,7 @@ export function writeReport(session: FutSession, summary: string): string {
     session.verifyNote ?? "",
     "",
     "## 계획",
+    ...(session.planDoc ? [`계획 문서: ${session.planDoc}`, ""] : []),
     session.plan ?? "",
     "",
   ].join("\n");

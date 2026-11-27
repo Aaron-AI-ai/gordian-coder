@@ -14,6 +14,7 @@ import * as path from "node:path";
 import { localFileStamp } from "../time";
 import { UNIT_TEST_SKILL_NAME } from "../pb-online/names";
 import { MAX_WAIT_CALLS, awaitingReply, noteReply, takeAbort, type PlanGateState, SessionStore } from "../plan-gate";
+import { newPlanDocState, planDocGuide, readPlanDocInputs, writePlanDoc, type PlanDocState, type PlanDocStatus } from "../plan-doc";
 import { isFullyCovered, readCoverage, readFailedDetails, readTestRun, type FailedTest, type TestRun, type FileCoverage } from "./coverage";
 import { checkTestSource, testMethodBodies, testMethodNames } from "./test-check";
 import { existedBefore, writeReport } from "./report";
@@ -82,7 +83,7 @@ export interface TargetCoverage {
   coverage: FileCoverage | null;
 }
 
-export interface FutSession extends PlanGateState {
+export interface FutSession extends PlanGateState, PlanDocState {
   stage: StageId;
   request: string;
   startedAt: number;
@@ -203,6 +204,7 @@ export function startSession(sessionId: string, request: string, cwd: string): F
     roundWrites: new Set(),
     verifyBaseline: {},
     awaitingCalls: 0,
+    ...newPlanDocState(),
     fixRetries: 0,
     gapRounds: 0,
     verification: "pending",
@@ -458,7 +460,14 @@ function submitPlan(session: FutSession, input: StageInput, keepBaseline = false
   session.planAt = Date.now();
   session.userRepliedAt = undefined;
   session.awaitingCalls = 0;
-  return "Plan recorded. Show it to the user and END YOUR TURN; do not continue until they reply.";
+  session.planRevision += 1;
+  const doc = savePlanDoc(session, "승인 대기", `rev ${session.planRevision} 제출`);
+  return `Plan recorded. Show it to the user and END YOUR TURN; do not continue until they reply. ${planDocGuide(doc)}`;
+}
+
+/** Rewrites plan.md with the session's current plan and inputs. */
+function savePlanDoc(session: FutSession, status: PlanDocStatus, event: string, extra?: string[]): string {
+  return writePlanDoc(session.cwd, session, { command: `/${COMMAND_NAME}`, plan: session.plan ?? "", inputs: session.inputs, status, event, extra });
 }
 
 function advance(session: FutSession, to: StageId, lead: string): string {
@@ -709,7 +718,16 @@ export function completeStage(sessionId: string, input: StageInput): string {
         return "Rejected: the plan is recorded and the user has not replied yet. Do not call any tool. END YOUR TURN now.";
       }
       if (!input.user_approved) return "Rejected: pass user_approved=true once the user approved, or a revised `note`.";
-      return advance(session, "execute", "Plan approved.");
+      // The run follows plan.md: the user may have edited its inputs before approving.
+      const fromDoc = readPlanDocInputs(session.cwd, session);
+      if ("error" in fromDoc) return `Rejected: cannot read the approved plan: ${fromDoc.error}. Tell the user what is wrong with the file (or ask them to approve again after fixing it) and END YOUR TURN.`;
+      if (!sameInputs(fromDoc.inputs as Partial<PlanInputs>, session)) {
+        const edited = submitPlan(session, { stage: "plan", note: session.plan, inputs: fromDoc.inputs as Partial<PlanInputs> }, session.baselineLocked);
+        if (!edited.startsWith("Plan recorded")) return `Rejected: the user's edit of ${session.planDoc} is not a valid plan:\n${edited}\nShow this to the user and END YOUR TURN.`;
+        session.planHistory.push(`- rev ${session.planRevision}: 사용자 직접 수정 반영`);
+      }
+      const doc = savePlanDoc(session, "승인됨", "승인");
+      return advance(session, "execute", `Plan approved. Work from the approved plan in ${doc}.`);
     }
     case "execute":
       if (session.roundWrites.size === 0) {
@@ -725,6 +743,7 @@ export function completeStage(sessionId: string, input: StageInput): string {
       const summaryLang = foreignScriptProblem(input.note, REPORT_LANGUAGE, "the summary");
       if (summaryLang) return `Rejected: ${summaryLang}`;
       const file = writeReport(session, input.note);
+      if (session.planDoc) savePlanDoc(session, session.verification === "incomplete" ? "미완료" : "완료", "리포트 작성", [`리포트: ${path.relative(session.cwd, file)}`]);
       const scriptWarn = reportScriptWarning(fs.readFileSync(file, "utf-8"), REPORT_LANGUAGE);
       sessions.delete(sessionId);
       return `Report written: ${file} (HTML: ${file.replace(/\.md$/, ".html")})${scriptWarn ? `\n${scriptWarn}` : ""}\nWorkflow closed. Tell the user the test files, the test run result (passed/failed counts), the coverage result, the failing tests and both report paths.`;

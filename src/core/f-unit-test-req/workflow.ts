@@ -15,6 +15,7 @@ import { localFileStamp } from "../time";
 import { MCP_SERVER, UNIT_TEST_REQ_SKILL_NAME } from "../pb-online/names";
 import { isFailedResource, normalizeUri } from "../pb-online/workflow";
 import { MAX_WAIT_CALLS, awaitingReply, noteReply, takeAbort, type PlanGateState, SessionStore } from "../plan-gate";
+import { newPlanDocState, planDocGuide, readPlanDocInputs, writePlanDoc, type PlanDocState, type PlanDocStatus } from "../plan-doc";
 import { foreignScriptProblem } from "../report-language";
 import { checkTestSource, testMethodBodies, testMethodNames } from "../f-unit-test/test-check";
 import { environmentFailureLine } from "../f-unit-test/env-failure";
@@ -69,7 +70,7 @@ export interface StageInput {
   user_approved?: boolean;
 }
 
-export interface ReqSession extends PlanGateState {
+export interface ReqSession extends PlanGateState, PlanDocState {
   stage: StageId;
   request: string;
   cwd: string;
@@ -171,6 +172,7 @@ export function startSession(sessionId: string, request: string, cwd: string): R
     roundWrites: new Set(),
     verifyBaseline: {},
     awaitingCalls: 0,
+    ...newPlanDocState(),
     fixRetries: 0,
     fetched: new Set(),
   });
@@ -368,7 +370,14 @@ function submitPlan(session: ReqSession, input: StageInput): string {
   session.planAt = Date.now();
   session.userRepliedAt = undefined;
   session.awaitingCalls = 0;
-  return "Plan recorded. Show it to the user and END YOUR TURN; do not continue until they reply.";
+  session.planRevision += 1;
+  const doc = savePlanDoc(session, "승인 대기", `rev ${session.planRevision} 제출`);
+  return `Plan recorded. Show it to the user and END YOUR TURN; do not continue until they reply. ${planDocGuide(doc)}`;
+}
+
+/** Rewrites plan.md with the session's current plan and inputs. */
+function savePlanDoc(session: ReqSession, status: PlanDocStatus, event: string): string {
+  return writePlanDoc(session.cwd, session, { command: `/${COMMAND_NAME}`, plan: session.plan ?? "", inputs: session.inputs, status, event });
 }
 
 function advance(session: ReqSession, to: StageId, lead: string): string {
@@ -464,6 +473,7 @@ function environmentFailure(session: ReqSession, line: string): string {
 function finish(session: ReqSession, lead: string): string {
   session.stage = "done";
   session.doneAt = Date.now();
+  if (session.planDoc) savePlanDoc(session, "완료", "테스트 작성·컴파일 확인 완료");
   const lines: string[] = [];
   for (const file of [...session.touched].filter((f) => f.endsWith(".java"))) {
     const abs = path.resolve(session.cwd, file);
@@ -535,7 +545,17 @@ export function completeStage(sessionId: string, input: StageInput): string {
         return "Rejected: the plan is recorded and the user has not replied yet. Do not call any tool. END YOUR TURN now.";
       }
       if (!input.user_approved) return "Rejected: pass user_approved=true once the user approved, or a revised `note`.";
-      return advance(session, "execute", "Plan approved.");
+      // The run follows plan.md: the user may have edited its inputs before approving.
+      const fromDoc = readPlanDocInputs(session.cwd, session);
+      if ("error" in fromDoc) return `Rejected: cannot read the approved plan: ${fromDoc.error}. Tell the user what is wrong with the file (or ask them to approve again after fixing it) and END YOUR TURN.`;
+      const docInputs = fromDoc.inputs as Partial<PlanInputs>;
+      if (JSON.stringify(normalizeInputs(docInputs, session.cwd)) !== JSON.stringify(session.inputs)) {
+        const edited = submitPlan(session, { stage: "plan", note: session.plan, inputs: docInputs });
+        if (!edited.startsWith("Plan recorded")) return `Rejected: the user's edit of ${session.planDoc} is not a valid plan:\n${edited}\nShow this to the user and END YOUR TURN.`;
+        session.planHistory.push(`- rev ${session.planRevision}: 사용자 직접 수정 반영`);
+      }
+      const doc = savePlanDoc(session, "승인됨", "승인");
+      return advance(session, "execute", `Plan approved. Work from the approved plan in ${doc}.`);
     }
     case "execute":
       if (session.roundWrites.size === 0) {

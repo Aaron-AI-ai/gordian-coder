@@ -178,3 +178,44 @@ describe("helpers", () => {
     for (const w of ["--req-file", "--req", "--program", STAGE_TOOL, COMMAND_NAME.replace("f-unit-test-req", "f-unit-test-req")]) expect(guide + COMMAND_NAME).toContain(w);
   });
 });
+
+// plan.md (shared with f-unit-test-code): saved at submission, followed at approval, closed at done.
+describe("plan document", () => {
+  test("a recorded plan is saved to .fico/f-unittest/runs/<id>/plan.md with a guide for the user", () => {
+    const out = done({ stage: "plan", note: "계획", inputs: plan() });
+    const doc = session().planDoc!;
+    expect(doc).toMatch(/^\.fico\/f-unittest\/runs\/[^/]+\/plan\.md$/);
+    expect(out).toContain(doc);
+    const md = fs.readFileSync(path.join(root, doc), "utf-8");
+    expect(md).toContain("/f-unit-test-req 계획");
+    expect(md).toContain("- 상태: 승인 대기 (rev 1)");
+    expect(md).toContain("R1 한도 100원");
+  });
+  test("a user's edit of the inputs in plan.md becomes the approved plan", () => {
+    done({ stage: "plan", note: "계획", inputs: plan() });
+    const abs = path.join(root, session().planDoc!);
+    fs.writeFileSync(abs, fs.readFileSync(abs, "utf-8").replace("R1 한도 100원", "R1 한도 200원"));
+    noteUserMessage(SID, Date.now() + 1);
+    expect(done({ stage: "plan", user_approved: true })).toContain("Plan approved");
+    expect(session().inputs!.cases[0]!.requirement).toBe("R1 한도 200원");
+    expect(fs.readFileSync(abs, "utf-8")).toContain("- 상태: 승인됨");
+  });
+  test("an invalid edit is rejected and the run stays in plan", () => {
+    done({ stage: "plan", note: "계획", inputs: plan() });
+    const abs = path.join(root, session().planDoc!);
+    fs.writeFileSync(abs, fs.readFileSync(abs, "utf-8").replace('"module": "app",', '"module": app,'));
+    noteUserMessage(SID, Date.now() + 1);
+    expect(done({ stage: "plan", user_approved: true })).toContain("invalid");
+    expect(session().stage).toBe("plan");
+  });
+  test("closing the workflow marks plan.md done", () => {
+    approve();
+    put(TEST_FILE, GOOD);
+    noteToolResult(SID, "write", {}, "", { filePath: path.join(root, TEST_FILE) });
+    done({ stage: "execute" });
+    put(path.join(session().runDir!, "status.json"), JSON.stringify({ compile: "ok", log: "" }));
+    done({ stage: "verify", note: "none" });
+    expect(session().stage).toBe("done");
+    expect(fs.readFileSync(path.join(root, session().planDoc!), "utf-8")).toContain("- 상태: 완료");
+  });
+});
