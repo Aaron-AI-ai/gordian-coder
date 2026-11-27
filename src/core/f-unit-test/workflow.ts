@@ -16,7 +16,7 @@ import { UNIT_TEST_SKILL_NAME } from "../pb-online/names";
 import { MAX_WAIT_CALLS, awaitingReply, noteReply, takeAbort, type PlanGateState, SessionStore } from "../plan-gate";
 import { isFullyCovered, readCoverage, readFailedDetails, readTestRun, type FailedTest, type TestRun, type FileCoverage } from "./coverage";
 import { checkTestSource, testMethodBodies, testMethodNames } from "./test-check";
-import { writeReport } from "./report";
+import { existedBefore, writeReport } from "./report";
 import { checkMapperTargets, isPlainInterface, mapperDefects, type MapperCheck } from "./mapper";
 import { BASH_RULE, bashAllowed, coverageCommandLine, coverageScriptName, type BashContext } from "./bash-gate";
 import { environmentFailureLine } from "./env-failure";
@@ -172,7 +172,7 @@ export const STAGES: Record<StageId, Stage> = {
     goal: "Measure. The plugin reads the build and coverage facts itself; you do not report pass or fail.",
     steps: [
       `Run the skill's coverage script (\`scripts/run-coverage.sh\` with sh, or \`scripts/run-coverage.ps1\` with PowerShell on Windows) with bash using exactly the command below. It leaves status.json, jacoco.xml and test-results/ in the output directory. ${WINDOWS_NOTE}`,
-      `Then call ${STAGE_TOOL} with stage "verify" and a \`note\`: for any line or branch you consider unreachable, the reason. Compile errors, static-check defects and coverage gaps send you back to execute with the details.`,
+      `Then call ${STAGE_TOOL} with stage "verify" and a \`note\`: for any line or branch you consider unreachable, the reason. Compile errors, static-check defects, failing tests you generated and coverage gaps send you back to execute with the details.`,
     ],
     tools: ["bash (run-coverage.sh/.ps1 only)", "read", "grep"],
     blocked: [...WRITES, "task", "bash (except run-coverage.sh/.ps1)"],
@@ -636,6 +636,17 @@ function completeVerify(session: FutSession, input: StageInput): string {
   session.mapperChecks = mapperChecksOf(session);
   const defects = [...testDefects(session, session.mapperChecks), ...mapperDefects(session.mapperChecks)];
   if (defects.length > 0) return sendBackToFix(session, [`The plugin found defects in the tests:\n${defects.join("\n")}`]);
+  // A test generated in this run must pass. Its failure means a wrong expectation or input: re-derive it from the code.
+  const newFailures = session.failedDetails.filter((d) => !existedBefore(session, d));
+  if (newFailures.length > 0) {
+    return sendBackToFix(session, [
+      [
+        "Tests you generated in this run fail. Re-read the target code and fix each test so it asserts what the code actually does (expected value, input or expected exception). Fix the test; never change production code, never delete, rename or @Disabled the test.",
+        "If you believe the code itself is wrong, still assert its current behavior and say so in the verify `note` (it is reported as a suspected defect).",
+        ...newFailures.map((d) => `- ${d.id}: ${d.message || d.type || "(no message)"}${d.frame ? ` [${d.frame}]` : ""}`),
+      ].join("\n"),
+    ]);
+  }
   // Compiled but no coverage: the test run itself broke. Bounded by the fix retries, not an endless rerun.
   if (status.coverage === "missing") return sendBackToFix(session, [`Tests compiled but produced no coverage:\n${status.log ?? "(no log)"}`]);
   const xmlFile = freshFile(session, "jacoco.xml");
@@ -646,7 +657,7 @@ function completeVerify(session: FutSession, input: StageInput): string {
   const gaps = session.coverage.filter((c) => !isFullyCovered(c.coverage));
   const failed =
     session.failedDetails.length > 0
-      ? `\nFailing tests (reported with their cause, not blocking, never edited or disabled):\n${session.failedDetails.map((d) => `- ${d.id}: ${d.message || d.type || "(no message)"}`).join("\n")}`
+      ? `\nFailing pre-existing tests (reported with their cause, not blocking, never edited or disabled):\n${session.failedDetails.map((d) => `- ${d.id}: ${d.message || d.type || "(no message)"}`).join("\n")}`
       : "";
   if (gaps.length === 0) {
     session.verification = "covered";

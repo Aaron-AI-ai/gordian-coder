@@ -118,6 +118,7 @@ interface RunFacts {
   compile?: "ok" | "fail";
   xml?: string | null;
   failed?: string[];
+  passed?: string[];
   log?: string;
 }
 
@@ -130,13 +131,15 @@ function stampNow(...files: string[]): void {
 }
 
 /** What run-coverage.sh leaves behind. */
-function runCoverage({ compile = "ok", xml = jacoco(0, 0), failed = [], log = "BUILD SUCCESSFUL" }: RunFacts = {}): void {
+function runCoverage({ compile = "ok", xml = jacoco(0, 0), failed = [], passed = [], log = "BUILD SUCCESSFUL" }: RunFacts = {}): void {
   const out = path.join(cwd, session().runDir!);
   fs.mkdirSync(path.join(out, "test-results"), { recursive: true });
   fs.writeFileSync(path.join(out, "status.json"), JSON.stringify({ compile, log, coverage: xml === null ? "missing" : "ok" }));
   fs.rmSync(path.join(out, "jacoco.xml"), { force: true });
   if (xml !== null) fs.writeFileSync(path.join(out, "jacoco.xml"), xml);
-  const cases = failed.map((m) => `<testcase classname="${FQCN}" name="${m}"><failure message="x"/></testcase>`).join("");
+  const cases =
+    failed.map((m) => `<testcase classname="${FQCN}" name="${m}"><failure message="x"/></testcase>`).join("") +
+    passed.map((m) => `<testcase classname="${FQCN}" name="${m}"/>`).join("");
   fs.writeFileSync(path.join(out, "test-results", "TEST-x.xml"), `<testsuite>${cases}<testcase classname="${FQCN}" name="ok"/></testsuite>`);
   stampNow(path.join(out, "status.json"), path.join(out, "jacoco.xml"));
 }
@@ -487,8 +490,19 @@ describe("verify", () => {
         `<testcase classname="${FQCN}" name="inquire_new"><error message="boom | pipe" type="java.lang.IllegalStateException"/></testcase>` +
         `</testsuite>`,
     );
-    done({ stage: "verify", note: "n" });
-    expect(session().verification).toBe("covered");
+    // The new test keeps failing: once the fix retries are used up the run is reported, failures included.
+    for (let i = 0; i <= MAX_FIX_RETRIES && session().stage !== "report"; i++) {
+      if (session().stage === "execute") { writeTest(); done({ stage: "execute" }); runCoverage(); }
+      fs.writeFileSync(
+        path.join(dir, "TEST-y.xml"),
+        `<testsuite>` +
+          `<testcase classname="${FQCN}" name="inquire_normal1"><failure message="expected: &lt;3000&gt; but was: &lt;3500&gt;" type="org.opentest4j.AssertionFailedError">x\n\tat ${FQCN}.inquire_normal1(SONAQ001ServiceTest.java:34)\n</failure></testcase>` +
+          `<testcase classname="${FQCN}" name="inquire_new"><error message="boom | pipe" type="java.lang.IllegalStateException"/></testcase>` +
+          `</testsuite>`,
+      );
+      done({ stage: "verify", note: "n" });
+    }
+    expect(session().verification).toBe("incomplete");
     const out = done({ stage: "report", note: "summary" });
     const report = fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8");
     const section = report.slice(report.indexOf("## 확인 필요"), report.indexOf("## 요약"));
@@ -504,7 +518,7 @@ describe("verify", () => {
 
   test("the report describes each test from the plan by its kind and number", () => {
     reachVerify();
-    runCoverage({ failed: ["inquire_normal2", "inquire_boundary", "inquire_exception"] });
+    runCoverage({ passed: ["inquire_normal2", "inquire_boundary", "inquire_exception"] });
     done({ stage: "verify", note: "n" });
     const out = done({ stage: "report", note: "s" });
     const report = fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8");
@@ -515,9 +529,21 @@ describe("verify", () => {
     expect(report).toMatch(/\| inquire_exception \| 예외 \| AccountBSM throws PBOnlineException \|/);
   });
 
-  test("failed tests are listed in the report but do not block", () => {
+  // A test generated in this run must pass: a failure is a wrong expectation to fix in the test, never in production code.
+  test("a failing test generated in this run sends the run back to execute to fix the test", () => {
     reachVerify();
     runCoverage({ failed: ["inquire_normal2"] });
+    const out = done({ stage: "verify", note: "n" });
+    expect(session().stage).toBe("execute");
+    expect(session().fixRetries).toBe(1);
+    expect(out).toContain("inquire_normal2");
+    expect(out).toContain("never change production code");
+  });
+
+  test("a failing pre-existing test is reported but does not block", () => {
+    reachVerify();
+    runCoverage({ failed: ["inquire_normal2"] });
+    session().previousMethods = { [TEST_FILE]: ["inquire_normal2"] };
     done({ stage: "verify", note: "n" });
     expect(session().verification).toBe("covered");
     expect(session().failedTests).toEqual([`${FQCN}.inquire_normal2`]);
