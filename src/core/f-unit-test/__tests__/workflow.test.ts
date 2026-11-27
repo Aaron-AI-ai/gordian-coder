@@ -445,6 +445,28 @@ describe("verify", () => {
     expect(session().gapRounds).toBe(1);
   });
 
+  // run-coverage writes JaCoCo's HTML next to jacoco.xml; the report links it only when it is there.
+  test("the report links the JaCoCo HTML report when the run produced one", () => {
+    reachVerify();
+    runCoverage();
+    done({ stage: "verify", note: "n" });
+    const html = path.join(cwd, session().runDir!, "jacoco-html");
+    fs.mkdirSync(html, { recursive: true });
+    fs.writeFileSync(path.join(html, "index.html"), "<html/>");
+    const out = done({ stage: "report", note: "s" });
+    const md = fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8");
+    expect(md).toContain("(jacoco-html/index.html)");
+    expect(fs.readFileSync(md.length ? out.match(/Report written: (\S+)/)![1]!.replace(/\.md$/, ".html") : "", "utf-8")).toContain('href="jacoco-html/index.html"');
+  });
+
+  test("without a JaCoCo HTML report the report has no link", () => {
+    reachVerify();
+    runCoverage();
+    done({ stage: "verify", note: "n" });
+    const out = done({ stage: "report", note: "s" });
+    expect(fs.readFileSync(out.match(/Report written: (\S+)/)![1]!, "utf-8")).not.toContain("jacoco-html");
+  });
+
   test("full coverage reports as covered", () => {
     reachVerify();
     runCoverage();

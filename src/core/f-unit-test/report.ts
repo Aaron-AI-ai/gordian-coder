@@ -35,6 +35,12 @@ function describeFailure(d: FailedTest): string {
 }
 
 /** Whether the failing test method was already in a planned test file before this run. */
+/** run-coverage writes JaCoCo's own HTML report here, next to jacoco.xml (relative to the run dir). */
+const JACOCO_HTML = "jacoco-html/index.html";
+function hasJacocoHtml(session: FutSession): boolean {
+  return !!session.runDir && fs.existsSync(path.join(session.cwd, session.runDir, JACOCO_HTML));
+}
+
 function existedBefore(session: FutSession, d: FailedTest): boolean {
   const simple = d.cls.split(".").pop()!;
   return Object.entries(session.previousMethods).some(([file, methods]) => path.posix.basename(file, ".java") === simple && methods.includes(d.method));
@@ -175,7 +181,7 @@ function renderHtml(session: FutSession, summary: string, finishedAt: Date): str
   );
   const mapperHtml = session.mapperChecks.map((m) => `<p><code>${esc(m.target)}</code> JaCoCo 측정 안 함, 메서드 호출: ${m.methods.map((x) => `${esc(x.name)} ${x.called ? "✓" : x.skipped ? "건너뜀" : "✗"}`).join(", ")}</p>`);
   const coverage = [
-    covRows.length > 0 ? `<div class="card"><table class="t"><tr><th>대상</th><th class="num">라인</th><th class="num">분기</th></tr>${covRows.join("")}</table></div>` : "",
+    covRows.length > 0 ? `<div class="card"><table class="t"><tr><th>대상</th><th class="num">라인</th><th class="num">분기</th></tr>${covRows.join("")}</table>${hasJacocoHtml(session) ? `<p><a href="${JACOCO_HTML}">줄별 상세 (JaCoCo HTML)</a></p>` : ""}</div>` : "",
     ...(mapperHtml.length > 0 ? [`<div class="card"><h3>Mapper (실제 DB 테스트)</h3>${mapperHtml.join("")}</div>`] : []),
     ...(covRows.length === 0 && mapperHtml.length === 0 ? [`<div class="card">측정 결과 없음</div>`] : []),
   ].join("\n");
@@ -238,6 +244,7 @@ export function writeReport(session: FutSession, summary: string): string {
     "",
     "## 커버리지",
     ...(rows.length > 0 ? ["| 대상 | 라인 | 분기 |", "|---|---|---|", ...rows] : ["측정 결과 없음"]),
+    ...(hasJacocoHtml(session) ? ["", `줄별 상세: [JaCoCo HTML](${JACOCO_HTML})`] : []),
     ...(mapperLines.length > 0 ? ["", "### Mapper (실제 DB 테스트)", ...mapperLines] : []),
     ...(interfaces.length > 0 ? ["", ...interfaces.map((t) => `- ${t}: 커버리지 측정 안 함 (인터페이스)`)] : []),
     "",

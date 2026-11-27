@@ -102,7 +102,7 @@ $savedJto = $env:JAVA_TOOL_OPTIONS
 if ($savedJto) { $env:JAVA_TOOL_OPTIONS = "$savedJto -Duser.language=en -Duser.country=US" } else { $env:JAVA_TOOL_OPTIONS = '-Duser.language=en -Duser.country=US' }
 
 try {
-  foreach ($stale in @('jacoco.exec', 'jacoco.xml', 'test-results', 'status.json')) {
+  foreach ($stale in @('jacoco.exec', 'jacoco.xml', 'jacoco-html', 'test-results', 'status.json')) {
     Remove-Item -LiteralPath "$out/$stale" -Recurse -Force -ErrorAction SilentlyContinue
   }
 
@@ -140,7 +140,7 @@ try {
   if ((Test-Path -LiteralPath "$out/jacoco.exec" -PathType Leaf) -and (Test-Path -LiteralPath "$mdir/build/classes/java/main" -PathType Container)) {
     $code = Invoke-Logged $java @('-jar', "$tools/jacococli.jar", 'report', "$out/jacoco.exec",
       '--classfiles', "$mdir/build/classes/java/main", '--sourcefiles', "$mdir/src/main/java",
-      '--xml', "$out/jacoco.xml") $true
+      '--xml', "$out/jacoco.xml", '--html', "$out/jacoco-html") $true
     if ($code -eq 0 -and (Test-Path -LiteralPath "$out/jacoco.xml" -PathType Leaf)) { $coverage = 'ok' }
   }
   Write-Status 'ok' $coverage

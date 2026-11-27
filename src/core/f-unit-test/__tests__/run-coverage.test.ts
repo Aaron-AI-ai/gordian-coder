@@ -96,8 +96,10 @@ describe("run-coverage.sh", () => {
     fs.mkdirSync(path.join(out, "test-results"), { recursive: true });
     fs.writeFileSync(path.join(out, "test-results/x.xml"), "<x/>");
     fs.writeFileSync(path.join(out, "jacoco.xml"), "<r/>");
+    fs.mkdirSync(path.join(out, "jacoco-html"), { recursive: true });
     run(["--module", "app", "--tests", "a.B", "--out", out, "--project", proj], { FAKE_TESTCLASSES: "1" });
     expect(fs.existsSync(path.join(out, "jacoco.xml"))).toBe(false);
+    expect(fs.existsSync(path.join(out, "jacoco-html"))).toBe(false);
     expect(fs.existsSync(path.join(out, "test-results"))).toBe(false);
   });
 

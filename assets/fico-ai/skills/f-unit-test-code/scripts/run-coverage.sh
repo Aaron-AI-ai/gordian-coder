@@ -63,7 +63,7 @@ run_gradle() {
   return $RC
 }
 
-rm -rf "$OUT/jacoco.exec" "$OUT/jacoco.xml" "$OUT/test-results" "$OUT/status.json"
+rm -rf "$OUT/jacoco.exec" "$OUT/jacoco.xml" "$OUT/jacoco-html" "$OUT/test-results" "$OUT/status.json"
 LOG=$OUT/gradle.log
 if [ -f ./gradlew ]; then GR="sh ./gradlew"
 elif command -v gradle >/dev/null 2>&1; then GR=gradle
@@ -83,7 +83,7 @@ JAVA=java; [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ] && JAVA=$JAVA_HOM
 if [ -f "$OUT/jacoco.exec" ] && [ -d "$MDIR/build/classes/java/main" ]; then
   "$JAVA" -jar "$TOOLS/jacococli.jar" report "$OUT/jacoco.exec" \
     --classfiles "$MDIR/build/classes/java/main" --sourcefiles "$MDIR/src/main/java" \
-    --xml "$OUT/jacoco.xml" >> "$LOG" 2>&1 && [ -f "$OUT/jacoco.xml" ] && COV=ok
+    --xml "$OUT/jacoco.xml" --html "$OUT/jacoco-html" >> "$LOG" 2>&1 && [ -f "$OUT/jacoco.xml" ] && COV=ok
 fi
 write_status ok "$COV" "$LOG"
 exit 0
