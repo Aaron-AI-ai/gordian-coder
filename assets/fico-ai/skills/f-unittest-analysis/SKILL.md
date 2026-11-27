@@ -1,6 +1,6 @@
 ---
 name: f-unittest-analysis
-description: 'Runs the existing JUnit unit tests of a FICO Java module (all of them, or only the ones named) and publishes a report of the results, pass or fail. It never creates or edits test code or production code: on a fail it also explains the cause and the fix on the console. TRIGGER when user asks to run the unit tests and report the result in Korean or English (e.g. 단위 테스트 돌려서 결과 리포트 만들어줘, 이 테스트만 실행해줘, 단위 테스트 분석, run the unit tests and report). DO NOT TRIGGER for writing tests (use f-unit-test-code or f-unit-test-req) or non-Java code.'
+description: 'Runs the existing JUnit unit tests of a FICO Java module (all of them, or only the ones named) and publishes a report of the results, pass or fail. It never creates or edits test code or production code: on a fail it also explains the cause and the fix on the console. TRIGGER when user asks to run the unit tests and report the result in Korean or English (e.g. 단위 테스트 돌려서 결과 리포트 만들어줘, 이 테스트만 실행해줘, 단위 테스트 분석, run the unit tests and report). DO NOT TRIGGER for writing tests (use f-unit-test-code) or non-Java code.'
 ---
 
 # f-unittest-analysis

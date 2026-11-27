@@ -19,7 +19,7 @@ import {
   skillDrift,
   withMcp,
 } from "../fico-setup";
-import { MCP_SERVER, SKILL_NAME, UNIT_TEST_SKILL_NAME, UNIT_TEST_REQ_SKILL_NAME, UNIT_TEST_ANALYSIS_SKILL_NAME } from "../../../core/pb-online/names";
+import { MCP_SERVER, SKILL_NAME, UNIT_TEST_SKILL_NAME, UNIT_TEST_ANALYSIS_SKILL_NAME } from "../../../core/pb-online/names";
 
 let root: string;
 let assets: string;
@@ -37,7 +37,7 @@ beforeEach(() => {
   write(path.join(assets, "fico-ai/skills", SKILL_NAME, "SKILL.md"), "skill");
   write(path.join(assets, "fico-ai/skills", SKILL_NAME, "docs/a.md"), "doc");
   write(path.join(assets, "fico-ai/skills", UNIT_TEST_SKILL_NAME, "SKILL.md"), "ut skill");
-  write(path.join(assets, "fico-ai/skills", UNIT_TEST_REQ_SKILL_NAME, "SKILL.md"), "ut req skill");
+  write(path.join(assets, "fico-ai/skills", "SKILL.md"), "ut req skill");
   write(path.join(assets, "fico-ai/skills", UNIT_TEST_ANALYSIS_SKILL_NAME, "SKILL.md"), "ut analysis skill");
   write(path.join(assets, "fico-ai/skills/sql-query-gen/SKILL.md"), "other");
   write(path.join(assets, "fico-ai/rules/fico-overview.md"), "rule");
@@ -229,7 +229,7 @@ describe("check", () => {
   const healthy = (cmd: string[]) =>
     cmd[0] === "mcp"
       ? { ok: true, stdout: `\u001b[0m✓ ${MCP_SERVER} \u001b[90mconnected` }
-      : { ok: true, stdout: `[{"name": "${SKILL_NAME}"}, {"name": "${UNIT_TEST_SKILL_NAME}"}, {"name": "${UNIT_TEST_REQ_SKILL_NAME}"}, {"name": "${UNIT_TEST_ANALYSIS_SKILL_NAME}"}]` };
+      : { ok: true, stdout: `[{"name": "${SKILL_NAME}"}, {"name": "${UNIT_TEST_SKILL_NAME}"}, {"name": "${UNIT_TEST_ANALYSIS_SKILL_NAME}"}]` };
 
   const entryPath = () => path.join(root, "adapters/opencode/index.js");
   const options = () => ({ assets, skillsDir: skills, config: { plugin: [`file://${entryPath()}`], mcp: { [MCP_SERVER]: {} } } });

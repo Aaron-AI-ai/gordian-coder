@@ -1,5 +1,5 @@
 /**
- * The plan document of the unit-test workflows (f-unit-test-code, f-unit-test-req).
+ * The plan document of the f-unit-test-code workflow.
  *
  * A submitted plan is written to `.fico/f-unittest/runs/<id>/plan.md`: the plan text,
  * the machine-readable `inputs` as a JSON block, the status and a revision history,
